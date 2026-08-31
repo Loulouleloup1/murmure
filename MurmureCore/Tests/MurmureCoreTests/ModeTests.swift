@@ -17,6 +17,8 @@ private let specExampleJSON = """
 """
 
 final class ModeTests: XCTestCase {
+    /// Decoding only. The example is deliberately not validated here: its `"/v1"` endpoint is the
+    /// very mistake `testTheEndpointTheSpecItselfSuggestsIsRefused...` exists to catch.
     func testTheSpecExampleDecodesFieldForField() throws {
         let mode = try JSONDecoder().decode(Mode.self, from: Data(specExampleJSON.utf8))
 
@@ -81,6 +83,30 @@ final class ModeTests: XCTestCase {
                 XCTAssertEqual(error as? ModeValidationError, expected, field)
             }
         }
+    }
+
+    /// `http://localhost:11434/v1` is spec §5's own example, so of every wrong endpoint it is the
+    /// one Louis is most likely to have. The client appends `api/chat` to whatever is here, gets
+    /// `/v1/api/chat` and a 404, and can only report it as a response it could not read -- which
+    /// sends him hunting a bug for a typo. Caught here, with the value to write instead.
+    func testTheEndpointTheSpecItselfSuggestsIsRefusedWithTheRootToWriteInstead() {
+        let mode = Mode.prompt.with { $0.llm.endpoint = "http://localhost:11434/v1" }
+        let expected = ModeValidationError.llmEndpointIsNotARoot(
+            endpoint: "http://localhost:11434/v1", root: "http://localhost:11434")
+
+        XCTAssertThrowsError(try mode.validate()) { error in
+            XCTAssertEqual(error as? ModeValidationError, expected)
+        }
+        XCTAssertTrue("\(expected)".contains("\"http://localhost:11434\""),
+                      "the message does not say what to write: \(expected)")
+    }
+
+    /// A trailing slash addresses the same root and is what a copy-paste from a browser gives.
+    /// Refusing it would be a validation error with nothing behind it: measured on the client as
+    /// shipped, `URL.appending(path:)` turns both forms into the same `.../api/chat`.
+    func testARootWithATrailingSlashIsAccepted() {
+        XCTAssertNoThrow(
+            try Mode.prompt.with { $0.llm.endpoint = "http://localhost:11434/" }.validate())
     }
 
     /// The three LLM fields only exist to be sent to Ollama. Requiring them on `Voice`, which has

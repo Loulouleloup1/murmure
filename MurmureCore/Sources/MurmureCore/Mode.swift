@@ -96,6 +96,7 @@ public enum ModeValidationError: Error, Equatable, CustomStringConvertible {
     case emptySTTModel
     case emptySTTLanguage
     case invalidLLMEndpoint(String)
+    case llmEndpointIsNotARoot(endpoint: String, root: String)
     case emptyLLMModel
     case emptyInstructions
 
@@ -109,6 +110,11 @@ public enum ModeValidationError: Error, Equatable, CustomStringConvertible {
         case .emptySTTLanguage: "\"stt.language\" is empty"
         case .invalidLLMEndpoint(let endpoint):
             "\"llm.endpoint\" \(endpoint.debugDescription) is not an http(s) URL"
+        case .llmEndpointIsNotARoot(let endpoint, let root):
+            """
+            "llm.endpoint" \(endpoint.debugDescription) must be the server root: Murmure appends \
+            the API path itself. Write \(root.debugDescription).
+            """
         case .emptyLLMModel: "\"llm.model\" is empty while \"llm.enabled\" is true"
         case .emptyInstructions: "\"instructions\" is empty while \"llm.enabled\" is true"
         }
@@ -139,8 +145,23 @@ extension Mode {
         guard llm.enabled else { return nil }
 
         guard let url = URL(string: llm.endpoint), let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https", url.host != nil
+              scheme == "http" || scheme == "https", let host = url.host
         else { return .invalidLLMEndpoint(llm.endpoint) }
+
+        // The endpoint is the server root, not an API URL: the client appends the API path itself.
+        // A path left here is silently concatenated, and spec §5's own example carried "/v1" --
+        // which yields /v1/api/chat, a 404, and a client that can only report it as a response it
+        // could not read. Someone who copied the example would go looking for a bug.
+        //
+        // A lone "/" passes: it addresses the same root, it is what a copy-paste from a browser
+        // gives, and it costs nothing -- measured on the client as shipped, `URL.appending(path:)`
+        // turns "http://localhost:11434/" and "http://localhost:11434" into the same
+        // "http://localhost:11434/api/chat".
+        if !url.path.isEmpty, url.path != "/" {
+            return .llmEndpointIsNotARoot(
+                endpoint: llm.endpoint,
+                root: "\(scheme)://\(host)" + (url.port.map { ":\($0)" } ?? ""))
+        }
         if llm.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .emptyLLMModel }
         if instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return .emptyInstructions
