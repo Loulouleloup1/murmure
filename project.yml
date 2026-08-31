@@ -1,0 +1,28 @@
+name: Murmure
+options:
+  bundleIdPrefix: com.louiscourcier
+  deploymentTarget:
+    macOS: "14.0"
+packages:
+  MurmureCore:
+    path: MurmureCore
+  WhisperKit:
+    url: https://github.com/argmaxinc/WhisperKit
+    from: "1.1.0"
+targets:
+  Murmure:
+    type: application
+    platform: macOS
+    sources: [Murmure]
+    dependencies:
+      - package: MurmureCore
+      - package: WhisperKit
+    settings:
+      base:
+        ENABLE_APP_SANDBOX: NO
+        CODE_SIGN_IDENTITY: "-"
+    info:
+      path: Murmure/Info.plist
+      properties:
+        LSUIElement: true
+        NSMicrophoneUsageDescription: "Murmure records your voice to transcribe it locally."
