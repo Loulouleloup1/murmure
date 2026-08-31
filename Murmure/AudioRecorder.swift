@@ -95,6 +95,14 @@ final class AudioRecorder {
         // `removeTap` is not documented to wait for a callback already running. `finish()` takes
         // the sink's lock, which the tap block holds for the whole of `append`, so the writer is
         // released — and its file closed — only once no buffer is in flight.
+        //
+        // Residual assumption, stated because it is load-bearing and undocumented: no tap callback
+        // is scheduled after `engine.stop()` returns. `finish()` closes a file while holding a lock
+        // the audio thread can contend for, which is the shape of a priority inversion; the reason
+        // it is benign is precisely the ordering above — by the time the file is closed, at most one
+        // already-in-flight `append` can be waiting, so the main thread waits on the audio thread
+        // and never the reverse. Were a NEW callback able to fire here, that direction would invert
+        // and glitch the audio. Reasoned, not observed under load.
         if let error = sink.finish() {
             lastFailure = .writeFailed(error)
             logger.error("recording failed: \(error.localizedDescription, privacy: .public)")
@@ -129,8 +137,10 @@ private final class TapSink {
         lock.deallocate()
     }
 
-    /// Audio thread. Records the first failure and stops writing; no logging, no allocation and
-    /// no unbounded wait happen here beyond the write itself.
+    /// Audio thread. Records the first failure and stops writing. No logging, no unbounded wait
+    /// and — on the happy path — no allocation happen here beyond the write itself. The single
+    /// `DispatchQueue.main.async` in the failure branch does allocate a closure, but the
+    /// `failure == nil` guard makes it reachable exactly once per recording.
     func append(_ buffer: AVAudioPCMBuffer) {
         os_unfair_lock_lock(lock)
         defer { os_unfair_lock_unlock(lock) }
