@@ -228,3 +228,6 @@ final class PasteInserter {
         return (down, up)
     }
 }
+
+/// `@MainActor` isolation satisfies the nonisolated `async` requirement, as noted on the class.
+extension PasteInserter: TextInserter {}

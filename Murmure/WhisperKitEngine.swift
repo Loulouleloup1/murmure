@@ -400,3 +400,6 @@ private final class LoadedModel: @unchecked Sendable {
     }
 }
 
+
+/// Actor isolation satisfies the nonisolated `async` requirement: callers must `await` either way.
+extension WhisperKitEngine: Transcriber {}

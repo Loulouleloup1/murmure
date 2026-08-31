@@ -8,9 +8,11 @@ private let logger = Logger(subsystem: "com.louiscourcier.Murmure", category: "a
 /// Taps the default input device and streams buffers into a `WavWriter`.
 ///
 /// Threading: `AVAudioEngine` delivers tap buffers on its own audio thread while `start()` and
-/// `stop()` run on the main thread. Everything shared between the two lives in `TapSink`, behind
-/// a lock — including the writer itself, so it can never be released while a buffer is being
-/// written (`WavWriter` has no `close()`; finalisation happens when it is deallocated).
+/// `stop()` are called from `DictationSession`'s actor executor — serialised with each other, but
+/// NOT on the main thread since task 7 (they were, while the temporary debug menu drove them).
+/// Everything shared between the audio thread and the caller lives in `TapSink`, behind a lock —
+/// including the writer itself, so it can never be released while a buffer is being written
+/// (`WavWriter` has no `close()`; finalisation happens when it is deallocated).
 ///
 /// The recording keeps the hardware format (48 kHz float on this Mac). WhisperKit resamples to
 /// 16 kHz mono when it loads the file, so no conversion happens here.
@@ -37,7 +39,12 @@ final class AudioRecorder {
     private var sink: TapSink?
 
     /// Why the last `stop()` returned `nil`. Read after `stop()`; reset by the next `start()`.
-    private(set) var lastFailure: Failure?
+    ///
+    /// Named `failure`, not `lastFailure`, so the precise enum type survives: Swift will not
+    /// witness the `Recorder` requirement of the same name (typed `Error?`) with a stored property
+    /// of a more specific type, and weakening this one would throw away the case distinction every
+    /// caller inside the app can still switch on. The bridge lives in the extension below.
+    private(set) var failure: Failure?
 
     func start() throws {
         guard sink == nil else { throw Failure.alreadyRecording }
@@ -52,7 +59,7 @@ final class AudioRecorder {
             AVCaptureDevice.requestAccess(for: .audio) { _ in }
         default: break
         }
-        lastFailure = nil
+        failure = nil
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -86,7 +93,7 @@ final class AudioRecorder {
     }
 
     /// Returns the finished file, or `nil` if there was no recording or a buffer failed to be
-    /// written — in which case the file on disk is short and `lastFailure` says why.
+    /// written — in which case the file on disk is short and `failure` says why.
     func stop() -> URL? {
         guard let sink else { return nil }
         self.sink = nil
@@ -100,17 +107,23 @@ final class AudioRecorder {
         // is scheduled after `engine.stop()` returns. `finish()` closes a file while holding a lock
         // the audio thread can contend for, which is the shape of a priority inversion; the reason
         // it is benign is precisely the ordering above — by the time the file is closed, at most one
-        // already-in-flight `append` can be waiting, so the main thread waits on the audio thread
+        // already-in-flight `append` can be waiting, so the caller waits on the audio thread
         // and never the reverse. Were a NEW callback able to fire here, that direction would invert
         // and glitch the audio. Reasoned, not observed under load.
         if let error = sink.finish() {
-            lastFailure = .writeFailed(error)
+            failure = .writeFailed(error)
             logger.error("recording failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
         logger.info("recording stopped -- \(sink.url.lastPathComponent, privacy: .public)")
         return sink.url
     }
+}
+
+extension AudioRecorder: Recorder {
+    /// Bridges the class's precise `Failure` to the protocol's `Error?`. Callers inside the app
+    /// can still switch on `failure`; `DictationSession` only needs a message.
+    var lastFailure: Error? { failure }
 }
 
 /// The state the audio thread and the main thread share: the writer, and the first write error.
