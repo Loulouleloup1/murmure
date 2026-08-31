@@ -132,8 +132,21 @@ window-by-window and match layout/spacing/mood — recreate, never extract asset
 - **No notch** (external display, clamshell): identical component anchored as a floating
   top-center pill. Settings choice: notch / pill / classic bottom overlay.
 
-Design inspiration (not code): AgentNotch (github.com/AppGram/agentnotch — no licence, look only);
-DynamicNotchKit is the actual dependency (MIT).
+**Interaction model — continuous morphing, never a window glued to the notch** (added 2026-08-31
+from Louis's design research). The notch is the ROOT component; it morphs between states, it never
+"opens a window": idle (near-invisible) → recording (waveform wings) → processing (pulse) →
+done (green flash, then retraction INTO the notch — replaces any macOS notification) →
+hover (expanded dashboard) → paste-failure (expanded panel with the text). Collapsed → expanded →
+full panel, always animated as one surface.
+
+Design references for the notch UI lot (verify each repo + licence when planning that lot;
+inspiration only unless MIT/Apache — DynamicNotchKit stays the dependency):
+- AgentNotch (AppGram/agentnotch — verified, no licence: look only) — closed → hover → details pattern.
+- Construct Notch (construct-computer/notch) — explicit 3-state UI (compact / hover bar / full).
+- NotchNook (commercial) — the collapsed → expanded → full-panel morphing reference.
+- DynamicNotch (jackson-storm/dynamicnotch), Atoll, NotchApp (erwinzhang7, SwiftUI+AppKit no deps),
+  NotchDrop (Lakr233) — animation/morphing engines and "temporary interaction zone" pattern.
+- gh-notch (aymandakirgh/ghnotch, MIT) — AI command bar in the notch with local model dispatch.
 
 ### Menu bar
 
