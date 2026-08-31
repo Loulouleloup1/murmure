@@ -76,15 +76,22 @@ final class OllamaChatTests: XCTestCase {
             "http://localhost:11434/api/chat")
     }
 
-    /// Spec §5's example mode still carries `"endpoint": "http://localhost:11434/v1"`, written
-    /// before §10 ruled that refinement goes through the native API. A mode copied from it must
-    /// not produce `/v1/api/chat`, which Ollama answers with a plain-text 404.
-    func testAnOpenAiCompatibleBaseUrlIsNormalisedToTheNativeApi() {
-        for base in ["http://localhost:11434/v1", "http://localhost:11434/v1/", "http://localhost:11434/"] {
-            XCTAssertEqual(
-                OllamaChat.endpoint(base: URL(string: base)!).absoluteString,
-                "http://localhost:11434/api/chat", "base: \(base)")
-        }
+    func testATrailingSlashOnTheBaseDoesNotDoubleTheSeparator() {
+        XCTAssertEqual(
+            OllamaChat.endpoint(base: URL(string: "http://localhost:11434/")!).absoluteString,
+            "http://localhost:11434/api/chat")
+    }
+
+    /// Pins a ruling rather than a behaviour anyone wants. `llm.endpoint` stores the root, so a
+    /// base carrying `/v1` is a misconfiguration — and the client must NOT quietly repair it.
+    /// `/v1` is the OpenAI-compatibility API, which has no `think` field and no `options` block:
+    /// silently accepting it would drop `num_predict` and `num_ctx`, the two floors measured to
+    /// corrupt a real dictation. The request goes out wrong, Ollama answers 404, and the
+    /// misconfiguration stays visible instead of becoming a silent quality regression.
+    func testAnOpenAiCompatibleBaseIsNotSilentlyRepaired() {
+        XCTAssertEqual(
+            OllamaChat.endpoint(base: URL(string: "http://localhost:11434/v1")!).absoluteString,
+            "http://localhost:11434/v1/api/chat")
     }
 
     // MARK: - Transport failures

@@ -133,7 +133,8 @@ public enum OllamaChat {
 
     /// Ollama's default is 512, which is 380 completion tokens short of a 370-word dictation:
     /// `r-verylong-04` came back cut at "Donc en fait, il faut qu'on", with `done_reason` the
-    /// only sign anything had gone wrong.
+    /// only sign anything had gone wrong. At 2048, that same fixture refined through this client
+    /// comes back whole — 370 words in, 367 out, ending on a finished sentence.
     public static let numPredict = 2048
 
     /// Ollama's default is 2048, and this is the worse of the two: input past roughly 600 words
@@ -143,12 +144,12 @@ public enum OllamaChat {
 
     /// How long a refinement gets before it is given up on.
     ///
-    /// Grounded on the slowest thing ever measured rather than picked round: over the 263 v2
-    /// generations the longest single call is **26.35 s** (`gemma4-12b-qat` on a 370-word real
-    /// dictation), and a cold call also pays the model load, which for the 7.2 GB default is
-    /// seconds more. 120 s leaves ~4x headroom over that worst case while still turning "hangs
-    /// forever" into a reportable outcome — the same bargain `WhisperKitEngine`'s download
-    /// watchdog makes.
+    /// Grounded on the slowest thing ever measured rather than picked round. Over the 263 v2
+    /// generations the longest single call is 26.35 s, and a cold call also pays the model load:
+    /// measured end to end through this client, the shipped default `gemma4:12b-it-qat` on the
+    /// 370-word real dictation `r-verylong-04`, model not resident, takes **29.6 s**. 120 s
+    /// leaves ~4x headroom over that while still turning "hangs forever" into a reportable
+    /// outcome — the same bargain `WhisperKitEngine`'s download watchdog makes.
     ///
     /// Verified to actually fire, against a server that accepts the connection and then never
     /// answers: the call returned at 120.7 s rather than hanging.
@@ -160,26 +161,17 @@ public enum OllamaChat {
 
     // MARK: - The request
 
-    /// The chat endpoint for a configured base URL.
+    /// The chat endpoint for a mode's configured base URL.
     ///
-    /// A trailing `v1` is dropped. Spec §5's example mode still carries
-    /// `"endpoint": "http://localhost:11434/v1"`, written before §10 ruled that refinement goes
-    /// through the **native** API because the OpenAI-compatible one cannot turn reasoning off.
-    /// A mode copied from that example would otherwise request `/v1/api/chat`, which Ollama
-    /// answers with a plain-text 404 — a failure whose message would say nothing about the
-    /// actual mistake.
+    /// The base is the **root** — `http://localhost:11434` — and this only appends the route.
+    /// It deliberately does NOT edit what it is given: an earlier version stripped a trailing
+    /// `/v1`, because spec §5's example mode carried `"endpoint": "http://localhost:11434/v1"`,
+    /// and that has since been ruled a spec defect rather than a shape to support. `/v1` is the
+    /// OpenAI-compatibility API, which has no `think` field and no `options` block, so a client
+    /// that quietly accepted it would lose `num_predict` and `num_ctx` — the two measured floors
+    /// — without saying anything. A wrong endpoint must stay wrong and visible.
     public static func endpoint(base: URL) -> URL {
-        var path = base.pathComponents.filter { $0 != "/" }
-        if path.last == "v1" { path.removeLast() }
-        path += ["api", "chat"]
-        // The fallback is not dead code and not a force unwrap on purpose: this URL comes from a
-        // mode file Louis can edit by hand, and a URL that cannot be decomposed into components
-        // should reach Ollama as a 404 he can read, not crash the app.
-        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
-            return base.appending(path: "api/chat")
-        }
-        components.path = "/" + path.joined(separator: "/")
-        return components.url ?? base.appending(path: "api/chat")
+        base.appending(path: "api/chat")
     }
 
     /// The JSON body for one refinement: the mode's instructions as the system turn, the raw

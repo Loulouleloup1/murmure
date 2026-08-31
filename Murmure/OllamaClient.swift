@@ -56,7 +56,8 @@ final class OllamaClient: Sendable {
     func refine(
         transcript: String, instructions: String, model: String, endpoint base: URL
     ) async -> String? {
-        var request = URLRequest(url: OllamaChat.endpoint(base: base))
+        let url = OllamaChat.endpoint(base: base)
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = OllamaChat.requestBody(
@@ -70,15 +71,13 @@ final class OllamaClient: Sendable {
         } catch {
             return report(
                 OllamaChat.failure(transport: error, elapsed: Date().timeIntervalSince(start)),
-                model: model)
+                model: model, url: url)
         }
 
         guard let http = response as? HTTPURLResponse else {
             // Required by the cast rather than invented: `URLSession` always hands back an
             // `HTTPURLResponse` for an http(s) URL, so this branch means the URL was not one.
-            return report(
-                .malformedResponse(detail: "not an HTTP response from \(request.url?.absoluteString ?? "?")"),
-                model: model)
+            return report(.malformedResponse(detail: "not an HTTP response"), model: model, url: url)
         }
 
         switch OllamaChat.outcome(
@@ -92,16 +91,21 @@ final class OllamaClient: Sendable {
                 """)
             return text
         case .failed(let failure):
-            return report(failure, model: model)
+            return report(failure, model: model, url: url)
         }
     }
 
     /// Logs the failure, hands it to the consumer, and answers `nil` so the call site above reads
     /// as one line. The log is what survives the session; `onFailure` is what reaches a human.
-    private func report(_ failure: OllamaFailure, model: String) -> String? {
+    ///
+    /// The URL is in the log line because the client no longer repairs a wrong `llm.endpoint`
+    /// (see `OllamaChat.endpoint(base:)`): a mode edited by hand into the `/v1` compatibility
+    /// API produces a 404 whose remedy reads "this is a bug", and the requested URL is the only
+    /// thing in the record that shows it was a typo rather than a defect.
+    private func report(_ failure: OllamaFailure, model: String, url: URL) -> String? {
         logger.error("""
-            refinement with \(model, privacy: .public) failed -- \
-            \(failure.description, privacy: .public)
+            refinement with \(model, privacy: .public) at \(url.absoluteString, privacy: .public) \
+            failed -- \(failure.description, privacy: .public)
             """)
         onFailure(failure)
         return nil
