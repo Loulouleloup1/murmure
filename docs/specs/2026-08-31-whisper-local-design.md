@@ -151,6 +151,34 @@ inspiration only unless MIT/Apache — DynamicNotchKit stays the dependency):
   NotchDrop (Lakr233) — animation/morphing engines and "temporary interaction zone" pattern.
 - gh-notch (aymandakirgh/ghnotch, MIT) — AI command bar in the notch with local model dispatch.
 
+**Measured notch geometry — this machine (MacBook Pro M4 Pro, 2026-08-31).** Read off `NSScreen`
+rather than assumed, because the notch's width is not published anywhere and hard-coding a guess is
+how a notch UI ends up misaligned on the one display that matters:
+
+| Quantity | Value | Source |
+|---|---|---|
+| Screen (points) | 1728 x 1117 | `NSScreen.frame` |
+| Notch height | **32 pt** | `NSScreen.safeAreaInsets.top` |
+| Left auxiliary area | x 0 -> 771 | `NSScreen.auxiliaryTopLeftArea` |
+| Right auxiliary area | x 956 -> 1728 | `NSScreen.auxiliaryTopRightArea` |
+| **Notch band** | **x 771 -> 956, width 185 pt, centred at x 863.5** | derived from the two areas |
+
+Derive these at runtime from `safeAreaInsets` and the two `auxiliaryTop*Area` rectangles — never
+hard-code 185 x 32. On a display with no notch, `safeAreaInsets.top` is 0 and the auxiliary areas
+are absent: that is the signal to fall back to the floating top-center pill described above.
+
+**What Superwhisper actually does today, on this Mac.** Its "Mini" recording window (Configuration
+offers Classic / Mini / None; Louis runs **Mini** with "Always show" enabled) is a 240x160 window at
+x 744, y 33 — i.e. **centred on x 864, one point below the 32 pt notch band**, rendering a small dark
+pill. So the app Louis already uses is, in effect, a pill parked immediately under the notch and
+permanently visible. That is a useful confirmation and a useful contrast:
+- **Confirms** the notch-first direction fits his existing habit — he already accepts an always-present
+  top-centre indicator, so Murmure's notch is a refinement of a behaviour he has, not a new one.
+- **Contrasts** in the way that justifies the whole lot: Mini is a *window near* the notch, which is
+  exactly the thing Louis's research said not to build. It cannot morph the notch itself, it leaves a
+  visible seam against the notch's black, and it must stay a fixed size in every state. Murmure's
+  surface is the notch, so idle costs no pixels at all and every state is one continuous animation.
+
 ### Menu bar
 
 Status-dot icon (yellow = model loading, red = recording, blue = processing, green = done).
