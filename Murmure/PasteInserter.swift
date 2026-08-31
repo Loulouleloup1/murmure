@@ -96,36 +96,27 @@ final class PasteInserter {
         let target = try Self.frontmostTarget()
         let (keyDown, keyUp) = try Self.makePasteEvents()
 
+        // The whole capture/clear/write sequence belongs to `PasteboardSnapshot.borrow`, not here:
+        // assembled by hand it leaves a gap between the capture and the clear in which a third
+        // party's fresh copy is destroyed and then papered over with a `.restored`. The core owns
+        // it so that gap cannot be reopened by a call site -- and so it can be tested, which a
+        // guard living in this method never could be: this one posts a ⌘V.
         let pasteboard = NSPasteboard.general
-        let snapshot = PasteboardSnapshot.capture(from: pasteboard)
-        if !snapshot.droppedTypes.isEmpty {
-            logger.warning(
-                "clipboard captured incompletely -- unreadable types: \(snapshot.droppedTypes.map(\.rawValue), privacy: .public)"
-            )
-        }
-
-        // `clearContents()` is the only call that bumps the generation counter, and it returns
-        // the new value: that is the number the restore is checked against.
-        //
-        // RESIDUAL RACE, stated rather than left implicit (the precedent set by ruling L9 and the
-        // task-3 audio-thread note). `clearContents()` and `setString(...)` are two separate
-        // synchronous calls and `NSPasteboard` offers no atomic clear-and-write, so a third party
-        // that copies in the gap BETWEEN them is silently clobbered by our own write -- `setString`
-        // does not clear, so it lands on top of their item without bumping the counter again.
-        // Measured on a private pasteboard: `changeCount` afterwards equals THEIR generation, not
-        // `ourGeneration`, so the hand-back below declines -- and note what that means here, which
-        // is not what `.declinedPasteboardChanged` usually means: their copy is already gone, the
-        // pasteboard is left holding the dictated text, and nothing anywhere says so.
-        // Deliberately NOT closed: the window is a few nanoseconds of straight-line main-thread
-        // code, unreachable by a human ⌘C, and any machinery to guard it (re-read the counter,
-        // retry, take ownership) would cost more than the failure it prevents.
-        let ourGeneration = pasteboard.clearContents()
-        guard pasteboard.setString(text, forType: .string) else {
+        let borrowed: PasteboardSnapshot.Borrowed
+        switch PasteboardSnapshot.borrow(pasteboard, writing: { $0.setString(text, forType: .string) }) {
+        case let .borrowed(handle):
+            borrowed = handle
+        case let .writeRefused(handedBack, droppedTypes):
             // Same care as the hand-back below: the clipboard's fate is reported even on the
             // throwing path, where the user loses both the dictation and possibly the clipboard.
-            handBack(snapshot, to: pasteboard, generation: ourGeneration)
+            warnAboutUnreadableTypes(droppedTypes)
+            report(handedBack, from: .writeRefused)
             throw InsertError.pasteboardWriteFailed
         }
+        // Logged HERE, and not a line earlier. This warning used to sit between the capture and
+        // the `clearContents()`, i.e. inside the window the borrow now closes -- a `logger` call
+        // in there widens it for nothing.
+        warnAboutUnreadableTypes(borrowed.droppedTypes)
 
         logger.info("pasting \(text.count) characters into \(target.localizedName ?? "?", privacy: .public)")
         keyDown.post(tap: .cgAnnotatedSessionEventTap)
@@ -139,31 +130,60 @@ final class PasteInserter {
             logger.notice("paste window interrupted -- restoring the clipboard now")
         }
 
-        handBack(snapshot, to: pasteboard, generation: ourGeneration)
+        report(borrowed.handBack(), from: .pasteWindow)
     }
 
-    /// Hands the clipboard back, says out loud what happened to it, and tells the caller.
-    private func handBack(_ snapshot: PasteboardSnapshot, to pasteboard: NSPasteboard, generation: Int) {
-        let outcome = snapshot.restore(to: pasteboard, ifChangeCountIs: generation)
+    /// Which hand-back is being reported. `.declinedPasteboardChanged` is the same fact told from
+    /// two very different places -- after a paste, and after a write the pasteboard refused before
+    /// any ⌘V was posted -- and one message for both described a paste window that had not opened.
+    private enum HandBack {
+        case pasteWindow
+        case writeRefused
+    }
+
+    /// Says out loud what happened to the user's clipboard, and tells the caller.
+    private func report(_ outcome: PasteboardSnapshot.RestoreOutcome, from handBack: HandBack) {
         switch outcome {
         case .restored:
             logger.debug("clipboard restored")
-        case let .restoredPartially(lost, captured) where lost == captured:
+        case let .restoredPartially(lost, captured, _) where lost > 0 && lost == captured:
             logger.error(
                 "clipboard NOT restored -- all \(captured, privacy: .public) copied item(s) were promises nobody could materialise and are gone"
             )
-        case let .restoredPartially(lost, captured):
+        case let .restoredPartially(lost, captured, _) where lost > 0:
             logger.error(
                 "clipboard restored only in part -- \(lost, privacy: .public) of \(captured, privacy: .public) copied items could not be rebuilt and are gone"
             )
+        case let .restoredPartially(_, _, types):
+            // Every item is back, but not everything they held: styled text returning as bare
+            // characters is a loss the user can see, so it is not a `.restored`.
+            logger.error(
+                "clipboard restored without \(types.map(\.rawValue), privacy: .public) -- the items are back, that content is gone"
+            )
         case .declinedPasteboardChanged:
-            // Someone copied during the paste window. Their clipboard is newer than the one we
-            // saved, so it wins -- the pre-dictation contents are deliberately not brought back.
-            logger.notice("clipboard changed during the paste window -- newer contents kept")
+            switch handBack {
+            case .pasteWindow:
+                // Someone copied during the paste window. Their clipboard is newer than the one we
+                // saved, so it wins -- the pre-dictation contents are deliberately not brought back.
+                logger.notice("clipboard changed during the paste window -- newer contents kept")
+            case .writeRefused:
+                // Nothing was pasted and no ⌘V was posted: the pasteboard refused the transcript
+                // because someone else took ownership of it first. Their copy is on it, intact.
+                logger.notice(
+                    "clipboard refused the transcript -- someone else copied first, their contents are kept"
+                )
+            }
         case .writeFailed:
             logger.error("clipboard could NOT be restored -- it still holds the dictated text")
         }
         onClipboardOutcome(outcome)
+    }
+
+    private func warnAboutUnreadableTypes(_ types: [NSPasteboard.PasteboardType]) {
+        guard !types.isEmpty else { return }
+        logger.warning(
+            "clipboard captured incompletely -- unreadable types: \(types.map(\.rawValue), privacy: .public)"
+        )
     }
 
     /// Prompts for Accessibility permission if it has not been granted. Returns whether the
