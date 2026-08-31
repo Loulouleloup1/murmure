@@ -4,9 +4,17 @@
 
 **Goal:** Pick the default local refinement model for Murmure, data-driven, among 5 verified candidates.
 
-**Architecture:** Python scripts hit LM Studio's OpenAI-compatible endpoint for each model × fixture × task, record outputs + machine metrics; outputs are anonymised into packets; blind Opus-tier judges score them against a rubric frozen before any generation; an aggregation script produces the report; Louis adjudicates the top 2.
+**Architecture:** Python scripts hit Ollama's OpenAI-compatible endpoint for each model × fixture × task, record outputs + machine metrics; outputs are anonymised into packets; blind Opus-tier judges score them against a rubric frozen before any generation; an aggregation script produces the report; Louis adjudicates the top 2.
 
-**Tech Stack:** Python 3.11+ (`requests`), LM Studio (`lms` CLI) as the single serving endpoint, `mlx_lm` for the one model without GGUF.
+**Tech Stack:** Python 3.11+ (`requests`), Ollama (`http://localhost:11434/v1`) as the serving endpoint for all 5 candidates.
+
+> **Amended 2026-08-31 (ruling R3, see the SDD ledger):** the plan originally used LM Studio plus an
+> MLX conversion for `s1-mini`. `superwhisper/s1-mini-GGUF` turned out to be published, so all five
+> candidates are Ollama-pullable and Ollama is now the single endpoint. `models.json` still carries a
+> per-model `endpoint` so a mixed setup stays expressible.
+> **Ruling R1:** no real dictations exist on this machine (fresh Superwhisper install, empty history),
+> so all 15 fixtures are synthetic. **Ruling R2:** `google/gemma-4-12b-qat` is gated; the ungated
+> Ollama tag `gemma4:12b-it-qat` is used instead.
 
 **Spec:** `docs/specs/2026-08-31-whisper-local-design.md` (§10)
 
@@ -17,7 +25,9 @@
 - Judges never see model names; the letter→model mapping lives outside the packets directory.
 - Machine metrics are measured on this M4 Pro, never copied from blogs.
 - All work happens in the `murmure` repo; commit after every task.
-- ~35 GB of model downloads — check disk space (`df -h /`) before Task 2.
+- Serving endpoint: Ollama at `http://localhost:11434/v1` (ruling R3). Model refs come from
+  `benchmark/pulled.tsv`, written by `benchmark/pull_models.sh`.
+- All fixtures are synthetic and tagged `"source": "synthetic"` (ruling R1).
 
 ---
 
@@ -51,11 +61,19 @@ Create `benchmark/fixtures.jsonl` with exactly these 10 lines (they simulate Lou
 {"id": "f10", "source": "synthetic", "raw": "hey euh petite question est-ce que quelqu'un sait pourquoi le run de vendredi soir a produit zéro lignes pour le provider MSCI alors que le bucket S3 contient bien les fichiers d'input j'ai regardé les logs CloudWatch mais euh y a rien d'évident"}
 ```
 
-- [ ] **Step 2: Collect the 5 real fixtures (USER INPUT REQUIRED — blocking)**
+- [ ] **Step 2: Add the 5 register-coverage fixtures**
 
-Ask Louis to dictate 5 real prompts/messages with Superwhisper in **Voice mode** (raw transcription, no AI) and paste the raw transcripts. Append them to `benchmark/fixtures.jsonl` as `{"id": "f11".."f15", "source": "real", "raw": "..."}`.
+Ruling R1 replaced the "dictated by Louis" fixtures with synthetic ones (no Superwhisper history exists on this machine). Append these 5 lines verbatim to `benchmark/fixtures.jsonl` — they cover the Slack/email register and the longer, more rambling dictations the first 10 do not:
 
-If Louis is not available, proceed with f01–f10 and leave a `TODO(real-fixtures)` marker ONLY in the commit message (never in the file); the benchmark is re-runnable cheaply once f11–f15 land.
+```jsonl
+{"id": "f11", "source": "synthetic", "raw": "euh coucou dis-moi est-ce que t'as eu le temps de regarder le le ticket sur les alertes de variation parce que du coup j'ai un doute sur le seuil enfin je veux dire est-ce qu'on le met à dix pour cent ou à vingt pour cent parce que là on en a genre huit cents à traiter et euh voilà"}
+{"id": "f12", "source": "synthetic", "raw": "bonjour Marie euh donc comme convenu je vous envoie le le récapitulatif de la réunion d'hier alors on a validé trois points le premier c'est le périmètre des datasets le deuxième c'est la date de livraison qui passe au quinze septembre et le troisième euh attendez le troisième c'était sur le budget donc on reste sur l'enveloppe initiale voilà bonne journée"}
+{"id": "f13", "source": "synthetic", "raw": "ok alors écoute je pense qu'on devrait euh plutôt partir sur une architecture où chaque couche est derrière un protocole parce que sinon on va se retrouver avec un truc monolithique et euh et après pour tester c'est l'enfer donc voilà mon avis c'est protocol first et on injecte les implémentations"}
+{"id": "f14", "source": "synthetic", "raw": "hello team petite update sur le sujet du du connecteur donc la PR est prête elle attend juste la review de quelqu'un euh j'ai testé en dry run sur les données de prod et ça sort bien les cent trente-quatre lignes attendues donc euh si quelqu'un a cinq minutes ce serait top merci"}
+{"id": "f15", "source": "synthetic", "raw": "attends non non je reprends donc le fichier il faut le mettre pas dans le dossier models mais dans le dossier recordings et euh et le nom c'est rec tiret la date en ISO avec les deux points remplacés par des tirets parce que sinon macOS il accepte pas le nom de fichier"}
+```
+
+Expected total after this step: **15 lines** in `fixtures.jsonl` (`wc -l benchmark/fixtures.jsonl`).
 
 - [ ] **Step 3: Write the two task prompts**
 
@@ -143,67 +161,63 @@ git commit -m "feat(benchmark): fixtures, task prompts, frozen rubric and judge 
 
 ---
 
-### Task 2: Load the 5 candidates into LM Studio
+### Task 2: Verify the 5 candidates in Ollama and write models.json
+
+The controller already ran `benchmark/pull_models.sh` (committed), which pulled each candidate with tag fallbacks and recorded the resolved refs in `benchmark/pulled.tsv` (successes, `name<TAB>ref`) and `benchmark/failed.tsv` (candidates where every fallback failed). This task verifies what actually landed and turns it into `models.json`.
 
 **Files:**
 - Create: `benchmark/models.json`
+- Read: `benchmark/pulled.tsv`, `benchmark/failed.tsv`, `benchmark/pull.log`
 
 **Interfaces:**
-- Produces: `benchmark/models.json` — consumed by `run_benchmark.py`. Schema:
-  `[{"name": "s1-mini", "model_id": "<id as served by lms>", "ram_gb": <float from lms ps>, "disk_gb": <float>}, ...]`
-- LM Studio server running on `http://localhost:1234/v1` with each model loadable by `model_id`.
+- Produces: `benchmark/models.json` — consumed by `run_benchmark.py` (Task 3) and `aggregate.py` (Task 6). Schema, one object per candidate:
+  `{"name": "s1-mini", "model_id": "<exact ollama ref>", "endpoint": "http://localhost:11434/v1/chat/completions", "size_gb": <float>, "excluded": "<reason>"}` — `excluded` present ONLY for candidates that could not be served; `size_gb` from `ollama list`.
 
-- [ ] **Step 1: Check tooling and disk**
-
-```bash
-lms --version && df -h / && python3 --version
-```
-Expected: lms CLI present (LM Studio is installed), ≥ 50 GB free. If `lms` is missing: `~/.lmstudio/bin/lms bootstrap` or ask Louis to open LM Studio once.
-
-- [ ] **Step 2: Download the three GGUF-ready / hub-listed candidates**
+- [ ] **Step 1: Read what the pull produced**
 
 ```bash
-lms get ornith-ai/Ornith-1.5-9B-GGUF   # pick Q4_K_M when prompted
-lms get qwen3.5-9b                      # pick the Q4_K_M community GGUF or MLX 4-bit
-lms get granite-4.2-8b                  # pick Q4_K_M
+cat benchmark/pulled.tsv benchmark/failed.tsv; ollama list
 ```
-For each, if `lms get` finds no match, search the hub name variants with `lms get <name> --yes=false` interactively; as a fallback download the GGUF with `huggingface-cli download <community-gguf-repo>` into `~/.lmstudio/models/`. Record the exact ids shown by `lms ls` afterwards.
+The five `name` values are: `s1-mini`, `ornith-9b`, `gemma4-12b-qat`, `qwen3.5-9b`, `granite4.2-8b`.
 
-- [ ] **Step 3: gemma-4-12b-qat (gated — USER INPUT REQUIRED once)**
+- [ ] **Step 2: Smoke-test every pulled model through the OpenAI-compatible endpoint**
 
-Ask Louis to run `huggingface-cli login` and accept the Gemma licence on the `google/gemma-4-12b-qat` model page. Then:
+For each `name<TAB>ref` line in `pulled.tsv`:
 
 ```bash
-lms get google/gemma-4-12b-qat || huggingface-cli download google/gemma-4-12b-qat --local-dir ~/.lmstudio/models/google/gemma-4-12b-qat
+curl -s http://localhost:11434/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model": "<ref>", "messages": [{"role": "user", "content": "Réponds uniquement: ok"}], "max_tokens": 20}' \
+  | python3 -m json.tool
 ```
-If the QAT repo ships safetensors only (no GGUF), use the MLX route of Step 4 for it as well.
+Expected: HTTP 200 with a `choices[0].message.content` containing "ok"-ish text. A model that returns an error, empty content, or times out after 120 s counts as NOT servable.
 
-- [ ] **Step 4: s1-mini (no GGUF — convert to MLX)**
+- [ ] **Step 3: Retry any failed candidate once, then record it honestly**
+
+For every candidate in `failed.tsv`, or that failed the Step 2 smoke test, try ONE alternative ref (search `ollama list` naming variants, or `ollama pull hf.co/<repo>:<quant>` using a quant visible on the HF repo's file list). If it still fails, put it in `models.json` with an `"excluded": "<one-line reason, e.g. no GGUF quant pullable>"` key. **Never silently drop a candidate** — an excluded entry is a reported result, a missing entry is a lie about the compared population.
+
+- [ ] **Step 4: Write models.json**
+
+Fill `benchmark/models.json` with one object per candidate (all five present, excluded ones included), `size_gb` read from `ollama list`, `endpoint` set to `http://localhost:11434/v1/chat/completions` for every servable model.
+
+- [ ] **Step 5: Verify the file parses and covers all five**
 
 ```bash
-python3 -m venv benchmark/.venv && source benchmark/.venv/bin/activate
-pip install mlx-lm requests
-mlx_lm.convert --hf-path superwhisper/s1-mini --mlx-path ~/.lmstudio/models/mlx/s1-mini-4bit -q
+python3 -c "
+import json
+m = json.load(open('benchmark/models.json'))
+names = {x['name'] for x in m}
+assert names == {'s1-mini','ornith-9b','gemma4-12b-qat','qwen3.5-9b','granite4.2-8b'}, names
+servable = [x for x in m if not x.get('excluded')]
+print(f'{len(servable)}/5 servable:', [x['name'] for x in servable])
+"
 ```
-LM Studio serves MLX models placed under its models directory; confirm it appears in `lms ls`.
-
-- [ ] **Step 5: Smoke-test each model and fill models.json**
-
-For each of the 5 ids from `lms ls`:
-
-```bash
-lms load "<model_id>" && curl -s http://localhost:1234/v1/chat/completions -H 'Content-Type: application/json' \
-  -d '{"model": "<model_id>", "messages": [{"role": "user", "content": "Réponds uniquement: ok"}], "max_tokens": 5}' | python3 -m json.tool
-lms ps   # note the RAM footprint
-lms unload --all
-```
-Expected: a JSON completion containing "ok"-ish text. Fill `benchmark/models.json` with the 5 entries (measured `ram_gb` from `lms ps`, `disk_gb` from `lms ls`). A model that cannot be served after both routes (GGUF + MLX) is recorded in models.json with `"excluded": "<reason>"` and reported — never silently dropped.
+Expected: prints the servable count and names, no assertion error.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add benchmark/models.json
-git commit -m "feat(benchmark): candidate models resolved and smoke-tested in LM Studio"
+git add benchmark/models.json benchmark/pulled.tsv benchmark/failed.tsv
+git commit -m "feat(benchmark): candidate models resolved and smoke-tested in Ollama"
 ```
 
 ---
@@ -224,18 +238,17 @@ git commit -m "feat(benchmark): candidate models resolved and smoke-tested in LM
 `benchmark/run_benchmark.py`:
 
 ```python
-"""Run every candidate model over every fixture x task via LM Studio."""
+"""Run every candidate model over every fixture x task via Ollama."""
 from __future__ import annotations
 
 import json
 import pathlib
-import subprocess
 import time
 
 import requests
 
 BASE = pathlib.Path(__file__).parent
-ENDPOINT = "http://localhost:1234/v1/chat/completions"
+DEFAULT_ENDPOINT = "http://localhost:11434/v1/chat/completions"
 TASKS = {
     "prompt_cleanup": (BASE / "prompts" / "prompt_cleanup.txt").read_text(),
     "message_rewrite": (BASE / "prompts" / "message_rewrite.txt").read_text(),
@@ -246,10 +259,10 @@ def load_jsonl(path: pathlib.Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def run_one(model_id: str, system: str, raw: str) -> dict:
+def run_one(endpoint: str, model_id: str, system: str, raw: str) -> dict:
     t0 = time.monotonic()
     resp = requests.post(
-        ENDPOINT,
+        endpoint,
         json={
             "model": model_id,
             "messages": [
@@ -280,19 +293,17 @@ def main() -> None:
     done = {(r["model"], r["fixture_id"], r["task"]) for r in load_jsonl(out_path)} if out_path.exists() else set()
     with out_path.open("a") as out:
         for model in models:
-            subprocess.run(["lms", "unload", "--all"], check=True)
-            subprocess.run(["lms", "load", model["model_id"]], check=True)
+            endpoint = model.get("endpoint", DEFAULT_ENDPOINT)
             for fixture in fixtures:
                 for task, system in TASKS.items():
                     key = (model["name"], fixture["id"], task)
                     if key in done:
                         continue
-                    result = run_one(model["model_id"], system, fixture["raw"])
+                    result = run_one(endpoint, model["model_id"], system, fixture["raw"])
                     row = {"model": model["name"], "fixture_id": fixture["id"], "task": task, **result}
                     out.write(json.dumps(row, ensure_ascii=False) + "\n")
                     out.flush()
                     print(f"{model['name']} {fixture['id']} {task}: {result['latency_s']}s")
-    subprocess.run(["lms", "unload", "--all"], check=True)
 
 
 if __name__ == "__main__":
@@ -302,9 +313,10 @@ if __name__ == "__main__":
 - [ ] **Step 2: Run it**
 
 ```bash
-source benchmark/.venv/bin/activate && python3 benchmark/run_benchmark.py
+python3 -m venv benchmark/.venv && source benchmark/.venv/bin/activate && pip install -q requests
+python3 benchmark/run_benchmark.py
 ```
-Expected: 5 models × 15 fixtures × 2 tasks = **150 lines** in `results.jsonl` (or n_models × n_fixtures × 2 if a model was excluded / real fixtures pending — verify the count matches the population and STATE the compared population; an empty or short file is a failure, not a pass).
+Expected: n_servable_models × 15 fixtures × 2 tasks lines in `results.jsonl` — with all 5 servable that is **150 lines**. Compute the expected number from `models.json` (excluding `excluded` entries) and `fixtures.jsonl`, then assert it. STATE the compared population in the commit message; an empty or short file is a failure, not a pass. Ollama loads each model on first request and unloads it on its own — no explicit load/unload calls.
 
 ```bash
 wc -l benchmark/results.jsonl
