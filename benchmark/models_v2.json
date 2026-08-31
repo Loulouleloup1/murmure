@@ -1,0 +1,39 @@
+[
+  {
+    "name": "gemma4-12b-qat",
+    "model_id": "gemma4:12b-it-qat",
+    "size_gb": 7.2,
+    "runtime": "ollama",
+    "role": "v1 incumbent -- the model to beat"
+  },
+  {
+    "name": "gemma4-e2b-qat",
+    "model_id": "gemma4:e2b-it-qat",
+    "size_gb": 4.3,
+    "runtime": "ollama",
+    "role": "main challenger (small-models probe: FR 14/15, 0.80 s median)"
+  },
+  {
+    "name": "qwen3.5-4b",
+    "model_id": "qwen3.5:4b",
+    "size_gb": 3.4,
+    "runtime": "ollama",
+    "role": "size/quality curve, qwen family"
+  },
+  {
+    "name": "qwen3.5-2b-q8",
+    "model_id": "qwen3.5:2b-q8_0",
+    "size_gb": 2.7,
+    "runtime": "ollama",
+    "role": "smallest viable chat candidate (<3 GB)"
+  },
+  {
+    "name": "s1-mini",
+    "model_id": "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M",
+    "size_gb": 0.48,
+    "runtime": "ollama",
+    "api": "generate_raw",
+    "role": "purpose-built normaliser; prompt_cleanup only -- not steerable, cannot do message_rewrite",
+    "notes": "Requires /api/generate raw mode + [Styling: semi-casual] control line + deterministic recapitalisation. formal styling corrupts facts."
+  }
+]

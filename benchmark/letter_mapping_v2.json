@@ -1,0 +1,377 @@
+{
+  "armA/f01": {
+    "A": "gemma4-12b-qat/cleanup_B",
+    "B": "gemma4-12b-qat/cleanup_A",
+    "C": "gemma4-12b-qat/cleanup_baseline",
+    "D": "gemma4-12b-qat/cleanup_C"
+  },
+  "armA/f02": {
+    "A": "gemma4-12b-qat/cleanup_baseline",
+    "B": "gemma4-12b-qat/cleanup_A",
+    "C": "gemma4-12b-qat/cleanup_C",
+    "D": "gemma4-12b-qat/cleanup_B"
+  },
+  "armA/f03": {
+    "A": "gemma4-12b-qat/cleanup_baseline",
+    "B": "gemma4-12b-qat/cleanup_B",
+    "C": "gemma4-12b-qat/cleanup_C",
+    "D": "gemma4-12b-qat/cleanup_A"
+  },
+  "armA/f04": {
+    "A": "gemma4-12b-qat/cleanup_C",
+    "B": "gemma4-12b-qat/cleanup_A",
+    "C": "gemma4-12b-qat/cleanup_baseline",
+    "D": "gemma4-12b-qat/cleanup_B"
+  },
+  "armA/f05": {
+    "A": "gemma4-12b-qat/cleanup_baseline",
+    "B": "gemma4-12b-qat/cleanup_C",
+    "C": "gemma4-12b-qat/cleanup_A",
+    "D": "gemma4-12b-qat/cleanup_B"
+  },
+  "armA/f06": {
+    "A": "gemma4-12b-qat/cleanup_C",
+    "B": "gemma4-12b-qat/cleanup_baseline",
+    "C": "gemma4-12b-qat/cleanup_A",
+    "D": "gemma4-12b-qat/cleanup_B"
+  },
+  "armA/f07": {
+    "A": "gemma4-12b-qat/cleanup_C",
+    "B": "gemma4-12b-qat/cleanup_A",
+    "C": "gemma4-12b-qat/cleanup_B",
+    "D": "gemma4-12b-qat/cleanup_baseline"
+  },
+  "armA/f08": {
+    "A": "gemma4-12b-qat/cleanup_A",
+    "B": "gemma4-12b-qat/cleanup_C",
+    "C": "gemma4-12b-qat/cleanup_B",
+    "D": "gemma4-12b-qat/cleanup_baseline"
+  },
+  "armA/f09": {
+    "A": "gemma4-12b-qat/cleanup_B",
+    "B": "gemma4-12b-qat/cleanup_baseline",
+    "C": "gemma4-12b-qat/cleanup_A",
+    "D": "gemma4-12b-qat/cleanup_C"
+  },
+  "armA/f10": {
+    "A": "gemma4-12b-qat/cleanup_B",
+    "B": "gemma4-12b-qat/cleanup_C",
+    "C": "gemma4-12b-qat/cleanup_A",
+    "D": "gemma4-12b-qat/cleanup_baseline"
+  },
+  "armA/f11": {
+    "A": "gemma4-12b-qat/cleanup_C",
+    "B": "gemma4-12b-qat/cleanup_A",
+    "C": "gemma4-12b-qat/cleanup_B",
+    "D": "gemma4-12b-qat/cleanup_baseline"
+  },
+  "armA/f12": {
+    "A": "gemma4-12b-qat/cleanup_baseline",
+    "B": "gemma4-12b-qat/cleanup_B",
+    "C": "gemma4-12b-qat/cleanup_A",
+    "D": "gemma4-12b-qat/cleanup_C"
+  },
+  "armA/f13": {
+    "A": "gemma4-12b-qat/cleanup_baseline",
+    "B": "gemma4-12b-qat/cleanup_A",
+    "C": "gemma4-12b-qat/cleanup_C",
+    "D": "gemma4-12b-qat/cleanup_B"
+  },
+  "armA/f14": {
+    "A": "gemma4-12b-qat/cleanup_B",
+    "B": "gemma4-12b-qat/cleanup_baseline",
+    "C": "gemma4-12b-qat/cleanup_C",
+    "D": "gemma4-12b-qat/cleanup_A"
+  },
+  "armA/f15": {
+    "A": "gemma4-12b-qat/cleanup_A",
+    "B": "gemma4-12b-qat/cleanup_C",
+    "C": "gemma4-12b-qat/cleanup_baseline",
+    "D": "gemma4-12b-qat/cleanup_B"
+  },
+  "armB/f01": {
+    "A": "gemma4-e2b-qat/cleanup_B",
+    "B": "gemma4-e2b-qat/cleanup_baseline",
+    "C": "gemma4-e2b-qat/cleanup_A",
+    "D": "gemma4-e2b-qat/cleanup_C"
+  },
+  "armB/f02": {
+    "A": "gemma4-e2b-qat/cleanup_B",
+    "B": "gemma4-e2b-qat/cleanup_C",
+    "C": "gemma4-e2b-qat/cleanup_A",
+    "D": "gemma4-e2b-qat/cleanup_baseline"
+  },
+  "armB/f03": {
+    "A": "gemma4-e2b-qat/cleanup_baseline",
+    "B": "gemma4-e2b-qat/cleanup_A",
+    "C": "gemma4-e2b-qat/cleanup_C",
+    "D": "gemma4-e2b-qat/cleanup_B"
+  },
+  "armB/f04": {
+    "A": "gemma4-e2b-qat/cleanup_baseline",
+    "B": "gemma4-e2b-qat/cleanup_B",
+    "C": "gemma4-e2b-qat/cleanup_A",
+    "D": "gemma4-e2b-qat/cleanup_C"
+  },
+  "armB/f05": {
+    "A": "gemma4-e2b-qat/cleanup_B",
+    "B": "gemma4-e2b-qat/cleanup_baseline",
+    "C": "gemma4-e2b-qat/cleanup_C",
+    "D": "gemma4-e2b-qat/cleanup_A"
+  },
+  "armB/f06": {
+    "A": "gemma4-e2b-qat/cleanup_baseline",
+    "B": "gemma4-e2b-qat/cleanup_B",
+    "C": "gemma4-e2b-qat/cleanup_C",
+    "D": "gemma4-e2b-qat/cleanup_A"
+  },
+  "armB/f07": {
+    "A": "gemma4-e2b-qat/cleanup_baseline",
+    "B": "gemma4-e2b-qat/cleanup_C",
+    "C": "gemma4-e2b-qat/cleanup_A",
+    "D": "gemma4-e2b-qat/cleanup_B"
+  },
+  "armB/f08": {
+    "A": "gemma4-e2b-qat/cleanup_B",
+    "B": "gemma4-e2b-qat/cleanup_baseline",
+    "C": "gemma4-e2b-qat/cleanup_A",
+    "D": "gemma4-e2b-qat/cleanup_C"
+  },
+  "armB/f09": {
+    "A": "gemma4-e2b-qat/cleanup_baseline",
+    "B": "gemma4-e2b-qat/cleanup_B",
+    "C": "gemma4-e2b-qat/cleanup_C",
+    "D": "gemma4-e2b-qat/cleanup_A"
+  },
+  "armB/f10": {
+    "A": "gemma4-e2b-qat/cleanup_A",
+    "B": "gemma4-e2b-qat/cleanup_baseline",
+    "C": "gemma4-e2b-qat/cleanup_B",
+    "D": "gemma4-e2b-qat/cleanup_C"
+  },
+  "armB/f11": {
+    "A": "gemma4-e2b-qat/cleanup_baseline",
+    "B": "gemma4-e2b-qat/cleanup_C",
+    "C": "gemma4-e2b-qat/cleanup_A",
+    "D": "gemma4-e2b-qat/cleanup_B"
+  },
+  "armB/f12": {
+    "A": "gemma4-e2b-qat/cleanup_C",
+    "B": "gemma4-e2b-qat/cleanup_baseline",
+    "C": "gemma4-e2b-qat/cleanup_B",
+    "D": "gemma4-e2b-qat/cleanup_A"
+  },
+  "armB/f13": {
+    "A": "gemma4-e2b-qat/cleanup_baseline",
+    "B": "gemma4-e2b-qat/cleanup_C",
+    "C": "gemma4-e2b-qat/cleanup_A",
+    "D": "gemma4-e2b-qat/cleanup_B"
+  },
+  "armB/f14": {
+    "A": "gemma4-e2b-qat/cleanup_baseline",
+    "B": "gemma4-e2b-qat/cleanup_C",
+    "C": "gemma4-e2b-qat/cleanup_B",
+    "D": "gemma4-e2b-qat/cleanup_A"
+  },
+  "armB/f15": {
+    "A": "gemma4-e2b-qat/cleanup_baseline",
+    "B": "gemma4-e2b-qat/cleanup_A",
+    "C": "gemma4-e2b-qat/cleanup_B",
+    "D": "gemma4-e2b-qat/cleanup_C"
+  },
+  "armC/f01": {
+    "A": "gemma4-e2b-qat",
+    "B": "gemma4-12b-qat",
+    "C": "qwen3.5-4b",
+    "D": "qwen3.5-2b-q8",
+    "E": "s1-mini"
+  },
+  "armC/f02": {
+    "A": "qwen3.5-2b-q8",
+    "B": "s1-mini",
+    "C": "qwen3.5-4b",
+    "D": "gemma4-e2b-qat",
+    "E": "gemma4-12b-qat"
+  },
+  "armC/f03": {
+    "A": "s1-mini",
+    "B": "gemma4-e2b-qat",
+    "C": "gemma4-12b-qat",
+    "D": "qwen3.5-2b-q8",
+    "E": "qwen3.5-4b"
+  },
+  "armC/f04": {
+    "A": "gemma4-e2b-qat",
+    "B": "qwen3.5-2b-q8",
+    "C": "s1-mini",
+    "D": "gemma4-12b-qat",
+    "E": "qwen3.5-4b"
+  },
+  "armC/f05": {
+    "A": "gemma4-12b-qat",
+    "B": "qwen3.5-4b",
+    "C": "gemma4-e2b-qat",
+    "D": "s1-mini",
+    "E": "qwen3.5-2b-q8"
+  },
+  "armC/f06": {
+    "A": "qwen3.5-4b",
+    "B": "s1-mini",
+    "C": "gemma4-12b-qat",
+    "D": "gemma4-e2b-qat",
+    "E": "qwen3.5-2b-q8"
+  },
+  "armC/f07": {
+    "A": "qwen3.5-4b",
+    "B": "gemma4-12b-qat",
+    "C": "gemma4-e2b-qat",
+    "D": "s1-mini",
+    "E": "qwen3.5-2b-q8"
+  },
+  "armC/f08": {
+    "A": "s1-mini",
+    "B": "gemma4-12b-qat",
+    "C": "qwen3.5-4b",
+    "D": "gemma4-e2b-qat",
+    "E": "qwen3.5-2b-q8"
+  },
+  "armC/f09": {
+    "A": "gemma4-e2b-qat",
+    "B": "qwen3.5-2b-q8",
+    "C": "gemma4-12b-qat",
+    "D": "qwen3.5-4b",
+    "E": "s1-mini"
+  },
+  "armC/f10": {
+    "A": "s1-mini",
+    "B": "qwen3.5-4b",
+    "C": "qwen3.5-2b-q8",
+    "D": "gemma4-e2b-qat",
+    "E": "gemma4-12b-qat"
+  },
+  "armC/f11": {
+    "A": "s1-mini",
+    "B": "gemma4-12b-qat",
+    "C": "gemma4-e2b-qat",
+    "D": "qwen3.5-4b",
+    "E": "qwen3.5-2b-q8"
+  },
+  "armC/f12": {
+    "A": "s1-mini",
+    "B": "gemma4-e2b-qat",
+    "C": "gemma4-12b-qat",
+    "D": "qwen3.5-2b-q8",
+    "E": "qwen3.5-4b"
+  },
+  "armC/f13": {
+    "A": "gemma4-e2b-qat",
+    "B": "s1-mini",
+    "C": "qwen3.5-2b-q8",
+    "D": "gemma4-12b-qat",
+    "E": "qwen3.5-4b"
+  },
+  "armC/f14": {
+    "A": "gemma4-12b-qat",
+    "B": "qwen3.5-2b-q8",
+    "C": "qwen3.5-4b",
+    "D": "s1-mini",
+    "E": "gemma4-e2b-qat"
+  },
+  "armC/f15": {
+    "A": "gemma4-12b-qat",
+    "B": "s1-mini",
+    "C": "qwen3.5-4b",
+    "D": "qwen3.5-2b-q8",
+    "E": "gemma4-e2b-qat"
+  },
+  "armD/f01": {
+    "A": "gemma4-12b-qat",
+    "B": "gemma4-e2b-qat",
+    "C": "qwen3.5-2b-q8",
+    "D": "qwen3.5-4b"
+  },
+  "armD/f02": {
+    "A": "qwen3.5-2b-q8",
+    "B": "gemma4-e2b-qat",
+    "C": "gemma4-12b-qat",
+    "D": "qwen3.5-4b"
+  },
+  "armD/f03": {
+    "A": "qwen3.5-4b",
+    "B": "gemma4-e2b-qat",
+    "C": "qwen3.5-2b-q8",
+    "D": "gemma4-12b-qat"
+  },
+  "armD/f04": {
+    "A": "gemma4-12b-qat",
+    "B": "qwen3.5-4b",
+    "C": "gemma4-e2b-qat",
+    "D": "qwen3.5-2b-q8"
+  },
+  "armD/f05": {
+    "A": "qwen3.5-2b-q8",
+    "B": "gemma4-12b-qat",
+    "C": "qwen3.5-4b",
+    "D": "gemma4-e2b-qat"
+  },
+  "armD/f06": {
+    "A": "qwen3.5-4b",
+    "B": "gemma4-e2b-qat",
+    "C": "qwen3.5-2b-q8",
+    "D": "gemma4-12b-qat"
+  },
+  "armD/f07": {
+    "A": "qwen3.5-4b",
+    "B": "gemma4-e2b-qat",
+    "C": "qwen3.5-2b-q8",
+    "D": "gemma4-12b-qat"
+  },
+  "armD/f08": {
+    "A": "gemma4-e2b-qat",
+    "B": "qwen3.5-4b",
+    "C": "gemma4-12b-qat",
+    "D": "qwen3.5-2b-q8"
+  },
+  "armD/f09": {
+    "A": "gemma4-e2b-qat",
+    "B": "qwen3.5-4b",
+    "C": "gemma4-12b-qat",
+    "D": "qwen3.5-2b-q8"
+  },
+  "armD/f10": {
+    "A": "qwen3.5-4b",
+    "B": "gemma4-12b-qat",
+    "C": "qwen3.5-2b-q8",
+    "D": "gemma4-e2b-qat"
+  },
+  "armD/f11": {
+    "A": "qwen3.5-4b",
+    "B": "qwen3.5-2b-q8",
+    "C": "gemma4-12b-qat",
+    "D": "gemma4-e2b-qat"
+  },
+  "armD/f12": {
+    "A": "qwen3.5-2b-q8",
+    "B": "gemma4-12b-qat",
+    "C": "gemma4-e2b-qat",
+    "D": "qwen3.5-4b"
+  },
+  "armD/f13": {
+    "A": "gemma4-12b-qat",
+    "B": "qwen3.5-2b-q8",
+    "C": "gemma4-e2b-qat",
+    "D": "qwen3.5-4b"
+  },
+  "armD/f14": {
+    "A": "qwen3.5-2b-q8",
+    "B": "gemma4-12b-qat",
+    "C": "qwen3.5-4b",
+    "D": "gemma4-e2b-qat"
+  },
+  "armD/f15": {
+    "A": "qwen3.5-2b-q8",
+    "B": "qwen3.5-4b",
+    "C": "gemma4-e2b-qat",
+    "D": "gemma4-12b-qat"
+  }
+}

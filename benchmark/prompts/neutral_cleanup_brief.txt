@@ -1,0 +1,17 @@
+The candidates below were each asked to clean up a raw French speech-to-text
+transcript, often mixed with English technical terms. The instruction they
+received, in substance:
+
+- Remove hesitations (euh, hum), meaningless fillers (alors, donc, du coup,
+  genre, tu vois, quoi), stuttered repetitions and abandoned false starts --
+  keeping the wording the speaker finally landed on.
+- Add punctuation, capitalisation and paragraph breaks.
+- Render dictated symbols: "slash" as /, "point" as . inside a path, file name
+  or URL.
+- Keep every word that is not removed exactly as spoken -- same word, same
+  spelling, same order, same language. This covers technical terms, product
+  names, file paths, commands, English words, numbers and proper nouns.
+- Never rewrite, summarise, expand, reorder or translate. The output must say
+  exactly what the speaker said, minus the noise.
+- Output ONLY the cleaned text: no preamble, no quotes, no markdown fences, no
+  commentary.

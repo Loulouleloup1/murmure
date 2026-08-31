@@ -14,3 +14,13 @@ benchmark/pull.log
 benchmark/*.local.jsonl
 benchmark/results-*.local.jsonl
 benchmark/__pycache__/
+
+# Benchmark v2 generation log: results-v2.jsonl carries 8 rows generated on
+# `real_long` fixtures, i.e. Louis's own dictated work content. Same rule as
+# *.local.jsonl (ruling R12): usable locally, never committed. The JUDGED
+# evidence -- packets_v2/, judgments_v2/, letter_mapping_v2.json -- is 100 %
+# synthetic (verified: zero `r-verylong-*` references) and IS committed, so the
+# 765 blind scores stay reproducible without shipping his content.
+benchmark/results-v2.jsonl
+benchmark/run_v2.log
+benchmark/judges_v2.log
