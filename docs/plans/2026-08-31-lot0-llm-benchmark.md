@@ -171,7 +171,19 @@ The controller already ran `benchmark/pull_models.sh` (committed), which pulled 
 
 **Interfaces:**
 - Produces: `benchmark/models.json` — consumed by `run_benchmark.py` (Task 3) and `aggregate.py` (Task 6). Schema, one object per candidate:
-  `{"name": "s1-mini", "model_id": "<exact ollama ref>", "endpoint": "http://localhost:11434/v1/chat/completions", "size_gb": <float>, "excluded": "<reason>"}` — `excluded` present ONLY for candidates that could not be served; `size_gb` from `ollama list`.
+  `{"name": "s1-mini", "model_id": "<exact ollama ref>", "endpoint": "http://localhost:11434/api/chat", "size_gb": <float>, "excluded": "<reason>"}` — `excluded` present ONLY for candidates that are not benchmarked; `size_gb` from `ollama list`.
+
+> **Amended 2026-08-31 (rulings R6/R7, see the SDD ledger).** Two corrections to this task's output:
+> 1. `endpoint` is Ollama's **native** `http://localhost:11434/api/chat`, not the OpenAI-compatible
+>    `/v1/chat/completions`. All four servable candidates are reasoning models that emit a `reasoning`
+>    field before `content`; the native API accepts `"think": false`, which the compat endpoint does
+>    not, and it returns `eval_count` for exact token counts. Verified on `qwen3.5:9b`: clean content
+>    in 5.9 s, `thinking: null`, `eval_count: 40`.
+> 2. `s1-mini`'s `excluded` reason is its **language scope**, not the empty-output symptom: its model
+>    card states v1 "covers English only", that it "is not a chat model and will not follow general
+>    instructions", and that it is steered by a control line at the top of the input. The fixtures are
+>    French. Record it as: `"excluded": "English-only (v1 model card); fixtures and Louis's dictation
+>    are French. Not a chat model — steered by a control line, not a system prompt."`
 
 - [ ] **Step 1: Read what the pull produced**
 
@@ -238,7 +250,7 @@ git commit -m "feat(benchmark): candidate models resolved and smoke-tested in Ol
 `benchmark/run_benchmark.py`:
 
 ```python
-"""Run every candidate model over every fixture x task via Ollama."""
+"""Run every candidate model over every fixture x task via Ollama's native chat API."""
 from __future__ import annotations
 
 import json
@@ -248,7 +260,7 @@ import time
 import requests
 
 BASE = pathlib.Path(__file__).parent
-DEFAULT_ENDPOINT = "http://localhost:11434/v1/chat/completions"
+DEFAULT_ENDPOINT = "http://localhost:11434/api/chat"
 TASKS = {
     "prompt_cleanup": (BASE / "prompts" / "prompt_cleanup.txt").read_text(),
     "message_rewrite": (BASE / "prompts" / "message_rewrite.txt").read_text(),
@@ -260,6 +272,8 @@ def load_jsonl(path: pathlib.Path) -> list[dict]:
 
 
 def run_one(endpoint: str, model_id: str, system: str, raw: str) -> dict:
+    """One refinement call. think=False keeps reasoning models from spending the
+    budget on a reasoning field — and keeps the measured latency representative."""
     t0 = time.monotonic()
     resp = requests.post(
         endpoint,
@@ -269,17 +283,18 @@ def run_one(endpoint: str, model_id: str, system: str, raw: str) -> dict:
                 {"role": "system", "content": system},
                 {"role": "user", "content": raw},
             ],
-            "temperature": 0.2,
-            "max_tokens": 1024,
+            "stream": False,
+            "think": False,
+            "options": {"temperature": 0.2, "num_predict": 512},
         },
         timeout=300,
     )
     resp.raise_for_status()
     data = resp.json()
     latency = time.monotonic() - t0
-    completion_tokens = data.get("usage", {}).get("completion_tokens", 0)
+    completion_tokens = data.get("eval_count", 0)
     return {
-        "output": data["choices"][0]["message"]["content"].strip(),
+        "output": data["message"]["content"].strip(),
         "latency_s": round(latency, 3),
         "completion_tokens": completion_tokens,
         "tokens_per_s": round(completion_tokens / latency, 2) if latency > 0 else 0.0,
@@ -316,7 +331,22 @@ if __name__ == "__main__":
 python3 -m venv benchmark/.venv && source benchmark/.venv/bin/activate && pip install -q requests
 python3 benchmark/run_benchmark.py
 ```
-Expected: n_servable_models × 15 fixtures × 2 tasks lines in `results.jsonl` — with all 5 servable that is **150 lines**. Compute the expected number from `models.json` (excluding `excluded` entries) and `fixtures.jsonl`, then assert it. STATE the compared population in the commit message; an empty or short file is a failure, not a pass. Ollama loads each model on first request and unloads it on its own — no explicit load/unload calls.
+Expected: n_servable_models × 15 fixtures × 2 tasks lines in `results.jsonl`. With s1-mini excluded (ruling R7) that is 4 × 15 × 2 = **120 lines**. Compute the expected number from `models.json` (excluding `excluded` entries) and `fixtures.jsonl`, then assert it:
+
+```bash
+python3 -c "
+import json
+models=[m for m in json.load(open('benchmark/models.json')) if not m.get('excluded')]
+fixtures=[l for l in open('benchmark/fixtures.jsonl') if l.strip()]
+rows=[json.loads(l) for l in open('benchmark/results.jsonl') if l.strip()]
+expected=len(models)*len(fixtures)*2
+print(f'{len(rows)} rows / {expected} expected ({len(models)} models x {len(fixtures)} fixtures x 2 tasks)')
+assert len(rows)==expected, 'population mismatch'
+empty=[(r['model'],r['fixture_id'],r['task']) for r in rows if not r['output'].strip()]
+print('empty outputs:', len(empty), empty[:5])
+"
+```
+STATE the compared population in the commit message; an empty or short file is a failure, not a pass. **Empty outputs are a red flag, not a result**: if any appear, report them and do not treat the run as complete — they mean the model spent its budget on reasoning despite `think:false`, and that model needs `num_predict` raised before its rows are usable. Ollama loads each model on first request and unloads it on its own — no explicit load/unload calls.
 
 ```bash
 wc -l benchmark/results.jsonl
