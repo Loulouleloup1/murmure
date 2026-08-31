@@ -117,8 +117,11 @@ applied after transcription, before the LLM.
 
 ## 6. UI
 
-Design fidelity: at implementation time, screenshot the installed Superwhisper app
-window-by-window and match layout/spacing/mood — recreate, never extract assets.
+Design fidelity: **[docs/design/ui-design-notes.md](../design/ui-design-notes.md)** is the reference —
+it distils Superwhisper's documented interface (74 screenshots, git-ignored under
+`docs/design/superwhisper-ui/`) into the design language Murmure targets, surface by surface.
+Recreate from those notes; never extract their assets. Capturing the locally installed app is
+currently blocked on a Screen Recording permission — see `docs/design/README.md`.
 
 ### Notch (primary surface, via DynamicNotchKit)
 
