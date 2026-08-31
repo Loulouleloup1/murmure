@@ -111,6 +111,46 @@ final class WavWriterTests: XCTestCase {
         XCTAssertEqual(offset, UInt64(dataChunkStart + 4))
     }
 
+    func testAnOddSizedChunkIsSkippedWithItsWordAlignmentPadByte() throws {
+        // RIFF chunks are word-aligned: an odd payload is followed by one pad byte that the
+        // size field does not count. Miss the pad and every later offset is one byte out.
+        // AVAudioFile never emits an odd chunk, so only this test guards the branch.
+        var wav = Data("RIFF".utf8) + Data([0, 0, 0, 0]) + Data("WAVE".utf8)
+        let odd = Data("odd".utf8) // 3 bytes -> one pad byte follows
+        wav += Data("FLLR".utf8)
+            + withUnsafeBytes(of: UInt32(odd.count).littleEndian) { Data($0) } + odd
+            + Data([0]) // the pad byte
+        let dataChunkStart = wav.count
+        wav += Data("data".utf8) + Data([0, 0, 0, 0])
+
+        let dir = try makeTemporaryDirectory()
+        let url = dir.appendingPathComponent("odd.wav")
+        try wav.write(to: url)
+        let handle = try FileHandle(forUpdating: url)
+        defer { try? handle.close() }
+
+        XCTAssertEqual(
+            try WavWriter.locateDataChunkSizeOffset(handle: handle),
+            UInt64(dataChunkStart + 4)
+        )
+    }
+
+    func testATruncatedFileThrowsRatherThanSpinningOrReadingPastTheEnd() throws {
+        // A chunk whose declared size overruns EOF must fail loudly: the walk reads a header
+        // at an offset past the end and gets fewer than 8 bytes back.
+        var wav = Data("RIFF".utf8) + Data([0, 0, 0, 0]) + Data("WAVE".utf8)
+        wav += Data("FLLR".utf8)
+            + withUnsafeBytes(of: UInt32(9_999).littleEndian) { Data($0) } + Data("short".utf8)
+
+        let dir = try makeTemporaryDirectory()
+        let url = dir.appendingPathComponent("truncated.wav")
+        try wav.write(to: url)
+        let handle = try FileHandle(forUpdating: url)
+        defer { try? handle.close() }
+
+        XCTAssertThrowsError(try WavWriter.locateDataChunkSizeOffset(handle: handle))
+    }
+
     func testTwoSecondsOfSilenceProduceAReadableTwoSecondWav() throws {
         let dir = try makeTemporaryDirectory()
         let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!

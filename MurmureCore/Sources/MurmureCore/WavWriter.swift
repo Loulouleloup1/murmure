@@ -7,8 +7,9 @@ import Foundation
 /// underlying file is closed -- a file read back while the writer is still open (or after
 /// a crash) reports zero frames even though the PCM samples are already on disk. To honour
 /// "a crash never loses audio" (spec §4) the two 4-byte size fields are patched after every
-/// append, so the file is a valid, readable WAV after every append. Between `write(from:)`
-/// and the patch the header lags the samples by one buffer.
+/// append, so the file is a valid, readable WAV once `append(_:)` returns. The patch runs
+/// synchronously inside `append(_:)`, so the only window where the header lags the samples is
+/// inside that call, never after it.
 ///
 /// The patched bytes are not `fsync`ed: they survive a crash of this process (they are in the
 /// page cache and immediately visible to any reader, including after the process dies) but not
