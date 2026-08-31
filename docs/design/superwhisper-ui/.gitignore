@@ -1,0 +1,7 @@
+# Superwhisper's own documentation screenshots, downloaded as study material only.
+# They are NOT project assets and must never ship in Murmure — the UI is recreated
+# from scratch. Re-fetch with the loop in docs/design/README.md if needed.
+*.png
+*.jpg
+*.jpeg
+*.webp
