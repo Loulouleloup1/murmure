@@ -33,13 +33,19 @@ final class AppState: ObservableObject {
     /// TEMPORARY (ruling L1): flips the menu-bar icon so a press is visible without a pipeline.
     /// Removed with `hotkeys` in Task 7.
     private func registerTemporaryHotkey() {
-        hotkeys.register(.defaultToggle) { [weak self] in
-            // Carbon calls back on the main thread, but hop explicitly rather than assume it:
-            // a wrong assumption here would be a crash on a keypress.
+        let registered = hotkeys.register(.defaultToggle) { [weak self] in
+            // `HotkeyManager` already asserts the main actor at the Carbon boundary, but
+            // `onPress` is not typed `@MainActor`, so hop rather than assume it a second time.
             Task { @MainActor in
                 guard let self else { return }
                 self.status = self.status == .idle ? .recording : .idle
             }
+        }
+        // The result is consumed, not discarded (ruling L7): a hotkey that failed to register is
+        // a key that does nothing forever, and the menu-bar icon is the only surface lot 1 has to
+        // say so. Task 7 owns the real reporting when it takes the registration over.
+        if !registered {
+            status = .failed
         }
     }
 }
