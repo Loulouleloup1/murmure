@@ -202,30 +202,37 @@ manual "clear history" button only.
 
 ## 10. LLM refinement benchmark (first executable lot)
 
-Data-driven selection of the default refinement model. Candidates (verified on HF 2026-08-31):
+Data-driven selection of the default refinement model. Candidates as actually resolved and served
+(Ollama, 2026-08-31 — 26 GB pulled, zero download failures):
 
-| Model | Size | Notes |
-|---|---|---|
-| `superwhisper/s1-mini` | 0.75B | Superwhisper's own open-sourced dictation post-processor (Qwen3 base); no GGUF — needs MLX/GGUF conversion |
-| `ornith-ai/Ornith-1.5-9B-GGUF` | 9B | GGUF ready (Q4_K_M), MIT |
-| `google/gemma-4-12b-qat` | 12B | Gated — accept licence with Louis's HF account (or Ollama library equivalent) |
-| `Qwen/Qwen3.5-9B` | 9.6B | Apache 2.0 |
-| `ibm-granite/granite-4.2-8b` | 8.8B | FR supported |
+| Model | Ollama ref | On disk | Status |
+|---|---|---|---|
+| s1-mini | `hf.co/superwhisper/s1-mini-GGUF:Q4_K_M` | 0.48 GB | **excluded** — English-only in v1 and not a chat model (steered by a control line); the fixtures and Louis's dictation are French |
+| ornith-9b | `hf.co/ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M` | 6.7 GB | benchmarked |
+| gemma4-12b-qat | `gemma4:12b-it-qat` | 7.2 GB | benchmarked — the ungated Ollama tag replaces the gated `google/gemma-4-12b-qat` repo |
+| qwen3.5-9b | `qwen3.5:9b` | 6.6 GB | benchmarked |
+| granite4.2-8b | `granite4.2:8b` | 5.3 GB | benchmarked |
 
-Rejected from Louis's original list: `incoai/GLM-5.3-Flash-DFlash2` and `z-lab/Qwen3.8-27B-DFlash2`
-are speculative-decoding **draft models** (unusable standalone; bases are 321B and 27.8B —
-the latter too tight for 24 GB co-residency with Whisper + macOS).
+Two candidates from the original shortlist were dropped before serving: `incoai/GLM-5.3-Flash-DFlash2`
+and `z-lab/Qwen3.8-27B-DFlash2` are speculative-decoding **draft** models, unusable standalone.
+
+All four benchmarked models are reasoning models, so generation goes through Ollama's **native**
+`POST /api/chat` with `"think": false` — the OpenAI-compatible endpoint cannot disable reasoning, and
+with it enabled they spend the whole token budget on a reasoning field and return empty content.
+Measured latency with reasoning off is ~2-7 s per refinement, which is the latency Louis would
+actually feel; measuring them with reasoning on would describe a tool nobody would use for dictation.
 
 Protocol (validated):
-1. ~15 raw-transcript fixtures: 5 dictated for real by Louis (Superwhisper Voice mode) +
-   10 synthetic calibrated on his usage (hesitations, false starts, FR/EN code-switching);
+1. 15 raw-transcript fixtures, all synthetic and calibrated on Louis's usage (hesitations, false
+   starts, FR/EN code-switching, Slack/email register). Real dictations were planned but the
+   Superwhisper install on this machine has no history to mine; the runner is resume-safe, so
+   adding real fixtures later regenerates only the new rows.
    2 tasks per fixture: *Prompt* cleanup and *Message* rewrite.
 2. Blind scoring: outputs anonymised and shuffled; cold judge (Opus-tier subagent) with a rubric
    frozen before seeing any output — semantic fidelity / disfluencies removed / technical terms
    preserved verbatim / format respected; Louis adjudicates the top 2.
-3. Machine metrics measured on the M4 Pro: end-to-end latency, tokens/s, peak RAM, disk size.
-~35 GB of downloads total. Winner becomes the default in built-in modes; every mode keeps a
-free-text model field regardless.
+3. Machine metrics measured on the M4 Pro: end-to-end latency, tokens/s, disk size.
+Winner becomes the default in built-in modes; every mode keeps a free-text model field regardless.
 
 ## 11. Testing strategy
 
