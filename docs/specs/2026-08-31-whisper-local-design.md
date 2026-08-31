@@ -118,10 +118,16 @@ applied after transcription, before the LLM.
 ## 6. UI
 
 Design fidelity: **[docs/design/ui-design-notes.md](../design/ui-design-notes.md)** is the reference —
-it distils Superwhisper's documented interface (74 screenshots, git-ignored under
-`docs/design/superwhisper-ui/`) into the design language Murmure targets, surface by surface.
-Recreate from those notes; never extract their assets. Capturing the locally installed app is
-currently blocked on a Screen Recording permission — see `docs/design/README.md`.
+it distils Superwhisper's interface into the design language Murmure targets, surface by surface,
+from two git-ignored capture sets: `docs/design/superwhisper-ui/` (74 screenshots of the documented
+interface) and `docs/design/superwhisper-local/` (20 screenshots of the app **as actually installed
+on this machine**, including the Home dashboard and the Models library, which the documentation does
+not show). Recreate from those notes; never extract their assets.
+
+The locally-installed capture is **done** — this section previously said it was blocked on a Screen
+Recording permission, which stopped being true once the captures were taken. History is documented
+**layout-only**: `section-history.png` shows Louis's real dictated text, so its content is never
+transcribed, quoted or paraphrased anywhere.
 
 ### Notch (primary surface, via DynamicNotchKit)
 
