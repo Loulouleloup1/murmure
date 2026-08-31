@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 Status: validated section-by-section with Louis during brainstorming; written for implementation planning.
-Working name: **Murmure** (placeholder — rename freely before the Xcode project is created).
+Name: **Murmure** (confirmed 2026-08-31).
 
 ## 1. Purpose
 
@@ -36,8 +36,9 @@ Out of scope (decided):
 
 - macOS (Apple Silicon), MacBook Pro M4 Pro, 24 GB unified RAM.
 - Native **Swift / SwiftUI** app, menu-bar only (LSUIElement, no Dock icon).
-- STT: **WhisperKit** (argmax, MIT) running Whisper **large-v3-turbo** by default,
-  **large-v3** offered as a max-quality option. User explicitly prefers quality over latency.
+- STT: **WhisperKit** (argmax, MIT). Defaults decided 2026-08-31: **large-v3-turbo** for live
+  dictation, **large-v3** for file/YouTube transcription (§8); both downloadable and selectable
+  per mode.
 - LLM refinement: HTTP client to any **OpenAI-compatible local endpoint** — Ollama
   (`localhost:11434/v1`) and LM Studio (`localhost:1234/v1`) both already installed.
 - Notch UI: **DynamicNotchKit** (MIT, active) as the base library.
@@ -171,7 +172,7 @@ manual "clear history" button only.
   progress; result lands in History; export .txt/.md.
 - YouTube: paste a URL in the same sheet → `yt-dlp -x` downloads audio → same pipeline.
   If yt-dlp is missing, show the brew install command (copyable), never bundle it.
-- Recommended model here: large-v3 (quality; latency irrelevant).
+- Default model here: **large-v3** (quality; latency irrelevant) — decided 2026-08-31.
 
 ## 9. Error handling (defined behaviours, not afterthoughts)
 
@@ -222,7 +223,6 @@ free-text model field regardless.
 
 ## 12. Open items
 
-- App name (Murmure is a placeholder).
 - Benchmark winner → default model of Prompt/Message/Email modes.
 - Superwhisper UI screenshot pass happens at implementation start (app is installed).
 - DynamicNotchKit API fit — if it can't express the waveform-wings layout, fall back to a
