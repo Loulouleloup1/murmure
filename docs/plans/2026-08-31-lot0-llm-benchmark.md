@@ -197,11 +197,12 @@ The five `name` values are: `s1-mini`, `ornith-9b`, `gemma4-12b-qat`, `qwen3.5-9
 For each `name<TAB>ref` line in `pulled.tsv`:
 
 ```bash
-curl -s http://localhost:11434/v1/chat/completions -H 'Content-Type: application/json' \
-  -d '{"model": "<ref>", "messages": [{"role": "user", "content": "Réponds uniquement: ok"}], "max_tokens": 20}' \
-  | python3 -m json.tool
+curl -s --max-time 120 http://localhost:11434/api/chat -H 'Content-Type: application/json' \
+  -d '{"model": "<ref>", "stream": false, "think": false,
+       "messages": [{"role": "user", "content": "Réponds uniquement: ok"}],
+       "options": {"num_predict": 512}}' | python3 -m json.tool
 ```
-Expected: HTTP 200 with a `choices[0].message.content` containing "ok"-ish text. A model that returns an error, empty content, or times out after 120 s counts as NOT servable.
+Expected: HTTP 200 with a non-empty `message.content` and `thinking: null`. A model that returns an error, empty content, or times out after 120 s counts as NOT servable. **Use the native `/api/chat`, not `/v1/chat/completions`** (ruling R6): every candidate is a reasoning model, and only the native API accepts `"think": false` — on the compat endpoint they burn the whole budget on a reasoning field and return empty content, which reads as a dead model when it is not one. Keep `num_predict` generous for the same reason.
 
 - [ ] **Step 3: Retry any failed candidate once, then record it honestly**
 
