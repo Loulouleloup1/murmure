@@ -1,0 +1,33 @@
+[
+  {
+    "name": "s1-mini",
+    "model_id": "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M",
+    "endpoint": "http://localhost:11434/v1/chat/completions",
+    "size_gb": 0.48,
+    "excluded": "empty choices[0].message.content on every generic /v1/chat/completions prompt tried (French instruction, English instruction, and its own HF widget example \"Hi, what can you help me with?\"), even at max_tokens up to 1000; the model card shows it is an English-only ASR post-processing/dictation-cleanup model (text-normalization, punctuation, truecasing), not a general chat model, and does not answer through this endpoint's generic chat format"
+  },
+  {
+    "name": "ornith-9b",
+    "model_id": "hf.co/ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M",
+    "endpoint": "http://localhost:11434/v1/chat/completions",
+    "size_gb": 6.7
+  },
+  {
+    "name": "gemma4-12b-qat",
+    "model_id": "gemma4:12b-it-qat",
+    "endpoint": "http://localhost:11434/v1/chat/completions",
+    "size_gb": 7.2
+  },
+  {
+    "name": "qwen3.5-9b",
+    "model_id": "qwen3.5:9b",
+    "endpoint": "http://localhost:11434/v1/chat/completions",
+    "size_gb": 6.6
+  },
+  {
+    "name": "granite4.2-8b",
+    "model_id": "granite4.2:8b",
+    "endpoint": "http://localhost:11434/v1/chat/completions",
+    "size_gb": 5.3
+  }
+]

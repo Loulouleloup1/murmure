@@ -1,2 +1,5 @@
 s1-mini	hf.co/superwhisper/s1-mini-GGUF:Q4_K_M
 ornith-9b	hf.co/ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M
+gemma4-12b-qat	gemma4:12b-it-qat
+qwen3.5-9b	qwen3.5:9b
+granite4.2-8b	granite4.2:8b
