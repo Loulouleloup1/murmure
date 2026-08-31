@@ -1,0 +1,182 @@
+{
+  "prompt_cleanup/f01": {
+    "A": "qwen3.5-9b",
+    "B": "granite4.2-8b",
+    "C": "ornith-9b",
+    "D": "gemma4-12b-qat"
+  },
+  "prompt_cleanup/f02": {
+    "A": "gemma4-12b-qat",
+    "B": "ornith-9b",
+    "C": "qwen3.5-9b",
+    "D": "granite4.2-8b"
+  },
+  "prompt_cleanup/f03": {
+    "A": "ornith-9b",
+    "B": "gemma4-12b-qat",
+    "C": "qwen3.5-9b",
+    "D": "granite4.2-8b"
+  },
+  "prompt_cleanup/f04": {
+    "A": "granite4.2-8b",
+    "B": "qwen3.5-9b",
+    "C": "gemma4-12b-qat",
+    "D": "ornith-9b"
+  },
+  "prompt_cleanup/f05": {
+    "A": "ornith-9b",
+    "B": "qwen3.5-9b",
+    "C": "granite4.2-8b",
+    "D": "gemma4-12b-qat"
+  },
+  "prompt_cleanup/f06": {
+    "A": "ornith-9b",
+    "B": "qwen3.5-9b",
+    "C": "granite4.2-8b",
+    "D": "gemma4-12b-qat"
+  },
+  "prompt_cleanup/f07": {
+    "A": "gemma4-12b-qat",
+    "B": "qwen3.5-9b",
+    "C": "granite4.2-8b",
+    "D": "ornith-9b"
+  },
+  "prompt_cleanup/f08": {
+    "A": "granite4.2-8b",
+    "B": "qwen3.5-9b",
+    "C": "ornith-9b",
+    "D": "gemma4-12b-qat"
+  },
+  "prompt_cleanup/f09": {
+    "A": "granite4.2-8b",
+    "B": "gemma4-12b-qat",
+    "C": "ornith-9b",
+    "D": "qwen3.5-9b"
+  },
+  "prompt_cleanup/f10": {
+    "A": "gemma4-12b-qat",
+    "B": "ornith-9b",
+    "C": "qwen3.5-9b",
+    "D": "granite4.2-8b"
+  },
+  "prompt_cleanup/f11": {
+    "A": "ornith-9b",
+    "B": "granite4.2-8b",
+    "C": "gemma4-12b-qat",
+    "D": "qwen3.5-9b"
+  },
+  "prompt_cleanup/f12": {
+    "A": "gemma4-12b-qat",
+    "B": "ornith-9b",
+    "C": "qwen3.5-9b",
+    "D": "granite4.2-8b"
+  },
+  "prompt_cleanup/f13": {
+    "A": "ornith-9b",
+    "B": "qwen3.5-9b",
+    "C": "gemma4-12b-qat",
+    "D": "granite4.2-8b"
+  },
+  "prompt_cleanup/f14": {
+    "A": "granite4.2-8b",
+    "B": "gemma4-12b-qat",
+    "C": "ornith-9b",
+    "D": "qwen3.5-9b"
+  },
+  "prompt_cleanup/f15": {
+    "A": "gemma4-12b-qat",
+    "B": "granite4.2-8b",
+    "C": "ornith-9b",
+    "D": "qwen3.5-9b"
+  },
+  "message_rewrite/f01": {
+    "A": "ornith-9b",
+    "B": "granite4.2-8b",
+    "C": "gemma4-12b-qat",
+    "D": "qwen3.5-9b"
+  },
+  "message_rewrite/f02": {
+    "A": "qwen3.5-9b",
+    "B": "gemma4-12b-qat",
+    "C": "granite4.2-8b",
+    "D": "ornith-9b"
+  },
+  "message_rewrite/f03": {
+    "A": "gemma4-12b-qat",
+    "B": "ornith-9b",
+    "C": "qwen3.5-9b",
+    "D": "granite4.2-8b"
+  },
+  "message_rewrite/f04": {
+    "A": "gemma4-12b-qat",
+    "B": "granite4.2-8b",
+    "C": "qwen3.5-9b",
+    "D": "ornith-9b"
+  },
+  "message_rewrite/f05": {
+    "A": "qwen3.5-9b",
+    "B": "ornith-9b",
+    "C": "granite4.2-8b",
+    "D": "gemma4-12b-qat"
+  },
+  "message_rewrite/f06": {
+    "A": "ornith-9b",
+    "B": "gemma4-12b-qat",
+    "C": "granite4.2-8b",
+    "D": "qwen3.5-9b"
+  },
+  "message_rewrite/f07": {
+    "A": "ornith-9b",
+    "B": "qwen3.5-9b",
+    "C": "granite4.2-8b",
+    "D": "gemma4-12b-qat"
+  },
+  "message_rewrite/f08": {
+    "A": "qwen3.5-9b",
+    "B": "granite4.2-8b",
+    "C": "gemma4-12b-qat",
+    "D": "ornith-9b"
+  },
+  "message_rewrite/f09": {
+    "A": "gemma4-12b-qat",
+    "B": "ornith-9b",
+    "C": "qwen3.5-9b",
+    "D": "granite4.2-8b"
+  },
+  "message_rewrite/f10": {
+    "A": "granite4.2-8b",
+    "B": "ornith-9b",
+    "C": "qwen3.5-9b",
+    "D": "gemma4-12b-qat"
+  },
+  "message_rewrite/f11": {
+    "A": "qwen3.5-9b",
+    "B": "granite4.2-8b",
+    "C": "gemma4-12b-qat",
+    "D": "ornith-9b"
+  },
+  "message_rewrite/f12": {
+    "A": "gemma4-12b-qat",
+    "B": "qwen3.5-9b",
+    "C": "granite4.2-8b",
+    "D": "ornith-9b"
+  },
+  "message_rewrite/f13": {
+    "A": "ornith-9b",
+    "B": "qwen3.5-9b",
+    "C": "gemma4-12b-qat",
+    "D": "granite4.2-8b"
+  },
+  "message_rewrite/f14": {
+    "A": "granite4.2-8b",
+    "B": "gemma4-12b-qat",
+    "C": "ornith-9b",
+    "D": "qwen3.5-9b"
+  },
+  "message_rewrite/f15": {
+    "A": "qwen3.5-9b",
+    "B": "granite4.2-8b",
+    "C": "gemma4-12b-qat",
+    "D": "ornith-9b"
+  }
+}
