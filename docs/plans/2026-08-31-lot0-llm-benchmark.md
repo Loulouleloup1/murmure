@@ -209,7 +209,7 @@ For every candidate in `failed.tsv`, or that failed the Step 2 smoke test, try O
 
 - [ ] **Step 4: Write models.json**
 
-Fill `benchmark/models.json` with one object per candidate (all five present, excluded ones included), `size_gb` read from `ollama list`, `endpoint` set to `http://localhost:11434/v1/chat/completions` for every servable model.
+Fill `benchmark/models.json` with one object per candidate (all five present, excluded ones included), `size_gb` read from `ollama list`, `endpoint` set to `http://localhost:11434/api/chat` for every servable model (ruling R6 — the native chat API, see the amendment note above).
 
 - [ ] **Step 5: Verify the file parses and covers all five**
 
@@ -537,15 +537,16 @@ def main() -> None:
         perf[r["model"]].setdefault("latencies", []).append(r["latency_s"])
         perf[r["model"]].setdefault("tps", []).append(r["tokens_per_s"])
 
-    ram = {m["name"]: m.get("ram_gb") for m in json.loads((BASE / "models.json").read_text())}
+    # models.json ships `size_gb` (on-disk size from `ollama list`) — NOT `ram_gb`.
+    size = {m["name"]: m.get("size_gb") for m in json.loads((BASE / "models.json").read_text())}
 
-    print(f"{'model':<14} {'n':>4} {'min':>4} {'med':>4} {'max':>4} {'autofail':>8} {'med_lat_s':>9} {'med_tps':>8} {'ram_gb':>6}")
+    print(f"{'model':<14} {'n':>4} {'min':>4} {'med':>4} {'max':>4} {'autofail':>8} {'med_lat_s':>9} {'med_tps':>8} {'size_gb':>7}")
     for model in sorted(totals, key=lambda m: -statistics.median(totals[m])):
         t = totals[model]
         lat = statistics.median(perf[model]["latencies"]) if model in perf else float("nan")
         tps = statistics.median(perf[model]["tps"]) if model in perf else float("nan")
         print(f"{model:<14} {len(t):>4} {min(t):>4} {statistics.median(t):>4} {max(t):>4} "
-              f"{autofails[model]:>8} {lat:>9.2f} {tps:>8.1f} {ram.get(model) or 0:>6.1f}")
+              f"{autofails[model]:>8} {lat:>9.2f} {tps:>8.1f} {size.get(model) or 0:>7.1f}")
         for c in CRITERIA:
             vals = per_criterion[model][c]
             if vals:
