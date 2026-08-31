@@ -1,5 +1,11 @@
 import MurmureCore
 import SwiftUI
+import os
+
+/// Murmure is `LSUIElement: true`, so a normal launch from the Finder has no attached console
+/// and `print` goes nowhere anybody will ever read. Anything permanent logs here instead, where
+/// `log stream --predicate 'subsystem == "com.louiscourcier.Murmure"'` and Console.app can see it.
+private let logger = Logger(subsystem: "com.louiscourcier.Murmure", category: "app")
 
 @main
 struct MurmureApp: App {
@@ -9,11 +15,16 @@ struct MurmureApp: App {
     /// `--debug-transcribe <path>` runs the same code as the menu item without a click, so the
     /// gate can be run against the shipped binary from a terminal instead of driving the UI.
     init() {
-        // Spec §9: Accessibility is detected at launch, not at the first failed paste. The
-        // result is consumed rather than discarded -- a denied permission means every future
-        // insertion does nothing at all, so it has to be said out loud somewhere.
+        // Spec §9's FIRST half: Accessibility is detected at launch, not at the first failed
+        // paste, and the result is consumed rather than discarded -- a denied permission means
+        // every future insertion does nothing at all.
+        //
+        // Spec §9's SECOND half is NOT done: it asks for a banner with a deep link to System
+        // Settings, and this is a log line. A log line is invisible to Louis in a menu-bar app.
+        // The banner belongs to the UI lot that owns Murmure's windows; until it exists, treat
+        // this box as UNTICKED -- the denial is diagnosable, not surfaced.
         if !PasteInserter.requestAccessibilityIfNeeded() {
-            print("murmure: Accessibility permission not granted -- text insertion will fail")
+            logger.error("Accessibility permission not granted -- text insertion will do nothing")
         }
         guard let index = CommandLine.arguments.firstIndex(of: "--debug-transcribe"),
               index + 1 < CommandLine.arguments.count else { return }
@@ -64,8 +75,11 @@ struct MurmureApp: App {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(seconds))
             print("debug: clipboard before: [\(NSPasteboard.general.string(forType: .string) ?? "nil")]")
+            let inserter = PasteInserter { outcome in
+                print("debug: clipboard outcome: \(outcome)")
+            }
             do {
-                try await PasteInserter().insert(text)
+                try await inserter.insert(text)
                 print("debug: inserted [\(text)]")
             } catch {
                 print("debug: insert failed: \(error.localizedDescription)")

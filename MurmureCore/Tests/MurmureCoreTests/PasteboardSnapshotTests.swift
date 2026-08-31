@@ -158,4 +158,52 @@ final class PasteboardSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.restore(to: pasteboard), .restored)
         XCTAssertEqual(pasteboard.string(forType: .string), "readable", "readable types still come back")
     }
+
+    /// The case the eager `.string` in the test above was hiding: an item whose ONLY types are
+    /// promises nobody fulfils. There is nothing to rebuild it from, so it is destroyed by the
+    /// dictation -- and the outcome has to say that, not `.restored`.
+    func testItemWhoseOnlyTypesArePromisesIsReportedLostRatherThanRestored() {
+        let pasteboard = makePasteboard()
+        let provider = SilentProvider()
+        let item = NSPasteboardItem()
+        item.setDataProvider(provider, forTypes: [.rtf])
+        XCTAssertTrue(pasteboard.writeObjects([item]))
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, 1, "fixture holds one item")
+
+        let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+        XCTAssertTrue(snapshot.droppedTypes.contains(.rtf), "got \(snapshot.droppedTypes)")
+
+        pasteboard.clearContents()
+        pasteboard.setString("dictated text", forType: .string)
+
+        XCTAssertEqual(
+            snapshot.restore(to: pasteboard),
+            .restoredPartially(lostItems: 1, capturedItems: 1),
+            "the whole clipboard was lost -- reporting .restored would be a false success"
+        )
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, 0, "the item really is gone")
+        XCTAssertNil(pasteboard.data(forType: .rtf))
+    }
+
+    /// The partial case: one item survives, one cannot. The survivor must come back AND the loss
+    /// must be counted -- "some of it" is neither a success nor a total failure.
+    func testItemsThatCannotBeRebuiltAreCountedWhileTheRestComeBack() {
+        let pasteboard = makePasteboard()
+        let survivor = NSPasteboardItem()
+        survivor.setString("keep me", forType: .string)
+        let doomed = NSPasteboardItem()
+        doomed.setDataProvider(SilentProvider(), forTypes: [.rtf])
+        XCTAssertTrue(pasteboard.writeObjects([survivor, doomed]))
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, 2, "fixture holds two items")
+
+        let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+        pasteboard.clearContents()
+        pasteboard.setString("dictated text", forType: .string)
+
+        XCTAssertEqual(
+            snapshot.restore(to: pasteboard), .restoredPartially(lostItems: 1, capturedItems: 2)
+        )
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, 1)
+        XCTAssertEqual(pasteboard.string(forType: .string), "keep me")
+    }
 }
