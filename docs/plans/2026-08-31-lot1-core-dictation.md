@@ -20,7 +20,8 @@
 - Storage root: `~/Library/Application Support/Murmure/` (`recordings/`, `models/`).
 - English for all code, comments, commits; French only in user-facing UI strings later.
 - Every task ends with a commit. Unit tests via `swift test` in `MurmureCore/`; app builds via `xcodebuild`.
-- WhisperKit API surface must be verified against the PINNED version's README before use (source-driven; the code below matches the documented public API but names may have drifted).
+- WhisperKit API surface must be verified against the PINNED version's README before use (source-driven). **The pin is `from: "1.1.0"`** — verified on the repo 2026-08-31; the plan was first drafted against 0.9, so the code blocks below may not match 1.x's public API. Task 5 Step 1 is the gate that reconciles them.
+- Verified toolchain on this machine (2026-08-31): Xcode 26.6, Swift 6.3.3, XcodeGen 2.46.0. `swift-tools-version:5.10` keeps the package in Swift 5 language mode — do NOT bump it to 6.0 in this lot, the plan's concurrency annotations are written for Swift 5 mode.
 - Manual verification steps are real gates: a task with a manual step is NOT done until its observed behaviour is reported (spec §11 — unit tests alone never close a feature).
 
 ---
@@ -72,7 +73,7 @@ packages:
     path: MurmureCore
   WhisperKit:
     url: https://github.com/argmaxinc/WhisperKit
-    from: "0.9.0"
+    from: "1.1.0"
 targets:
   Murmure:
     type: application
