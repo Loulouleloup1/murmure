@@ -9,6 +9,12 @@ struct MurmureApp: App {
     /// `--debug-transcribe <path>` runs the same code as the menu item without a click, so the
     /// gate can be run against the shipped binary from a terminal instead of driving the UI.
     init() {
+        // Spec §9: Accessibility is detected at launch, not at the first failed paste. The
+        // result is consumed rather than discarded -- a denied permission means every future
+        // insertion does nothing at all, so it has to be said out loud somewhere.
+        if !PasteInserter.requestAccessibilityIfNeeded() {
+            print("murmure: Accessibility permission not granted -- text insertion will fail")
+        }
         guard let index = CommandLine.arguments.firstIndex(of: "--debug-transcribe"),
               index + 1 < CommandLine.arguments.count else { return }
         let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
@@ -25,6 +31,9 @@ struct MurmureApp: App {
             Button("Debug: record 3 s") { Self.debugRecord(seconds: 3) }
             // Temporary scaffolding for the Task 5 manual gate; removed in Task 7.
             Button("Debug: transcribe last recording") { Self.debugTranscribeLastRecording() }
+            // Temporary scaffolding for the Task 6 manual gate; removed in Task 7. The delay is
+            // there so the click can be followed by clicking into the target app.
+            Button("Debug: insert in 3 s") { Self.debugInsertAfterDelay(seconds: 3) }
             Divider()
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
@@ -47,6 +56,21 @@ struct MurmureApp: App {
             }
             print("debug: recorded: \(url.path)")
             NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+    }
+
+    private static func debugInsertAfterDelay(seconds: Double) {
+        let text = "murmure round-trip \(Int.random(in: 100...999))"
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(seconds))
+            print("debug: clipboard before: [\(NSPasteboard.general.string(forType: .string) ?? "nil")]")
+            do {
+                try await PasteInserter().insert(text)
+                print("debug: inserted [\(text)]")
+            } catch {
+                print("debug: insert failed: \(error.localizedDescription)")
+            }
+            print("debug: clipboard after: [\(NSPasteboard.general.string(forType: .string) ?? "nil")]")
         }
     }
 
