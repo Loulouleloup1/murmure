@@ -82,6 +82,12 @@ actor WhisperKitEngine {
     /// -- that no check on its *output* can be trusted; the fabricated text would be pasted into
     /// whatever Louis is typing into. The empty-text normalisation below is kept as well: it
     /// still covers the runs where a recording with speech in it decodes to nothing.
+    ///
+    /// A recording that DOES hold speech has its long silences cut out before the model sees
+    /// them, for the same reason: the accept/reject verdict is a whole-file decision, and 660 s
+    /// of silence followed by 3.1 s of speech passes it while making the model fabricate a
+    /// `"Thank you."` for each of the 22 silent windows in between. See
+    /// `SpeechGate.framesWorthDecoding`.
     func transcribe(wav: URL) async throws -> String {
         let samples: [Float]
         do {
@@ -94,7 +100,12 @@ actor WhisperKitEngine {
             throw Failure.transcriptionFailed(error)
         }
 
-        if case .silence(let reason) = SpeechGate.verdict(for: samples) {
+        let voiced = Self.voicedFrames(in: samples)
+
+        if case .silence(let reason) = SpeechGate.verdict(
+            voicedSeconds: Double(voiced.filter { $0 }.count) * Double(SpeechGate.frameLength),
+            totalSeconds: Double(samples.count) / Double(WhisperKit.sampleRate)
+        ) {
             // Deliberately not an error: an empty recording is "you said nothing", which the
             // pipeline already handles as a no-op. No banner, no paste, nothing to dismiss.
             logger.info("""
@@ -104,11 +115,20 @@ actor WhisperKitEngine {
             return ""
         }
 
+        let audio = Self.audioWorthDecoding(samples: samples, voiced: voiced)
+        if audio.count < samples.count {
+            let removed = Double(samples.count - audio.count) / Double(WhisperKit.sampleRate)
+            logger.info("""
+                skipped \(removed, format: .fixed(precision: 1), privacy: .public)s of silence in \
+                \(wav.lastPathComponent, privacy: .public)
+                """)
+        }
+
         let model = try await loadedKit()
 
         let results: [TranscriptionResult]
         do {
-            results = try await model.transcribe(path: wav.path, options: Self.decodeOptions)
+            results = try await model.transcribe(audio: audio, options: Self.decodeOptions)
         } catch {
             logger.error("transcription failed: \(error.localizedDescription, privacy: .public)")
             throw Failure.transcriptionFailed(error)
@@ -124,17 +144,52 @@ actor WhisperKitEngine {
         return text
     }
 
+    /// Which 100 ms frames of the recording carry sound, as `SpeechGate`'s thresholds were
+    /// calibrated to measure it.
+    ///
+    /// The measurement lives here and the decisions live in `MurmureCore`: `EnergyVAD` is a
+    /// WhisperKit type and the app target is the only one that links WhisperKit, while the
+    /// thresholds need nothing but numbers and so can have regression tests. Those thresholds
+    /// are what stands between a fabricated sentence and whatever Louis is typing into, and
+    /// until that split they had none.
+    ///
+    /// The frame length is part of the calibrated rule rather than a local choice: `EnergyVAD`
+    /// counts a frame as voiced when its RMS is above the threshold, so voiced time is a frame
+    /// count times this length, and measuring at another resolution measures something else.
+    private static func voicedFrames(in samples: [Float]) -> [Bool] {
+        EnergyVAD(
+            sampleRate: WhisperKit.sampleRate,
+            frameLength: SpeechGate.frameLength,
+            energyThreshold: SpeechGate.energyThreshold
+        ).voiceActivity(in: samples)
+    }
+
+    /// The recording with long silences cut out, ready for the model.
+    ///
+    /// `SpeechGate.framesWorthDecoding` decides which frames survive and why; this only maps its
+    /// frame ranges back onto samples, using `EnergyVAD`'s own frame-length arithmetic
+    /// (`Int(frameLength * sampleRate)`, `EnergyVAD.swift:24`) so the two cannot drift apart.
+    /// The final frame of a recording is short when the length does not divide evenly, hence the
+    /// clamp to the sample count.
+    private static func audioWorthDecoding(samples: [Float], voiced: [Bool]) -> [Float] {
+        let frameSamples = Int(SpeechGate.frameLength * Float(WhisperKit.sampleRate))
+        return SpeechGate.framesWorthDecoding(voiced: voiced).flatMap { frames -> ArraySlice<Float> in
+            let start = min(frames.lowerBound * frameSamples, samples.count)
+            let end = min(frames.upperBound * frameSamples, samples.count)
+            return samples[start..<end]
+        }
+    }
+
     /// The recording as the model will hear it: 16 kHz mono float samples.
     ///
-    /// This is WhisperKit's own loader, the same one `transcribe(audioPath:)` calls, so the gate
-    /// measures exactly the signal the model would be given rather than an approximation of it.
-    /// It is a second decode of the same file -- measured at a few milliseconds for a dictation
-    /// of a few seconds, against the ~1.6 s the transcription itself takes -- and the alternative
-    /// (`transcribe(audioArray:)`) would move the whole pipeline onto a different WhisperKit
-    /// entry point than the one Task 5 verified.
+    /// This is the loader `transcribe(audioPath:)` uses itself (`WhisperKit.swift:933`), and the
+    /// audio-path entry point does nothing afterwards but hand the array to
+    /// `transcribe(audioArray:)` (`:941`). So calling that entry point directly is a
+    /// silence-removal change and nothing else -- verified on 21 real files, which come back
+    /// byte-identical. It also decodes the file once instead of twice, which the previous round
+    /// paid for.
     private static func samples(of wav: URL) throws -> [Float] {
-        let buffer = try AudioProcessor.loadAudio(fromPath: wav.path)
-        return AudioProcessor.convertBufferToArray(buffer: buffer)
+        try AudioProcessor.loadAudioAsFloatArray(fromPath: wav.path)
     }
 
     /// The loaded model, loading it exactly once.
@@ -321,75 +376,6 @@ actor WhisperKitEngine {
     }
 }
 
-/// Decides whether a recording is worth transcribing at all.
-///
-/// This exists because Whisper fabricates text on near-silence, non-deterministically: the same
-/// 3.1 s of room tone returned `¿Qué es lo que se llama?`, then nothing, then `¿Qué es la vida?`
-/// across three runs of identical options. Nothing about the model's *output* distinguishes those
-/// from a real dictation, so the only safe place to act is before it runs. Superwhisper -- the app
-/// this clones -- ships `vad-v1.onnx`/`vad-v2.onnx` for the same reason; an energy gate is the
-/// no-new-dependency version of that, and WhisperKit already ships the energy VAD used here.
-///
-/// The thresholds are measured, not chosen. Over Louis's 1 482 real dictations
-/// (`~/Documents/superwhisper/recordings/*/output.wav`, transcript in the sibling `meta.json`),
-/// scoring each file by how many 100 ms frames have RMS above 0.005:
-///
-/// - the 1 437 files with a real transcript: **minimum 0.5 s** of voiced audio, median 21.3 s;
-/// - the 40 files whose transcript is empty or a single character: 33 of them under 0.4 s;
-/// - the room-tone recording that produced the hallucination above: **0.2 s**.
-///
-/// So 0.3 s sits between the quietest real dictation ever recorded (0.5 s, a 40 % margin) and the
-/// hallucinating file (0.2 s), and rejects **0 of 1 437** real dictations. The bias is deliberate:
-/// letting some room tone through costs a wrong paste that Whisper usually declines to produce,
-/// while rejecting a real dictation loses something Louis actually said.
-///
-/// The 0.005 frame threshold is likewise from the corpus: raising it to WhisperKit's default 0.02
-/// would false-reject 2.7 % of real dictations (39 of 1 437) because Louis's quiet recordings peak
-/// below it, for only 7 more silent files rejected.
-private enum SpeechGate {
-    enum Verdict {
-        case speech
-        /// Carries why, for the log only -- the caller returns "" either way.
-        case silence(String)
-    }
-
-    /// Frame length in seconds, WhisperKit's `EnergyVAD` default. A voiced frame is 100 ms.
-    private static let frameLength: Float = 0.1
-
-    /// RMS above which a 100 ms frame counts as voiced. See the type's note for the calibration.
-    private static let energyThreshold: Float = 0.005
-
-    /// Total voiced time a recording needs before it is worth transcribing.
-    private static let minimumVoicedDuration: TimeInterval = 0.3
-
-    /// Minimum length of the recording itself. The shortest real dictation in the 1 482-file
-    /// corpus is 1.34 s, so 0.5 s is 2.7x under anything Louis has ever said; it is here to make
-    /// a brushed hotkey (a 0-frame file, or tens of milliseconds of audio) cost nothing at all.
-    private static let minimumDuration: TimeInterval = 0.5
-
-    static func verdict(for samples: [Float], sampleRate: Int = WhisperKit.sampleRate) -> Verdict {
-        let duration = Double(samples.count) / Double(sampleRate)
-        guard duration >= minimumDuration else {
-            return .silence(String(format: "%.2fs long, under the %.1fs minimum", duration, minimumDuration))
-        }
-
-        let vad = EnergyVAD(
-            sampleRate: sampleRate,
-            frameLength: frameLength,
-            energyThreshold: energyThreshold
-        )
-        let voiced = Double(vad.voiceActivity(in: samples).filter { $0 }.count) * Double(frameLength)
-        guard voiced >= minimumVoicedDuration else {
-            return .silence(String(
-                format: "%.1fs of voice in %.1fs, under the %.1fs minimum",
-                voiced, duration, minimumVoicedDuration
-            ))
-        }
-
-        return .speech
-    }
-}
-
 /// Carries the loaded model across isolation boundaries and keeps every call to it on one side.
 ///
 /// `WhisperKit` is a plain non-`Sendable` class, so handing an instance from the load task back
@@ -409,8 +395,8 @@ private final class LoadedModel: @unchecked Sendable {
         self.kit = kit
     }
 
-    func transcribe(path: String, options: DecodingOptions) async throws -> [TranscriptionResult] {
-        try await kit.transcribe(audioPath: path, decodeOptions: options)
+    func transcribe(audio: [Float], options: DecodingOptions) async throws -> [TranscriptionResult] {
+        try await kit.transcribe(audioArray: audio, decodeOptions: options)
     }
 }
 
