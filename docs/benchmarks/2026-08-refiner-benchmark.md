@@ -122,14 +122,30 @@ Score histograms on this task (why the medians tie but the shapes differ):
 
 ### Per-packet head-to-head (median of the 3 judges per packet, 15 packets per task)
 
-| pair | `prompt_cleanup` | `message_rewrite` |
-|---|---|---|
-| gemma vs qwen | **W11 T3 L1** | W4 T4 **L7** |
-| gemma vs ornith | W14 T1 L0 | W7 T5 L3 |
-| gemma vs granite | W11 T4 L0 | W9 T5 L1 |
-| qwen vs ornith | W8 T2 L5 | W8 T6 L1 |
-| qwen vs granite | W6 T3 L6 | W10 T3 L2 |
-| ornith vs granite | W7 T4 L4 | W9 T2 L4 |
+**The auto-fail convention used in this table is `auto-fail = 0`, and it is load-bearing — read this
+before using the figures.** Everywhere else in this report an auto-failed output is *excluded* from
+the distribution rather than folded in as a zero (that is why `qwen3.5-9b`'s `prompt_cleanup` n is 42,
+not 45). This table uses the opposite convention, because a pairwise comparison has to decide who won
+a packet where one side was disqualified, and "disqualified loses the packet" is the only reading that
+does not reward being unscoreable. Both conventions are printed side by side by `aggregate.py`, so the
+choice is reproducible rather than asserted; the columns below show where it matters.
+
+`message_rewrite` has no auto-fails at all, so its figures are identical under either convention.
+
+| pair | `prompt_cleanup` (auto-fail = 0) | `prompt_cleanup` (auto-fail excluded) | `message_rewrite` |
+|---|---|---|---|
+| gemma vs qwen | **W11 T3 L1** | W10 T3 L1 (n=14) | W4 T4 **L7** |
+| gemma vs ornith | W14 T1 L0 | W14 T1 L0 | W7 T5 L3 |
+| gemma vs granite | W11 T4 L0 | W11 T4 L0 | W9 T5 L1 |
+| qwen vs ornith | W8 T2 L5 | W8 T2 L4 (n=14) | W8 T6 L1 |
+| qwen vs granite | W6 T3 L6 | W6 T3 L5 (n=14) | W10 T3 L2 |
+| ornith vs granite | W7 T4 L4 | W7 T4 L4 | W9 T2 L4 |
+
+No record reverses between the two conventions: only the three qwen-involving `prompt_cleanup` cells
+move, each by the single packet (`f08`) qwen was disqualified on, and gemma still beats qwen either
+way. The statistic also matters and is stated in the heading: with a *mean* instead of a median the
+gemma-vs-qwen record reads 12-2-1 rather than 11-3-1, purely from how one dissenting judge is
+absorbed. All figures in this table are produced by `benchmark/aggregate.py`, not computed by hand.
 
 ### Inter-judge agreement (controller-measured, on the 8-point per-candidate total)
 
@@ -209,13 +225,51 @@ dictates in half the time. Two consequences, both untested:
   observed here is 98 tokens, comfortably under the cap -- but only because the inputs are short. A
   224-word dictation could plausibly need more than 512 tokens out, and truncation would be silent.
 
+**Both of those have since been MEASURED** -- see [§1b](#1b-long-form-measured-on-the-real-corpus)
+immediately below. The gap above is what the benchmark could not say; §1b is what the follow-up
+found, and it changes the latency picture materially while leaving the ranking intact.
+
 **The gap is length, not disfluency.** Measured: 87 % of the fixtures carry at least one filler
 (median 1 hit) against 51 % of the real transcripts (median 1). The fixtures deliberately
 over-sample disfluency, which is what the rubric criterion exists to stress. So the fixtures are
 representative of *how messy* a dictation is, and unrepresentative of *how long* it is.
 
-**Follow-up required before the winner ships in a mode:** re-measure the top 2 on long input
-(~224 words) for latency and truncation.
+### 1b. Long form, measured on the real corpus
+
+The follow-up above was run once ruling R12 allowed local use of the real corpus. 17 real French
+transcripts were sampled stratified by length (`benchmark/sample_real_fixtures.py`), and all three
+surviving candidates re-run on `prompt_cleanup` at the benchmark's own settings
+(`benchmark/check_longform.py`). Both the fixtures and the results stay git-ignored -- they are
+Louis's work content.
+
+Median latency, seconds, by input length:
+
+| input | `granite4.2-8b` | `qwen3.5-9b` | `gemma4-12b-qat` |
+|---|---|---|---|
+| 20-58 words (n=4) | 1.40 | 1.96 | **2.69** |
+| 96-107 words (n=4) | 4.10 | 4.62 | **6.14** |
+| 121-172 words (n=5) | 5.42 | 6.62 | **8.59** |
+| 260-370 words (n=4) | 10.09 | 11.31 | **17.67** (max 20.63) |
+
+Three findings, in order of importance:
+
+1. **`num_predict: 512` truncates, and it is OUR bug, not a model's.** All three candidates hit the
+   cap on the same 370-word fixture and got cut mid-output. Re-running that fixture at
+   `num_predict: 2048` completes cleanly for all three (`done_reason: "stop"`, 463-580 tokens out),
+   at a cost of ~4-8 s. Louis's corpus reaches 987 words, so the cap must scale with input length --
+   **512 is not a defensible default for this product.**
+2. **The headline 2.86 s applies only to short dictations.** At Louis's real median (77 words) gemma
+   is around 5 s; at his p90 (224 words) around 12 s; on his longest, appreciably more. Any latency
+   promise in the UI has to be stated per length, not as one number.
+3. **The ranking is unchanged, because the penalty is proportional, not a cliff.** Gemma is
+   consistently 1.3-1.6x slower than qwen at every length (2.69/1.96, 6.14/4.62, 8.59/6.62,
+   17.67/11.31), so the quality-versus-speed trade decided on short input holds on long input too.
+   In absolute terms the gap does widen -- +0.7 s at 50 words, +6.4 s at 300 -- which is worth
+   knowing but does not reverse anything.
+
+What this does **not** cover: quality at length. The 17 long-form outputs were not judged, so the
+claim is about latency and truncation only. If a candidate degrades in *quality* on long input, that
+remains invisible.
 
 ### 2. All four candidates were benchmarked with reasoning disabled (ruling R6)
 

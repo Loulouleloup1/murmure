@@ -72,6 +72,12 @@ def _collect_judgments(mapping: dict[str, dict[str, str]]) -> dict:
     )
     autofails: dict[tuple[str, str], int] = defaultdict(int)
     autofail_detail: list[tuple[str, str, str, int]] = []
+    # (task, model, packet) -> one total per judge, plus that pair's auto-fail count.
+    # Kept because the head-to-head table compares models packet by packet, which the
+    # flattened distributions above cannot express.
+    per_packet: dict[tuple[str, str, str], dict] = defaultdict(
+        lambda: {"totals": [], "autofails": 0}
+    )
 
     for task in TASKS:
         for judge in JUDGES:
@@ -103,9 +109,11 @@ def _collect_judgments(mapping: dict[str, dict[str, str]]) -> dict:
                     if score["autofail"]:
                         autofails[task, model] += 1
                         autofail_detail.append((task, packet_id, letter, judge))
+                        per_packet[task, model, packet_id]["autofails"] += 1
                         continue
                     total = sum(int(score[c]) for c in CRITERIA)
                     totals[task, model].append(total)
+                    per_packet[task, model, packet_id]["totals"].append(total)
                     by_judge[task, model, judge].append(total)
                     for criterion in CRITERIA:
                         per_criterion[task, model][criterion].append(
@@ -120,6 +128,8 @@ def _collect_judgments(mapping: dict[str, dict[str, str]]) -> dict:
         "per_criterion": per_criterion,
         "autofails": autofails,
         "autofail_detail": autofail_detail,
+        "per_packet": per_packet,
+        "packets": {t: sorted(expected[t]) for t in TASKS},
         "n_packets": {t: len(expected[t]) for t in TASKS},
     }
 
@@ -200,6 +210,76 @@ def _print_judge_agreement(agg: dict, task: str) -> None:
         print(f"    judge{judge} top-2: {order[0]}, {order[1]}")
 
 
+def _packet_score(cell: dict, rule: str) -> float | None:
+    """One model's score on one packet: the MEDIAN over the judges that scored it.
+
+    Median, not mean, to stay consistent with the score-distribution tables above --
+    and because it matters: on `prompt_cleanup` the gemma-vs-qwen record is 11-3-1
+    under median and 12-2-1 under mean, purely from how one dissenting judge is
+    absorbed. Stating the statistic is therefore part of stating the result.
+
+    The two auto-fail conventions differ only on auto-failed rows, and that difference
+    is not cosmetic either: `zero` folds a disqualification in as a 0, dragging the
+    packet toward a loss; `excluded` drops it, which is the convention the score
+    distributions use (see this module's docstring). Returning None means "this model
+    has no comparable score here", so the packet is skipped for that pair rather than
+    silently won.
+    """
+    totals = list(cell["totals"])
+    if rule == "zero":
+        totals += [0] * cell["autofails"]
+    elif rule != "excluded":
+        raise ValueError(f"unknown auto-fail rule {rule!r}")
+    return statistics.median(totals) if totals else None
+
+
+def _head_to_head(agg: dict, task: str, rule: str) -> dict[tuple[str, str], tuple[int, int, int]]:
+    """Per-packet win/tie/loss for every ordered model pair, under one auto-fail rule."""
+    models = sorted({m for (t, m) in agg["totals"] if t == task})
+    records: dict[tuple[str, str], tuple[int, int, int]] = {}
+    for left in models:
+        for right in models:
+            if left >= right:
+                continue
+            wins = ties = losses = 0
+            for packet_id in agg["packets"][task]:
+                a = _packet_score(agg["per_packet"][task, left, packet_id], rule)
+                b = _packet_score(agg["per_packet"][task, right, packet_id], rule)
+                if a is None or b is None:
+                    continue
+                if a > b:
+                    wins += 1
+                elif a < b:
+                    losses += 1
+                else:
+                    ties += 1
+            records[left, right] = (wins, ties, losses)
+    return records
+
+
+def _print_head_to_head(agg: dict, task: str) -> None:
+    """Both conventions, side by side, because the choice is load-bearing.
+
+    A review found the report quoting head-to-head figures that only reproduce under
+    `zero`, while the report's method section states auto-fails are never folded in as
+    a 0. Printing both makes the rule explicit and the table reproducible from this
+    script instead of hand-computed.
+    """
+    print(f"\n=== head-to-head, per packet -- {task} (W-T-L for the left model) ===")
+    excluded = _head_to_head(agg, task, "excluded")
+    zeroed = _head_to_head(agg, task, "zero")
+    print(f"{'pair':<34} {'auto-fail excluded':>19} {'auto-fail = 0':>15}")
+    for pair in sorted(excluded):
+        we, te, le = excluded[pair]
+        wz, tz, lz = zeroed[pair]
+        flag = "" if (we, te, le) == (wz, tz, lz) else "  <- rule changes the record"
+        print(
+            f"{pair[0] + ' vs ' + pair[1]:<34} "
+            f"{f'{we}-{te}-{le} (n={we + te + le})':>19} "
+            f"{f'{wz}-{tz}-{lz} (n={wz + tz + lz})':>15}{flag}"
+        )
+
+
 def _print_perf(perf: dict, agg: dict, sizes: dict[str, float]) -> None:
     print("\n=== machine metrics (from results.jsonl) ===")
     print(
@@ -241,6 +321,7 @@ def main() -> None:
     for task in TASKS:
         _print_task_table(agg, task, sizes)
         _print_judge_agreement(agg, task)
+        _print_head_to_head(agg, task)
 
     if agg["autofail_detail"]:
         print("\n=== auto-fails (excluded from the score distribution) ===")
