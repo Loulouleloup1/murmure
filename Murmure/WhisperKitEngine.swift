@@ -63,9 +63,27 @@ actor WhisperKitEngine {
     /// default `DecodingOptions()` leaves `language` nil AND `detectLanguage` false (it is
     /// derived as `!usePrefillPrompt`), and the decoder then prefills `<|en|>` -- French audio
     /// would be decoded as English and come back as plausible-looking garbage with no error
-    /// raised anywhere. Detection is turned on explicitly, which also matches the spec's
-    /// per-mode `"language": "auto"` default (§5) instead of hard-coding French.
-    private static let decodeOptions = DecodingOptions(detectLanguage: true)
+    /// raised anywhere. So the token must be set deliberately, one way or the other.
+    ///
+    /// It is PINNED to French rather than detected. `detectLanguage: true` shipped first, to match
+    /// the spec's per-mode `"language": "auto"` default (§5) instead of hard-coding a language --
+    /// but measured across the whole real corpus (1 449 dictations, 17.1 h) that is a defect, not a
+    /// feature: WhisperKit 1.1.0 re-evaluates the language PER WINDOW and again on every
+    /// temperature fallback, so a single dictation can switch mid-way. It produced 9 non-Latin
+    /// transcripts out of 1 449 plus Spanish switches that no count catches, and those outputs are
+    /// every one of the cases where Superwhisper beat us in the head-to-head arbitration.
+    /// Pinning removed 100 % of them (11/11, over 3 runs x 100 files), improved the median WER
+    /// slightly, and halved run-to-run instability.
+    ///
+    /// The obvious objection -- that this breaks English dictation -- does not apply: Louis
+    /// dictates French with occasional English technical terms, never full English. The ~2 %
+    /// measured as "English" IS the misdetection, not a population to protect. Whisper keeps
+    /// English technical terms verbatim inside a French-decoded transcript; that is what the
+    /// corpus shows.
+    ///
+    /// Lot 2 owes this a per-mode `stt.language` seam (spec §5), so a future English mode can
+    /// override it. Until that mode exists, "auto" is a measured regression.
+    private static let decodeOptions = DecodingOptions(language: "fr")
 
     private var loading: Task<LoadedModel, Error>?
 
