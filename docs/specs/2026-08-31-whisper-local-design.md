@@ -93,13 +93,20 @@ A mode = one JSON file in `~/Library/Application Support/Murmure/modes/<key>.jso
 {
   "key": "prompt", "name": "Prompt", "hotkey": null,
   "stt": {"model": "large-v3-turbo", "language": "auto"},
-  "llm": {"enabled": true, "endpoint": "http://localhost:11434/v1", "model": "<benchmark winner>"},
+  "llm": {"enabled": true, "endpoint": "http://localhost:11434", "model": "gemma4:12b-it-qat"},
   "instructions": "…",
   "context": {"selectedText": false, "clipboard": false, "appContext": false},
   "autoActivate": ["com.googlecode.iterm2", "com.anthropic.claudefordesktop"],
   "simulateKeypresses": false
 }
 ```
+
+`llm.endpoint` is the server **root**, with no path: Murmure appends `/api/chat` itself. This line
+previously read `http://localhost:11434/v1`, which is wrong and was actively harmful — `/v1` is
+Ollama's OpenAI-compatibility API, where `think` and the `options` block do not exist, so a client
+following it would have silently lost `num_predict` and `num_ctx`, the two measured floors. Copying
+the old example now fails validation with the root to write instead, rather than 404-ing into a
+"this is a bug" message. `model` carries the real Ollama tag, not the benchmark's row alias.
 
 Built-in modes (created on first launch, all editable):
 - **Voice** — raw transcription, no LLM. Default mode; the daily driver for Claude Code.
