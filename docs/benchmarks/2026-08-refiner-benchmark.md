@@ -43,6 +43,23 @@ would be manufacturing a winner. The separation is real only on `prompt_cleanup`
 what the A/B in task 7 should adjudicate: whether gemma's consistency or qwen's speed plus higher
 ceiling matters more to Louis on his own dictations.
 
+**The two tasks are not equally weighted in practice, and that tilts the verdict.** Louis stated his
+use case up front: *"Je l'utilise quasi uniquement pour parler à des IA"* -- dictating prompts into
+Claude Code, Claude Code Desktop and Hermes Agent -- *"mais aussi de temps en temps des messages sur
+Slack"*. So `prompt_cleanup` is the task he runs all day and `message_rewrite` is the occasional one.
+The task that **does** separate the finalists is therefore the one that dominates his usage, and the
+task where they tie is the rarer one. Read that way the benchmark is more decisive than the
+side-by-side table suggests: gemma wins the workload that matters, and the tie is on the edge case.
+
+The latency trade-off points the same way. Louis was explicit that he would rather wait than retype:
+*"Je préfère avoir quelque chose de plus lent, mais de + quali que devoir retaper des trucs à la
+main."* Gemma's cost over the fastest candidate is ~0.9 s per dictation; the quality gap it buys on
+`prompt_cleanup` is a full 2 points of median. That is the trade he asked for.
+
+Task 7 remains worth the ten minutes -- a blind A/B on his own dictations is the only check on
+whether a rubric built from synthetic fixtures matches his actual taste -- but it is now a
+confirmation, not a coin-flip.
+
 ---
 
 ## The numbers
