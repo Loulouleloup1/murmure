@@ -24,6 +24,29 @@ final class StorageTests: XCTestCase {
         XCTAssertTrue(url.path.hasPrefix(Storage.applicationSupport.path), url.path)
     }
 
+    /// The folder itself, which is where `murmure.sqlite` goes -- a sibling of `modes/` and
+    /// `recordings/`, not a subfolder of its own (spec §7).
+    func testURLWithNoSubfolderIsTheMurmureFolderItself() {
+        let url = Storage.url(in: base)
+
+        let subfolder = Storage.url(subfolder: "recordings", in: base)
+        XCTAssertEqual(url, subfolder.deletingLastPathComponent())
+        XCTAssertTrue(url.path.hasSuffix("/Murmure"), url.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "pure, like its sibling")
+    }
+
+    /// The one a caller about to open a database has to have called: `HistoryStore` opens a file
+    /// and creates no folder, on purpose.
+    func testDirectoryWithNoSubfolderCreatesTheMurmureFolder() throws {
+        let created = try Storage.directory(in: base)
+
+        XCTAssertEqual(created, Storage.url(in: base))
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: created.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
+    }
+
     /// The regression this whole split exists for: the old function created the folder it was
     /// asked to name. The subfolder is a UUID so it cannot collide with `recordings`, `models` or
     /// `modes` -- if `url` ever creates again, this fails without having touched anything real.

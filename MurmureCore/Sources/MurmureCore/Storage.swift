@@ -23,8 +23,14 @@ public enum Storage {
     /// disk and answers `.../history` before the folder exists and `.../history/` after -- two
     /// unequal URLs for one location, which is measured: it is what the equality test caught.
     public static func url(subfolder: String, in base: URL = applicationSupport) -> URL {
+        url(in: base).appendingPathComponent(subfolder, isDirectory: true)
+    }
+
+    /// `Application Support/Murmure` itself, for what lives in the folder rather than in one of
+    /// its subfolders: `murmure.sqlite` (spec §7), and `vocabulary.json` when T6 lands. Pure,
+    /// like the function above, and the single definition of where the folder is.
+    public static func url(in base: URL = applicationSupport) -> URL {
         base.appendingPathComponent("Murmure", isDirectory: true)
-            .appendingPathComponent(subfolder, isDirectory: true)
     }
 
     /// The same path, with the folder and its parents created. For callers that are about to write.
@@ -32,7 +38,17 @@ public enum Storage {
         subfolder: String,
         in base: URL = applicationSupport
     ) throws -> URL {
-        let directory = url(subfolder: subfolder, in: base)
+        try created(url(subfolder: subfolder, in: base))
+    }
+
+    /// `Application Support/Murmure` itself, created. What `HistoryStore(databaseURL:)` needs a
+    /// caller to have done first: it opens a file and is not allowed to create the folder holding
+    /// it (§5.4).
+    public static func directory(in base: URL = applicationSupport) throws -> URL {
+        try created(url(in: base))
+    }
+
+    private static func created(_ directory: URL) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }

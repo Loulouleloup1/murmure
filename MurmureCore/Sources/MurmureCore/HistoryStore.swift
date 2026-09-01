@@ -35,7 +35,12 @@ public enum HistoryStoreError: Error, Equatable, CustomStringConvertible {
 /// The store owns rows, not files. It never creates, moves or deletes a WAV: `clearAudio` returns
 /// the filenames it detached and the caller deletes them, because the store does not know where
 /// `recordings/` is and should not be given a second folder to be wrong about.
-public struct HistoryStore {
+/// `Sendable` because it holds one `DatabaseQueue` and nothing else, and serialising access from
+/// any thread is what that type is for (`DatabaseQueue: @unchecked Sendable`, GRDB). Spelled out
+/// rather than inferred: a public struct gets no automatic conformance, and the store crosses an
+/// actor boundary on every dictation -- `DictationSession` is an actor and the app's
+/// `DictationRecording` carries this value into it.
+public struct HistoryStore: Sendable {
     private let dbQueue: DatabaseQueue
 
     /// Opens the database and brings the schema up to date. The containing folder must exist --

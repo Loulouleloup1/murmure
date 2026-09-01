@@ -11,6 +11,10 @@ private final class FakeRecorder: Recorder {
     var stopReturnsUnreadableFile = false
     /// Thrown by `start()`, standing in for a denied microphone or a busy device.
     var startError: Error?
+    /// Run inside `stop()`. The lot 4 tests use it to advance `ManualClock` by the length of the
+    /// recording: nothing else moves that clock, so the seconds it adds here are exactly the
+    /// seconds the microphone was live.
+    var onStop: (() -> Void)?
     var lastFailure: Error?
     /// How many recordings actually began. One is the whole point of the concurrency test below:
     /// two would be two taps on one microphone.
@@ -48,6 +52,7 @@ private final class FakeRecorder: Recorder {
     func stop() -> URL? {
         isRecording = false
         stopCount += 1
+        onStop?()
         if stopReturnsNil { return nil }
         if stopReturnsUnreadableFile {
             try! Data("not audio".utf8).write(to: url)
@@ -66,7 +71,14 @@ private final class FakeRecorder: Recorder {
 
 private struct FakeTranscriber: Transcriber {
     var result: Result<String, Error>
-    func transcribe(wav: URL) async throws -> String { try result.get() }
+    /// Run inside `transcribe`, before it answers -- so a `ManualClock` advanced here measures
+    /// the transcription and nothing else, on the failing path as well as the succeeding one.
+    var onCall: (() -> Void)?
+
+    func transcribe(wav: URL) async throws -> String {
+        onCall?()
+        return try result.get()
+    }
 }
 
 private final class SpyInserter: TextInserter, @unchecked Sendable {
@@ -121,6 +133,68 @@ private final class SpyRefiner: DictationRefining, @unchecked Sendable {
     }
 }
 
+/// The archive seam, keeping every row it was handed and counting the target resolutions.
+///
+/// `target` is a `var` on purpose: a test moves it between the press that starts a dictation and
+/// the one that stops it, which is how a target read at the START is told apart from one read at
+/// the insertion. A double answering the same value whenever it is asked could not tell them
+/// apart, and the mutation that moves that line would pass unnoticed.
+private final class SpyRecording: DictationRecording, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [HistoryRecord] = []
+    private var resolutions = 0
+    private var storedTarget: DictationTarget
+
+    init(target: DictationTarget = .unknown) {
+        storedTarget = target
+    }
+
+    var target: DictationTarget {
+        get { lock.withLock { storedTarget } }
+        set { lock.withLock { storedTarget = newValue } }
+    }
+
+    /// Every row written, in order. The count is an assertion in its own right: one dictation is
+    /// one row, and never two.
+    var records: [HistoryRecord] { lock.withLock { storage } }
+
+    var targetResolutions: Int { lock.withLock { resolutions } }
+
+    /// `withLock` rather than the `lock()`/`unlock()` pair the older doubles in this file use:
+    /// both methods below are `async`, where the pair is unavailable and warns.
+    func targetForNewDictation() async -> DictationTarget {
+        lock.withLock {
+            resolutions += 1
+            return storedTarget
+        }
+    }
+
+    func record(_ dictation: HistoryRecord) async {
+        lock.withLock { storage.append(dictation) }
+    }
+}
+
+/// A clock that only moves when a test moves it, so the three durations a row carries are
+/// assertable to the millisecond instead of to "greater than zero" -- which is what a real clock
+/// would leave, and what would let a duration measured over the wrong span pass.
+private final class ManualClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Date
+
+    /// Parsed rather than built by arithmetic on `Date()`, the same rule `HistoryStoreTests`
+    /// follows: the stored form carries milliseconds and a fixture that cannot be read back in
+    /// the format the schema promises is not a fixture.
+    init(from iso: String = "2026-09-01T14:42:00.000Z") {
+        current = HistoryTimestamp.date(from: iso)!
+    }
+
+    var now: Date { lock.withLock { current } }
+
+    func advance(_ seconds: TimeInterval) {
+        lock.withLock { current = current.addingTimeInterval(seconds) }
+    }
+}
+
 private struct TestError: Error {}
 
 /// Stands in for `AudioRecorder.Failure.alreadyRecording`, which lives in the app target and
@@ -138,7 +212,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("bonjour murmure")),
             inserter: inserter, refiner: SpyRefiner(),
-            onStateChange: { _ in }
+            recording: SpyRecording(), onStateChange: { _ in }
         )
         await session.toggle() // start
         let recordingState = await session.state
@@ -156,7 +230,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .failure(TestError())),
             inserter: inserter, refiner: SpyRefiner(),
-            onStateChange: { _ in }
+            recording: SpyRecording(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -174,7 +248,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("texte précieux")),
             inserter: inserter, refiner: SpyRefiner(),
-            onStateChange: { _ in }
+            recording: SpyRecording(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -194,7 +268,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: SpyRefiner(),
-            onStateChange: { _ in }
+            recording: SpyRecording(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -211,7 +285,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(frames: 0),
             transcriber: FakeTranscriber(result: .success("hallucination sur du silence")),
             inserter: inserter, refiner: SpyRefiner(),
-            onStateChange: { _ in }
+            recording: SpyRecording(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -231,7 +305,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: inserter, refiner: SpyRefiner(),
-            onStateChange: { _ in }
+            recording: SpyRecording(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -250,7 +324,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("première dictée")),
             inserter: inserter, refiner: SpyRefiner(),
-            onStateChange: { _ in }
+            recording: SpyRecording(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -261,7 +335,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .failure(TestError())),
             inserter: inserter, refiner: SpyRefiner(),
-            onStateChange: { _ in }
+            recording: SpyRecording(), onStateChange: { _ in }
         )
         await failing.toggle()
         await failing.toggle()
@@ -277,7 +351,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("bonjour")),
             inserter: SpyInserter(), refiner: SpyRefiner(),
-            onStateChange: { states.append($0) }
+            recording: SpyRecording(), onStateChange: { states.append($0) }
         )
         await session.toggle()
         await session.toggle()
@@ -298,7 +372,8 @@ final class DictationSessionTests: XCTestCase {
         let transcriber = GatedTranscriber()
         let session = DictationSession(
             recorder: FakeRecorder(), transcriber: transcriber,
-            inserter: SpyInserter(), refiner: SpyRefiner(), onStateChange: { _ in }
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: SpyRecording(),
+            onStateChange: { _ in }
         )
         await session.toggle() // start
         async let pipeline: Void = session.toggle() // stop; blocks inside the transcriber
@@ -327,7 +402,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success(raw)),
-            inserter: inserter, refiner: refiner, onStateChange: { _ in }
+            inserter: inserter, refiner: refiner, recording: SpyRecording(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -343,7 +419,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("bonjour")),
-            inserter: SpyInserter(), refiner: refiner, onStateChange: { _ in }
+            inserter: SpyInserter(), refiner: refiner, recording: SpyRecording(),
+            onStateChange: { _ in }
         )
         await session.toggle() // start
         XCTAssertEqual(refiner.calls.modeResolutions, 1, "the mode is resolved at the start")
@@ -360,7 +437,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
-            inserter: SpyInserter(), refiner: refiner, onStateChange: { _ in }
+            inserter: SpyInserter(), refiner: refiner, recording: SpyRecording(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         guard case .failed = await session.state else { return XCTFail("expected failed state") }
@@ -375,7 +453,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("euh bonjour")),
-            inserter: inserter, refiner: refiner, onStateChange: { _ in }
+            inserter: inserter, refiner: refiner, recording: SpyRecording(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -394,7 +473,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("euh bonjour")),
             inserter: SpyInserter(), refiner: SpyRefiner(mode: .prompt),
-            onStateChange: { states.append($0) }
+            recording: SpyRecording(), onStateChange: { states.append($0) }
         )
         await session.toggle()
         await session.toggle()
@@ -415,7 +494,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("")),
-            inserter: inserter, refiner: refiner, onStateChange: { _ in }
+            inserter: inserter, refiner: refiner, recording: SpyRecording(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -431,7 +511,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success(" \n \t ")),
-            inserter: inserter, refiner: refiner, onStateChange: { _ in }
+            inserter: inserter, refiner: refiner, recording: SpyRecording(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -461,7 +542,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: refiner,
-            onStateChange: { states.append($0) }
+            recording: SpyRecording(), onStateChange: { states.append($0) }
         )
         async let firstPress: Void = session.toggle()
         await refiner.waitUntilResolving() // the first press is parked inside the window
@@ -494,7 +575,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("bonjour murmure")),
             inserter: SpyInserter(), refiner: SpyRefiner(),
-            onStateChange: { states.append($0) }
+            recording: SpyRecording(), onStateChange: { states.append($0) }
         )
         await session.toggle()
         await session.toggle()
@@ -513,7 +594,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(frames: 0),
             transcriber: FakeTranscriber(result: .success("hallucination sur du silence")),
             inserter: inserter, refiner: SpyRefiner(),
-            onStateChange: { states.append($0) }
+            recording: SpyRecording(), onStateChange: { states.append($0) }
         )
         await session.toggle()
         await session.toggle()
@@ -530,7 +611,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("")),
             inserter: SpyInserter(), refiner: SpyRefiner(),
-            onStateChange: { states.append($0) }
+            recording: SpyRecording(), onStateChange: { states.append($0) }
         )
         await session.toggle()
         await session.toggle()
@@ -550,7 +631,7 @@ final class DictationSessionTests: XCTestCase {
             transcriber: FakeTranscriber(result: .success("euh bonjour")),
             inserter: inserter,
             refiner: SpyRefiner(mode: .prompt, answer: { "reformulé : \($0)" }),
-            onStateChange: { states.append($0) }
+            recording: SpyRecording(), onStateChange: { states.append($0) }
         )
         await session.toggle()
         await session.toggle()
@@ -570,7 +651,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .failure(TestError())),
             inserter: inserter, refiner: SpyRefiner(),
-            onStateChange: { states.append($0) }
+            recording: SpyRecording(), onStateChange: { states.append($0) }
         )
         await session.toggle()
         await session.cancel()
@@ -587,7 +668,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
-            inserter: SpyInserter(), refiner: SpyRefiner(), onStateChange: { _ in }
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: SpyRecording(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.cancel()
@@ -602,7 +684,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
-            inserter: SpyInserter(), refiner: SpyRefiner(), onStateChange: { _ in }
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: SpyRecording(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.cancel()
@@ -620,7 +703,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: SpyRefiner(),
-            onStateChange: { states.append($0) }
+            recording: SpyRecording(), onStateChange: { states.append($0) }
         )
         await session.cancel()
         let finalState = await session.state
@@ -638,7 +721,8 @@ final class DictationSessionTests: XCTestCase {
         let inserter = SpyInserter()
         let session = DictationSession(
             recorder: FakeRecorder(), transcriber: transcriber,
-            inserter: inserter, refiner: SpyRefiner(), onStateChange: { _ in }
+            inserter: inserter, refiner: SpyRefiner(), recording: SpyRecording(),
+            onStateChange: { _ in }
         )
         await session.toggle() // start
         async let pipeline: Void = session.toggle() // stop; blocks inside the transcriber
@@ -661,7 +745,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("première dictée")),
-            inserter: SpyInserter(), refiner: SpyRefiner(), onStateChange: { _ in }
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: SpyRecording(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -670,6 +755,459 @@ final class DictationSessionTests: XCTestCase {
         await session.cancel() // ...abandoned
         let last = await session.lastTranscript
         XCTAssertEqual(last, "première dictée")
+    }
+
+    // MARK: - Lot 4: what the dictation leaves behind
+
+    /// The whole of T4 in one assertion: a dictation that ran end to end leaves exactly one row.
+    /// Not zero -- an archive that misses a dictation is the same lost text as a wrong one -- and
+    /// not one per stage, which is what a record emitted from `transition` would produce.
+    func testADictationWritesExactlyOneRecord() async {
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("une phrase inventée")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        XCTAssertEqual(recording.records.count, 1)
+    }
+
+    /// The success path, column by column: what was heard, what was inserted, and how much of it.
+    func testASuccessfulDictationIsRecordedAsInsertedWithItsCharacterCount() async {
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("une phrase inventée")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.outcome, .inserted)
+        XCTAssertEqual(row.insertedCharacters, 19) // "une phrase inventée"
+        XCTAssertEqual(row.rawTranscript, "une phrase inventée")
+        XCTAssertEqual(row.modeKey, Mode.voice.key)
+        XCTAssertEqual(row.modeName, Mode.voice.name)
+        XCTAssertEqual(row.sttModel, Mode.voice.stt.model)
+        XCTAssertNil(row.failureMessage)
+    }
+
+    /// The line this task exists to move: the raw transcript used to be overwritten by the
+    /// refined text, and the archive keeps both. `insertedCharacters` counts what landed, which
+    /// is the refined one.
+    func testTheRawTranscriptIsKeptBesideTheRefinedTextRatherThanOverwrittenByIt() async {
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("euh une phrase inventée")),
+            inserter: SpyInserter(),
+            refiner: SpyRefiner(mode: .prompt, answer: { "reformulé : \($0)" }),
+            recording: recording, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.rawTranscript, "euh une phrase inventée")
+        XCTAssertEqual(row.refinedText, "reformulé : euh une phrase inventée")
+        XCTAssertEqual(row.insertedCharacters, 35)
+        XCTAssertEqual(row.llmModel, Mode.prompt.llm.model)
+    }
+
+    /// D6, and the case it was written for: a refinement that could not happen returns the raw
+    /// transcript, and the archive must not store that as a refinement. NULL, never a copy --
+    /// otherwise a mode that never refines and a refiner that fell back read identically, and the
+    /// Raw/Refined lens shows two identical panes.
+    ///
+    /// What separates them is `refinementSeconds`: a call really did leave.
+    func testARefinementThatChangedNothingStoresTheRawTranscriptAndNoRefinedText() async {
+        let clock = ManualClock()
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("une phrase inventée")),
+            inserter: SpyInserter(),
+            // The shape of a `TranscriptRefiner` that fell back: Ollama was down, so what comes
+            // back is exactly what went in.
+            refiner: SpyRefiner(mode: .prompt, answer: { clock.advance(3); return $0 }),
+            recording: recording, now: { clock.now }, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.rawTranscript, "une phrase inventée")
+        XCTAssertNil(row.refinedText, "a fallback is not a refinement")
+        XCTAssertEqual(row.refinementSeconds, 3, "and it is still a refiner that ran")
+    }
+
+    /// The other half of the same rule: `Voice` never calls the model, so there is no refinement
+    /// time either -- which is what makes the pair above readable.
+    func testAModeWithNoRefinerRecordsNoLanguageModelAndNoRefinementTime() async {
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("une phrase inventée")),
+            inserter: SpyInserter(), refiner: SpyRefiner(mode: .voice), recording: recording,
+            onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertNil(row.llmModel)
+        XCTAssertNil(row.refinementSeconds)
+        XCTAssertNil(row.refinedText)
+    }
+
+    /// Ruling L7's second silence: two presses in a row record a valid 0-frame WAV. It is a
+    /// dictation that happened and heard nothing -- a row, with its duration and its audio, and
+    /// no text at all. No row here would make the two presses invisible.
+    func testAnEmptyRecordingIsRecordedAsNothingHeardWithItsAudioAndNoText() async {
+        let clock = ManualClock()
+        let recorder = FakeRecorder(frames: 0)
+        recorder.onStop = { clock.advance(4) }
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("hallucination sur du silence")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            now: { clock.now }, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.outcome, .nothingHeard)
+        XCTAssertEqual(row.durationSeconds, 4)
+        XCTAssertEqual(row.audioFilename, recorder.url.lastPathComponent)
+        XCTAssertNil(row.rawTranscript)
+        XCTAssertNil(row.transcriptionSeconds, "nothing was transcribed")
+        XCTAssertEqual(row.insertedCharacters, 0)
+    }
+
+    /// The third silence: the recording had audio and Whisper returned nothing. A transcription
+    /// really ran -- so it has a time -- and there is still no text to store.
+    func testATranscriptWhisperReturnedEmptyIsRecordedAsNothingHeard() async {
+        let clock = ManualClock()
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success(""), onCall: { clock.advance(2) }),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            now: { clock.now }, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.outcome, .nothingHeard)
+        XCTAssertNil(row.rawTranscript, "an empty string is not a transcript")
+        XCTAssertEqual(row.transcriptionSeconds, 2)
+        XCTAssertEqual(row.insertedCharacters, 0)
+    }
+
+    /// A failure is a row, and the row carries the sentence the notch showed. Without it a failed
+    /// dictation reads as "something went wrong" for ever.
+    func testAFailedTranscriptionIsRecordedWithItsMessageAndItsAudio() async {
+        struct ModelMissing: LocalizedError { var errorDescription: String? { "model missing" } }
+        let recorder = FakeRecorder()
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .failure(ModelMissing())),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.outcome, .failed)
+        XCTAssertEqual(row.failureMessage, "transcription failed: model missing")
+        XCTAssertEqual(row.audioFilename, recorder.url.lastPathComponent, "the WAV is still there")
+        XCTAssertNil(row.rawTranscript)
+    }
+
+    /// The failure that costs the most, and the one spec §9 is about: the text existed and the
+    /// paste refused it. The row carries both -- the message, and the text that could not be
+    /// delivered. `AppState.recoveredText` holds the same text until the next dictation; this is
+    /// the copy that is still there tomorrow.
+    func testAFailedInsertionIsRecordedWithItsMessageAndTheTextItCouldNotDeliver() async {
+        struct NoAccessibility: LocalizedError { var errorDescription: String? { "no access" } }
+        let inserter = SpyInserter()
+        inserter.error = NoAccessibility()
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("texte inventé et précieux")),
+            inserter: inserter, refiner: SpyRefiner(), recording: recording,
+            onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.outcome, .failed)
+        XCTAssertEqual(row.failureMessage, "insert failed: no access")
+        XCTAssertEqual(row.rawTranscript, "texte inventé et précieux")
+        XCTAssertEqual(row.insertedCharacters, 0, "nothing landed")
+    }
+
+    /// Ruling L7's first half, one layer down: the buffers never reached the disk, so there is no
+    /// WAV to name. A filename here would point at a file that was never written.
+    func testARecordingThatNeverReachedTheDiskIsRecordedWithNoAudio() async {
+        struct DiskFull: LocalizedError { var errorDescription: String? { "disk full" } }
+        let clock = ManualClock()
+        let recorder = FakeRecorder()
+        recorder.stopReturnsNil = true
+        recorder.lastFailure = DiskFull()
+        recorder.onStop = { clock.advance(4) }
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("jamais atteint")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            now: { clock.now }, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.outcome, .failed)
+        XCTAssertNil(row.audioFilename)
+        XCTAssertEqual(row.failureMessage, "recording failed: disk full")
+        XCTAssertEqual(row.durationSeconds, 4, "the recording still happened")
+    }
+
+    /// A corrupt header is not an absent recording. The file is on disk, so the row points at it
+    /// -- that is what lets it be found and salvaged rather than orphaned.
+    func testAnUnreadableRecordingIsRecordedWithItsAudioSoTheFileCanStillBeFound() async {
+        let recorder = FakeRecorder()
+        recorder.stopReturnsUnreadableFile = true
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("jamais atteint")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        defer { try? FileManager.default.removeItem(at: recorder.url) }
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.outcome, .failed)
+        XCTAssertEqual(row.audioFilename, recorder.url.lastPathComponent)
+        XCTAssertNil(row.rawTranscript)
+    }
+
+    /// Lot 3 D8's promise, kept. A cancel destroys nothing and asks nothing, on the grounds that
+    /// lot 4 would make the recording recoverable -- so a cancelled dictation is a row naming the
+    /// WAV that is still on disk, with a duration and no text of any kind.
+    func testACancelledDictationIsRecordedWithItsAudioAndNoTranscript() async {
+        let clock = ManualClock()
+        let recorder = FakeRecorder()
+        recorder.onStop = { clock.advance(4) }
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("jamais atteint")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            now: { clock.now }, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.cancel()
+        defer { try? FileManager.default.removeItem(at: recorder.url) }
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(recording.records.count, 1)
+        XCTAssertEqual(row.outcome, .cancelled)
+        XCTAssertEqual(row.audioFilename, recorder.url.lastPathComponent)
+        XCTAssertEqual(row.durationSeconds, 4)
+        XCTAssertNil(row.rawTranscript)
+        XCTAssertNil(row.refinedText)
+        XCTAssertNil(row.transcriptionSeconds)
+        XCTAssertEqual(row.insertedCharacters, 0)
+    }
+
+    /// A stray cancel outside a recording is not a dictation, so it archives nothing. The method
+    /// is public: a row here would be a dictation in the history that never happened.
+    func testACancelWithNoRecordingRunningWritesNoRecord() async {
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("jamais atteint")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            onStateChange: { _ in }
+        )
+        await session.cancel()
+        XCTAssertEqual(recording.records, [])
+    }
+
+    /// The same line the mode resolution already draws: a microphone that refused to start is not
+    /// a dictation. No mode is resolved, no target is read, and no row is written.
+    func testAMicrophoneThatRefusesToStartWritesNoRecord() async {
+        let recorder = FakeRecorder()
+        recorder.startError = TestError()
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("jamais atteint")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            onStateChange: { _ in }
+        )
+        await session.toggle()
+        XCTAssertEqual(recording.records, [])
+        XCTAssertEqual(recording.targetResolutions, 0)
+    }
+
+    /// A press landing inside the running pipeline is ignored, and the ignoring has to reach the
+    /// archive too: two rows for one dictation would show Louis a history of dictations he never
+    /// made.
+    func testAStrayPressInsideTheRunningPipelineDoesNotAddASecondRecord() async {
+        let transcriber = GatedTranscriber()
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: FakeRecorder(), transcriber: transcriber,
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            onStateChange: { _ in }
+        )
+        await session.toggle()
+        async let pipeline: Void = session.toggle()
+        await transcriber.waitUntilTranscribing()
+
+        await session.toggle() // the stray press
+        await session.cancel() // and a stray cancel, which is ignored for the same reason
+
+        await transcriber.finish(with: "une phrase inventée")
+        await pipeline
+        XCTAssertEqual(recording.records.count, 1)
+    }
+
+    /// The application Louis was looking at when he SPOKE, which is not necessarily the one the
+    /// text lands in: the spy answers one thing at the start and another by the time the paste
+    /// happens, and the row has to carry the first. Reading it at insertion instead is a
+    /// one-line change that nothing else in the suite would notice.
+    func testTheTargetApplicationIsTheOneInFrontWhenTheRecordingStarted() async {
+        let recording = SpyRecording(
+            target: DictationTarget(bundleID: "com.example.editor", name: "Éditeur"))
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("une phrase inventée")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            onStateChange: { _ in }
+        )
+        await session.toggle() // start -- Louis is in his editor
+        XCTAssertEqual(recording.targetResolutions, 1, "the target is read at the start")
+        recording.target = DictationTarget(bundleID: "com.example.chat", name: "Chat")
+
+        await session.toggle() // stop + pipeline -- he has switched to a chat window since
+        XCTAssertEqual(recording.targetResolutions, 1, "and not read a second time")
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.targetBundleID, "com.example.editor")
+        XCTAssertEqual(row.targetAppName, "Éditeur")
+    }
+
+    /// The three durations measure three different spans, and the recording's own is the one it
+    /// is easiest to get wrong: it ends when the recorder stops, not when the paste lands. Here
+    /// the pipeline costs 5 seconds after a 4-second recording, so a duration that swallowed the
+    /// pipeline would read 9.
+    func testTheDurationIsTheRecordingAndTheOtherTwoAreThePipeline() async {
+        let clock = ManualClock()
+        let recorder = FakeRecorder()
+        recorder.onStop = { clock.advance(4) }
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(
+                result: .success("une phrase inventée"), onCall: { clock.advance(2) }),
+            inserter: SpyInserter(),
+            refiner: SpyRefiner(
+                mode: .prompt, answer: { _ in clock.advance(3); return "reformulé" }),
+            recording: recording, now: { clock.now }, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.durationSeconds, 4)
+        XCTAssertEqual(row.transcriptionSeconds, 2)
+        XCTAssertEqual(row.refinementSeconds, 3)
+    }
+
+    /// `startedAt` is when the recording began, not when it ended and not when the row was
+    /// written -- the history is read newest-first on this column, and a dictation stamped at the
+    /// end of its own pipeline would sort past the one that followed it.
+    func testTheRecordIsStampedWhenTheRecordingStartedNotWhenItEnded() async {
+        let clock = ManualClock()
+        let started = clock.now
+        let recorder = FakeRecorder()
+        recorder.onStop = { clock.advance(4) }
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(
+                result: .success("une phrase inventée"), onCall: { clock.advance(2) }),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            now: { clock.now }, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.startedAt, started)
+    }
+
+    /// D7: what is stored is a filename, never a path. The row has to resolve against whatever
+    /// folder `recordings/` turns out to be -- a temporary one here, Louis's real one in the app
+    /// -- and `HistoryStore.insert` refuses anything else outright.
+    func testTheAudioIsRecordedAsAFilenameRelativeToRecordings() async {
+        let recorder = FakeRecorder()
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("une phrase inventée")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        defer { try? FileManager.default.removeItem(at: recorder.url) }
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.audioFilename, recorder.url.lastPathComponent)
+        XCTAssertFalse(row.audioFilename?.contains("/") ?? true, "a path, not a filename")
+        let base = URL(fileURLWithPath: "/somewhere/else/recordings")
+        XCTAssertEqual(
+            row.audioURL(inRecordings: base),
+            base.appendingPathComponent(recorder.url.lastPathComponent))
+    }
+
+    /// Two dictations through ONE session, which is how Murmure is actually used -- and the
+    /// second row carries none of the first one's numbers. The three timings are per-dictation
+    /// state on an actor that lives for the whole process: a refinement time left behind by the
+    /// dictation before would make a dictation that never reached the model read as one that did.
+    func testASecondDictationThroughTheSameSessionInheritsNoneOfTheFirstOnesTimings() async {
+        let clock = ManualClock()
+        let recorder = FakeRecorder()
+        recorder.onStop = { clock.advance(4) }
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(
+                result: .success("une phrase inventée"), onCall: { clock.advance(2) }),
+            inserter: SpyInserter(),
+            refiner: SpyRefiner(
+                mode: .prompt, answer: { clock.advance(3); return "reformulé : \($0)" }),
+            recording: recording, now: { clock.now }, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+
+        // The second one never reaches the disk, so it never reaches a transcription or a
+        // refinement either -- and its row must say so.
+        recorder.stopReturnsNil = true
+        await session.toggle()
+        await session.toggle()
+
+        XCTAssertEqual(recording.records.count, 2)
+        XCTAssertEqual(recording.records.first?.refinementSeconds, 3)
+        let second = recording.records.last
+        XCTAssertNil(second?.transcriptionSeconds, "the first dictation's, inherited")
+        XCTAssertNil(second?.refinementSeconds, "the first dictation's, inherited")
+        XCTAssertEqual(second?.durationSeconds, 4, "its own recording, not both of them")
     }
 }
 

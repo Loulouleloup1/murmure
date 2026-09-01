@@ -162,11 +162,31 @@ final class DictationController {
             }
         }
 
+        // The archive, and §5.4 rule 3 in one place: the real path is resolved HERE and handed
+        // down, which is exactly why `HistoryStore(databaseURL:)` has no convenience initializer.
+        // `murmure.sqlite` lives in `Murmure/` itself, a sibling of `modes/` and `recordings/`
+        // (spec §7), so what has to exist first is the folder rather than a subfolder of its own.
+        //
+        // Nil when it cannot be opened, and that is the whole recovery: a history that will not
+        // open must not cost a dictation, which is spec §9's rule for the refiner one layer down.
+        // Said once here rather than once per row -- a broken database would otherwise log a line
+        // per dictation for ever. The window that will show it to Louis is T9's, not this task's.
+        let history: HistoryStore?
+        do {
+            let folder = try Storage.directory()
+            history = try HistoryStore(
+                databaseURL: folder.appendingPathComponent("murmure.sqlite"))
+        } catch {
+            history = nil
+            log.error("history unavailable: \(error.localizedDescription, privacy: .public)")
+        }
+
         session = DictationSession(
             recorder: AudioRecorder(levels: levels),
             transcriber: WhisperKitEngine(progress: transcriptionProgress),
             inserter: inserter,
-            refiner: ModeAwareRefinement(modesDirectory: modesDirectory, appState: appState)
+            refiner: ModeAwareRefinement(modesDirectory: modesDirectory, appState: appState),
+            recording: DictationArchive(store: history)
         ) { state in
             Task { @MainActor in
                 // FIRST, ahead of every line below it, and that ordering is the feature. Louis
@@ -370,6 +390,51 @@ final class DictationController {
             log.error("re-paste failed: \(error.localizedDescription, privacy: .public)")
             appState.lastFailureMessage = "Recollage échoué : \(error.localizedDescription)"
             appState.status = .failed
+        }
+    }
+}
+
+/// The app's `DictationRecording`: the frontmost application on one side, `murmure.sqlite` on the
+/// other.
+///
+/// Thin on purpose, like `ModeAwareRefinement` below it and for the same reason -- the app target
+/// has no test bundle, so everything decided here would be verified by reading. What is left is
+/// the two things `MurmureCore` cannot do: read the desktop, and write to the real database. The
+/// row itself is built in `DictationSession`, where it is tested.
+private struct DictationArchive: DictationRecording {
+    /// Nil when the database could not be opened; see `DictationController.init`. A dictation
+    /// still runs, and still pastes -- it is simply not remembered.
+    let store: HistoryStore?
+    private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "history")
+
+    init(store: HistoryStore?) {
+        self.store = store
+    }
+
+    /// On the main actor because `NSWorkspace` is read there, the same hop
+    /// `ModeAwareRefinement.modeForNewDictation()` makes -- and for the same reason it reads the
+    /// same thing at the same moment: Murmure is `LSUIElement` and the hotkey is a Carbon one, so
+    /// pressing it does not bring Murmure forward. What this reads is still Louis's editor.
+    ///
+    /// The two reads are deliberately not shared. They answer different questions -- which mode
+    /// to use, and what to write in the row -- and the day one of them moves, the other must not
+    /// move with it by accident.
+    func targetForNewDictation() async -> DictationTarget {
+        await MainActor.run {
+            guard let app = NSWorkspace.shared.frontmostApplication else { return .unknown }
+            return DictationTarget(bundleID: app.bundleIdentifier, name: app.localizedName)
+        }
+    }
+
+    /// A row that cannot be written is logged and nothing more. The alternative -- surfacing it --
+    /// would put an error on screen at the end of a dictation that otherwise worked perfectly,
+    /// about an archive Louis was not thinking about.
+    func record(_ dictation: HistoryRecord) async {
+        guard let store else { return }
+        do {
+            try store.insert(dictation)
+        } catch {
+            log.error("history row not written: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
