@@ -1,0 +1,17 @@
+# NO-ASK: dictations containing no imperative, no request and no question addressed to the agent.
+# An acknowledgement, an agreement, a status report or an explanation with nothing to act on.
+# Classified once from the transcripts alone, BEFORE scoring any arm, so the same set scores all
+# three. 11 of 53 (21%) -- Louis dictates acknowledgements into Prompt mode constantly, and a
+# structured mode is at its most dangerous exactly here: there is no task to find, so a template
+# with a "Tâche :" slot has to either leave it out or make one up.
+mur-07
+mur-11
+mur-13
+mur-15
+mur-17
+mur-18
+sw-1788163043
+sw-1788184302
+sw-1788184396
+sw-1788185002
+sw-1788185165
