@@ -298,7 +298,7 @@ extension Mode {
     /// `tests/unit`, `files_used` and `p90` all come back through this mode character for
     /// character.
     ///
-    /// A mode that needs the third of those to be right is a mode to point back at
+    /// A mode that cannot afford the merged sentences is a mode to point back at
     /// `gemma4:12b-it-qat` with `"api": "chat"`; both are still installed and both still work.
     public static let prompt = Mode(
         key: "prompt", name: "Prompt",
