@@ -617,6 +617,30 @@ history does not look like a bug.
 
 Every one is phrased so that a yes/no or a pick-one answers it.
 
+### Answered, 2026-09-01
+
+Louis handed the remaining calls over rather than answering them one by one ("tu es le chef
+d'orchestre… si tu as besoin de moi pour valider quoi que ce soit tu reviens vers moi"), so these are
+taken here and written down where the work can see them. Each is reversible; the two that were NOT
+taken are held back deliberately, because they are matters of taste and this user has shown he has
+opinions about them.
+
+| | Answer | Why it was taken rather than asked |
+|---|---|---|
+| **Q-B1** | **Yes** — `.regular` while the window is open, back to accessory when it closes. | It is what makes ⌘V and ⌘Z work in the mode-instructions and vocabulary fields; the alternative is a text editor you cannot paste into. Behind one function (D2), so a bad result at T1's eye-gate reverts in a line. |
+| **Q-B2** | **GRDB**, `exactVersion:`. | §5.3 already priced the alternative: ~200 lines of C-API wrapper and hand-written FTS5 triggers, written once, badly, by us. "Privilégier les solutions générales et simples" is his own rule and it points here. |
+| **Q-B3** | **Already answered by Louis on 2026-09-01** — audio 3 days, text 30 days. See the retention section at the end of this file; it was never open. |
+| **Q-NB1** | **Re-refine only.** | D12's recommendation. Re-transcribing needs the WAV, which after 3 days is gone — so the expensive variant is the one that stops working. |
+| **Q-NB3** | **`vocabulary.json` beside `modes/`.** | Consistency with the modes, and it stays editable in Zed. A vocabulary is tens of entries, not thousands; the searchability the database would buy has no use to serve. |
+| **Q-NB7** | **Left alone** (§5.5). | Their transcript exists nowhere, so a backfill produces rows with a date and no identity. |
+
+**Deliberately still open, to be put to Louis when T1 lands, together:** **Q-NB4** (the window's
+accent hue) and **Q-NB6** (light mode). Both are appearance, on the surface he will look at most, and
+lot 3 showed that guessing his visual taste costs a rebuild.
+
+**Still genuinely open and nobody's to take yet:** Q-NB2 (waveform scrubber) and Q-NB5 (per-mode icon
+field) — both wait until there is a pane to judge them in.
+
 **Blocking — T1 cannot finish without an answer**
 
 - **Q-B1 (yes/no).** While the window is open, should Murmure become a normal app — Dock icon,
