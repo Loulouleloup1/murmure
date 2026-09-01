@@ -94,9 +94,10 @@ final class NotchController {
     private var transition: Task<Void, Never>?
 
     /// `levels` is the box the recorder fills; the card samples it while a dictation records.
+    /// `progress` is the box the decoder advances; the card samples that while one transcribes.
     /// Handed in rather than made here because the recorder needs the same one.
-    init(levels: AudioLevels) {
-        let model = NotchModel(levels: levels)
+    init(levels: AudioLevels, progress: DecodeProgressBox) {
+        let model = NotchModel(levels: levels, progress: progress)
         self.model = model
         notch = DynamicNotch(
             // Empty rather than `[.keepVisible, .increaseShadow]`, because the panel below ignores
@@ -279,8 +280,13 @@ final class NotchModel: ObservableObject {
     /// while nothing is being drawn costs nothing at all.
     let levels: AudioLevels
 
-    init(levels: AudioLevels) {
+    /// The transcription's progress, pulled by the drawing for the same reason and on the same
+    /// terms as `levels`: it moves on somebody else's schedule and no view should be rebuilt by it.
+    let progress: DecodeProgressBox
+
+    init(levels: AudioLevels, progress: DecodeProgressBox) {
         self.levels = levels
+        self.progress = progress
     }
 
     /// The notch is now showing this. The one mutation on this object, so that the phase and the
@@ -444,6 +450,7 @@ struct NotchCardView: View {
                 ForEach(Array(0..<pieces), id: \.self) { index in
                     DictationPhaseView(
                         phase: phase, markBegan: model.markBegan, levels: model.levels,
+                        progress: model.progress,
                         // The second piece is the mirrored one. A lone piece is never mirrored:
                         // one waveform reads oldest to newest, left to right, the way every other
                         // meter and every reading eye does.

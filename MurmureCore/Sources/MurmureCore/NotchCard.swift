@@ -108,30 +108,33 @@ public enum NotchCard {
     /// The width of ONE piece of the drawing -- the whole row when the phase draws a single one,
     /// one of the two mirrored halves otherwise.
     ///
-    /// Four answers:
+    /// Two answers, and the second one is **derived from `drawingPieces(for:)` rather than listed
+    /// beside it**:
     ///
-    /// - **The recording takes the whole row**, as one waveform. Nothing is split and nothing is
-    ///   mirrored, so there is no join to collide at.
     /// - **The silence and the refinement take a fraction each**, for the two reasons their own
     ///   constants give.
-    /// - **Everything else takes half the row.** The sweep of a transcription, the fill of a
-    ///   completion and the bar of a failure are all drawn at the same width, which is what lets
-    ///   the crossfade between them change what is drawn without changing where it is -- the same
-    ///   argument `NotchAppearance.mark(for:)` makes for `transcribing` and `inserting` sharing a
-    ///   family.
+    /// - **Everything else divides the row by however many pieces it is drawn from.** A phase that
+    ///   draws one takes the whole row; a mirrored pair takes half each. The fill of a completion
+    ///   and the bar of a failure are therefore still the same width as each other, which is what
+    ///   lets the crossfade between them change what is drawn without changing where it is.
+    ///
+    /// **It used to enumerate the phases, and that let the two functions disagree.** `.recording`
+    /// was written here as the whole row while every other phase was written as a half; when the
+    /// transcription became a single row too, `drawingPieces` said one and this still said half,
+    /// so the card would have drawn one sweep across the left half and left the right half empty.
+    /// A test caught it, and the fix is to make the disagreement unrepresentable rather than to add
+    /// a third phase to the list.
     ///
     /// Together with `drawingPieces(for:)` this never exceeds the content width.
     public static func drawingPieceWidth(for phase: NotchPhase, contentWidth: Double) -> Double {
         let content = max(0, contentWidth)
         switch phase {
-        case .recording:
-            return content
         case .nothingHeard:
             return content * silentHalfFraction
         case .refining:
             return content * refiningHalfFraction
-        case .hidden, .transcribing, .inserting, .completed, .failed, .alert:
-            return content / 2
+        default:
+            return content / Double(drawingPieces(for: phase))
         }
     }
 

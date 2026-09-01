@@ -52,12 +52,12 @@ final class DictationController {
         // Built at launch and never rebuilt; see `NotchController`. No window exists yet -- idle
         // costs zero pixels -- so this is a `DynamicNotch` object and a screen-parameters
         // observer, nothing on screen.
-        let notch = NotchController(levels: levels)
+        let notch = NotchController(levels: levels, progress: transcriptionProgress)
         self.notch = notch
 
         // A local for the same reason `notch` is one: the state-change closure below captures
         // these directly, so it never has to reach back through `self`.
-        let statusPanel = StatusPanelController(levels: levels)
+        let statusPanel = StatusPanelController(levels: levels, progress: transcriptionProgress)
         self.statusPanel = statusPanel
 
         // Task 6 made `onClipboardOutcome` a REQUIRED init parameter with no default, precisely so

@@ -61,14 +61,22 @@ final class NotchAppearanceTests: XCTestCase {
 
     // MARK: - Whether the drawing is mirrored
 
-    /// **The waveform is the only mark that is data over time, and the only one drawn once.**
-    /// Mirroring it drew the newest level twice, against the join, on both sides -- and made every
-    /// peak appear in the middle and travel outward in both directions, which is the ripple Louis
-    /// asked three times to be rid of. A mark that is not data -- a dot, a pulse, a tick -- has no
-    /// direction to read, so its symmetry is a shape rather than a claim about time.
-    func testOnlyTheWaveformIsDrawnAsASingleUnmirroredRun() {
+    /// **A mark that carries a position in time is drawn once; an ornament keeps its pair.**
+    ///
+    /// The waveform was the first case: mirroring it drew the newest level twice, against the
+    /// join, on both sides -- and made every peak appear in the middle and travel outward in both
+    /// directions, which is the ripple Louis asked three times to be rid of.
+    ///
+    /// **`travelling` was asserted here as mirrored one commit ago, and this assertion is
+    /// deliberately reversed rather than adjusted**, because the behaviour it described genuinely
+    /// changed: the sweep now carries a decoded fraction underneath it, and a fraction mirrored is
+    /// one progress bar drawn as two half-length bars growing out of the centre. The rest keep
+    /// their pair -- a dot, a breath, a tick have no direction to read, so their symmetry is a
+    /// shape rather than a claim about time.
+    func testOnlyATimelineIsDrawnAsASingleUnmirroredRun() {
         XCTAssertFalse(NotchAppearance.isMirrored(.waveform))
-        for mark in [NotchAppearance.Mark.none, .travelling, .pulsing, .success, .quiet, .warning] {
+        XCTAssertFalse(NotchAppearance.isMirrored(.travelling))
+        for mark in [NotchAppearance.Mark.none, .pulsing, .success, .quiet, .warning] {
             XCTAssertTrue(NotchAppearance.isMirrored(mark), "\(mark) must stay mirrored")
         }
     }
@@ -77,10 +85,11 @@ final class NotchAppearanceTests: XCTestCase {
     /// answer and the two surfaces cannot disagree about a phase either.
     func testAPhaseInheritsTheAnswerFromItsMark() {
         XCTAssertFalse(NotchAppearance.isMirrored(for: .recording))
-        XCTAssertTrue(NotchAppearance.isMirrored(for: .transcribing))
+        XCTAssertFalse(NotchAppearance.isMirrored(for: .transcribing))
         XCTAssertEqual(
             NotchAppearance.isMirrored(for: .inserting),
             NotchAppearance.isMirrored(for: .transcribing))
+        XCTAssertTrue(NotchAppearance.isMirrored(for: .refining))
         XCTAssertTrue(NotchAppearance.isMirrored(for: .completed(insertedCharacters: 4)))
         XCTAssertTrue(NotchAppearance.isMirrored(for: .nothingHeard))
     }
@@ -110,25 +119,29 @@ final class NotchAppearanceTests: XCTestCase {
 
     // MARK: - transcribing, the travelling mark
 
-    /// It leaves the cutout and runs outwards, in that order. Reversed, the notch would look like
-    /// it was swallowing something during the phase where it is producing one.
-    func testTheMarkTravelsFromTheCutoutOutwards() {
-        let early = NotchAppearance.markDistanceOutward(
+    /// It runs from the leading edge to the trailing one, in that order. Reversed, the surface
+    /// would look like it was swallowing something during the phase where it is producing one.
+    ///
+    /// (The mark used to leave the cutout and run outward on two mirrored halves. This assertion
+    /// is unchanged by that: the ramp is the same ramp, and what moved is which edge 0 names.)
+    func testTheMarkTravelsFromTheLeadingEdgeToTheTrailingOne() {
+        let early = NotchAppearance.markDistanceAlong(
             elapsed: NotchAppearance.travelPeriod * 0.25)
-        let late = NotchAppearance.markDistanceOutward(
+        let late = NotchAppearance.markDistanceAlong(
             elapsed: NotchAppearance.travelPeriod * 0.75)
         XCTAssertLessThan(early, late)
     }
 
     /// The mark is teleported from the far end back to the near one at the end of every cycle.
-    /// The only thing that keeps that from being seen is that it is entirely outside the wing at
+    /// The only thing that keeps that from being seen is that it is entirely outside the row at
     /// both instants -- so both ends are asserted with the mark's own length taken into account,
-    /// not just its centre.
-    func testTheMarkIsCompletelyOutOfTheWingAtBothEndsOfItsCycle() {
+    /// not just its centre. This is also what bounds `markWidth`: widening the mark past twice the
+    /// overhang makes the wrap visible, and this fails.
+    func testTheMarkIsCompletelyOutOfTheRowAtBothEndsOfItsCycle() {
         let half = NotchAppearance.markWidth / 2
-        let atStart = NotchAppearance.markDistanceOutward(elapsed: 0)
+        let atStart = NotchAppearance.markDistanceAlong(elapsed: 0)
         XCTAssertLessThanOrEqual(atStart + half, 0, "the mark is still visible when it wraps back")
-        let atEnd = NotchAppearance.markDistanceOutward(
+        let atEnd = NotchAppearance.markDistanceAlong(
             elapsed: NotchAppearance.travelPeriod * 0.9999)
         XCTAssertGreaterThanOrEqual(
             atEnd - half, 1, "the mark is still visible when it is teleported away")
@@ -138,8 +151,8 @@ final class NotchAppearanceTests: XCTestCase {
     /// whole message of this phase is "something is still happening".
     func testTheSweepRepeatsEveryPeriod() {
         XCTAssertEqual(
-            NotchAppearance.markDistanceOutward(elapsed: 0.2),
-            NotchAppearance.markDistanceOutward(
+            NotchAppearance.markDistanceAlong(elapsed: 0.2),
+            NotchAppearance.markDistanceAlong(
                 elapsed: 0.2 + NotchAppearance.travelPeriod * 3),
             accuracy: 1e-9)
     }
@@ -151,9 +164,77 @@ final class NotchAppearanceTests: XCTestCase {
         // -3.5 rather than a whole number of periods on purpose: a negative elapsed that happens to
         // be a whole cycle wraps to the start anyway, and would pass with no clamp at all.
         XCTAssertEqual(
-            NotchAppearance.markDistanceOutward(elapsed: -3.5),
-            NotchAppearance.markDistanceOutward(elapsed: 0),
+            NotchAppearance.markDistanceAlong(elapsed: -3.5),
+            NotchAppearance.markDistanceAlong(elapsed: 0),
             accuracy: 1e-12)
+    }
+
+    // MARK: - The decoded fraction, and when there is one to draw
+
+    /// **Nothing measured, nothing drawn.** Half of Louis's dictations fit in one 30 s decoding
+    /// window and produce zero updates, and a bar sitting at zero for that whole wait says the
+    /// work has not started when it is in fact nearly done.
+    func testADictationThatMeasuredNothingDrawsNoBarAtAll() {
+        XCTAssertNil(NotchAppearance.progressFill(for: .travelling, progress: nil))
+        XCTAssertNil(NotchAppearance.progressFill(for: .travelling, progress: DecodeProgress()))
+    }
+
+    /// **The boundary, in both directions.** One real advance is the whole difference between the
+    /// two regimes, so it is asserted either side of that single step.
+    func testOneRealAdvanceIsWhatBringsTheBarOut() {
+        var progress = DecodeProgress()
+        progress.observe(0)
+        XCTAssertEqual(progress.steps, 0, "zero is not an advance on zero")
+        XCTAssertNil(NotchAppearance.progressFill(for: .travelling, progress: progress))
+
+        progress.observe(0.25)
+        XCTAssertEqual(progress.steps, 1)
+        XCTAssertEqual(
+            NotchAppearance.progressFill(for: .travelling, progress: progress), 0.25)
+    }
+
+    /// **A short dictation still draws nothing after it has succeeded**, which is the case that
+    /// makes `finish()` deliberately not count as a step. Without this the last frame of every
+    /// short dictation would be a bar flashing from empty to full.
+    func testSucceedingDoesNotConjureABarOntoADictationThatMeasuredNothing() {
+        var progress = DecodeProgress()
+        progress.finish()
+        XCTAssertEqual(progress.fraction, 1)
+        XCTAssertNil(NotchAppearance.progressFill(for: .travelling, progress: progress))
+    }
+
+    /// A bar is never drawn empty, and it cannot be: `observe` counts only a strict advance, so
+    /// having a step at all means having a fraction above zero. Swept across the range rather than
+    /// asserted at one point, because the claim is about every value the type can reach.
+    func testABarThatIsDrawnIsNeverDrawnEmpty() {
+        for raw in stride(from: 0.0, through: 1.5, by: 0.01) {
+            var progress = DecodeProgress()
+            progress.observe(raw)
+            guard let fill = NotchAppearance.progressFill(for: .travelling, progress: progress)
+            else { continue }
+            XCTAssertGreaterThan(fill, 0, "drawn at \(raw)")
+            XCTAssertLessThanOrEqual(fill, 1)
+        }
+    }
+
+    /// The fraction outlives the transcription -- it is still 1 while the completion is on screen
+    /// -- so every other mark has to refuse it, or a finished dictation would show a full
+    /// transcription bar underneath its green.
+    func testNoOtherMarkWillDrawTheBar() {
+        var progress = DecodeProgress()
+        progress.observe(0.5)
+        for mark in [NotchAppearance.Mark.none, .waveform, .pulsing, .success, .quiet, .warning] {
+            XCTAssertNil(
+                NotchAppearance.progressFill(for: mark, progress: progress),
+                "\(mark) must not draw a transcription's bar")
+        }
+    }
+
+    /// The settle has to finish before the next measurement can land, or the bar lags the truth by
+    /// a growing amount. 0.66 s is the shortest gap between two real updates, measured.
+    func testTheFillSettlesFasterThanMeasurementsArrive() {
+        XCTAssertLessThan(NotchAppearance.progressSettle, 0.66)
+        XCTAssertGreaterThan(NotchAppearance.progressSettle, 0, "an instant jump is a teleport")
     }
 
     // MARK: - refining, the breath

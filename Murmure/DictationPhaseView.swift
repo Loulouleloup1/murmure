@@ -44,6 +44,15 @@ struct DictationPhaseView: View {
     /// is the only phase that is a result rather than a progress report.
     static let fillHeight: CGFloat = 7
 
+    /// How bright the decoded-so-far bar is, against the 0.9 of the mark sweeping over it.
+    ///
+    /// **Arbitrary in its digit, ordered on purpose.** It has to stay below the sweep's, or the
+    /// mark vanishes into the region it has already crossed and the drawing stops saying that
+    /// anything is still happening -- which is the one thing it has to say on the dictations where
+    /// the fill barely moves. Dimmer, the two read as what they are: a quiet record of ground
+    /// covered, and a bright thing still moving over it.
+    static let progressFillOpacity: Double = 0.5
+
 
     /// How often the waveform samples the level box. It is a PULL -- nothing about the audio
     /// thread's rate reaches this timeline, and a frame missed here is a bar not drawn, never a
@@ -136,17 +145,26 @@ struct DictationPhaseView: View {
     /// The waveform's levels, sampled while a dictation records.
     let levels: AudioLevels
 
+    /// How far the transcription has got, pulled while one is running.
+    ///
+    /// `levels`'s shape and for `levels`'s reason: one box, written by whoever is working and read
+    /// by whoever is drawing, never `@Published`. Not optional, so that a surface added later
+    /// cannot quietly draw a transcription with no way of saying how far along it is -- the
+    /// compiler asks, rather than this comment.
+    let progress: DecodeProgressBox
+
     /// This half runs outward to the **right**; `false` runs outward to the left.
     ///
     /// It exists because the drawing used to live on either side of a hardware cutout: two wings,
     /// each other's reflection, everything moving away from the notch. The floating panel draws
     /// the same pair side by side, running outward from its own centre.
     ///
-    /// **A container drawing ONE piece passes `false`**, and the notch card does exactly that for
-    /// a recording. Mirroring a waveform means drawing the same instant twice, once on each side
-    /// of the join, which is a duplication rather than a symmetry -- see
-    /// `NotchCard.isMirroredPair(for:)`. Unmirrored, the bars read oldest to newest, left to
-    /// right, the way every other meter and every reading eye does.
+    /// **A container drawing ONE piece passes `false`**, and both surfaces do exactly that for a
+    /// recording and for a transcription. Mirroring a waveform means drawing the same instant
+    /// twice, once on each side of the join, which is a duplication rather than a symmetry; a
+    /// transcription joined it once it had a fraction to fill in. `NotchAppearance.isMirrored(_:)`
+    /// is the single answer both surfaces ask. Unmirrored, a drawing reads left to right, the way
+    /// every other meter and every reading eye does.
     ///
     /// It also carries the elapsed counter (see `breath(at:)`), so a container drawing a single
     /// half of a REFINEMENT rather than a pair wants `true` instead.
@@ -237,21 +255,41 @@ struct DictationPhaseView: View {
         .animation(.linear(duration: Self.levelCarry), value: shown)
     }
 
-    /// The transcription -- and the insertion behind it: a mark leaving the inner edge and running
-    /// to the outer one, over and over.
+    /// The transcription -- and the insertion behind it: a mark crossing the row from left to
+    /// right, over and over, with the audio already decoded filling in behind it.
     ///
-    /// The distance runs outward and is the same number on both halves. Turning it into an
-    /// x-offset is the only line in this view that knows which half it is: the left half's inner
-    /// edge is its right, the right half's is its left.
+    /// **Two layers, and only the lower one is ever absent.** The sweep runs from the first frame
+    /// of the phase to the last whatever the decoder reports, so it is what a short dictation
+    /// draws, unchanged, for the half-second it lasts. The fill appears underneath it only once
+    /// something has genuinely been measured -- `NotchAppearance.progressFill(for:progress:)` owns
+    /// that rule and the reasoning behind it. There is no moment where one drawing is swapped for
+    /// another, which is what stops the boundary between the two regimes being a glitch.
+    ///
+    /// `mirrored` is deliberately not read here. A travelling mark is never a mirrored pair any
+    /// more (`NotchAppearance.isMirrored(_:)`), so there is no second half whose reflection this
+    /// would have to be, and one direction -- leading edge to trailing edge, the way the waveform
+    /// before it and the fill beneath it both read -- is the only one in the row.
     private func travellingMark(at date: Date) -> some View {
-        let distance = NotchAppearance.markDistanceOutward(
-            elapsed: date.timeIntervalSince(markBegan))
-        return Capsule()
-            .fill(.white.opacity(0.9))
-            .frame(width: size.width * NotchAppearance.markWidth, height: Self.markHeight)
-            .offset(x: size.width * (mirrored ? distance - 0.5 : 0.5 - distance))
-            .frame(width: size.width, height: size.height)
-            .mask(Self.edgeFade)
+        let distance = NotchAppearance.markDistanceAlong(elapsed: date.timeIntervalSince(markBegan))
+        let fill = NotchAppearance.progressFill(for: .travelling, progress: progress.current())
+        return ZStack(alignment: .leading) {
+            if let fill {
+                Capsule()
+                    .fill(.white.opacity(Self.progressFillOpacity))
+                    // Never narrower than it is tall, for the reason a bar is never shorter than
+                    // it is wide: below that a capsule stops being a short bar and becomes a dot.
+                    .frame(
+                        width: max(Self.markHeight, size.width * fill), height: Self.markHeight)
+                    .animation(.easeOut(duration: NotchAppearance.progressSettle), value: fill)
+            }
+            Capsule()
+                .fill(.white.opacity(0.9))
+                .frame(width: size.width * NotchAppearance.markWidth, height: Self.markHeight)
+                .offset(x: size.width * (distance - 0.5))
+                .frame(width: size.width, height: size.height)
+                .mask(Self.edgeFade)
+        }
+        .frame(width: size.width, height: size.height)
     }
 
     /// The refinement: a bar breathing in the accent, and past the fifth second a counter in its

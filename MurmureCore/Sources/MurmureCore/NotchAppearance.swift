@@ -45,7 +45,8 @@ public enum NotchAppearance {
         case none
         /// The bars of lot 3 T3, heights following the microphone.
         case waveform
-        /// A short mark travelling from the inner edge of each half towards its outer one.
+        /// A short mark crossing the row from its leading edge to its trailing one, over and over,
+        /// with the fraction of audio already decoded filling in behind it once there is one.
         case travelling
         /// A bar breathing in the accent across the whole width, and after five seconds a counter.
         case pulsing
@@ -92,8 +93,8 @@ public enum NotchAppearance {
 
     /// Whether the phase's drawing is two mirrored pieces, or one.
     ///
-    /// **The waveform is one; everything else is two.** Every phase used to be a mirrored pair,
-    /// inherited from the wings: two drawings on either side of the hardware cutout, each running
+    /// **A drawing that reads as a timeline is one; an ornament is two.** Every phase used to be a
+    /// mirrored pair, inherited from the wings: two drawings on either side of the hardware cutout, each running
     /// outward from it. Once a surface draws them side by side with no cutout between them, that
     /// structure stops being a design and becomes a seam -- and for the waveform it is worse than
     /// a seam. Louis, having watched it on both surfaces:
@@ -102,19 +103,37 @@ public enum NotchAppearance {
     ///      l'eau. J'aimerais vraiment avoir une barre unique, parce que là je vois que c'est deux
     ///      choses différentes qui sont symétriques."
     ///
-    /// The rule the two cases divide on: **`waveform` is the only mark that is data over time.**
-    /// Each half drew the whole history, mirrored, so the newest level landed against the join on
-    /// both sides -- one instant drawn twice, side by side -- and a peak appeared in the middle and
-    /// travelled outward in both directions at once, which is what a ripple in water is. Mirroring
-    /// DATA duplicates it. Mirroring an ORNAMENT -- the travelling mark of a transcription leaving
-    /// the centre in both directions, the dim mark of a silence, the fill of a completion -- is
-    /// symmetry, and those keep their pair.
+    /// The rule the two cases divide on: **a mark that carries a position in time is drawn once.**
+    /// The waveform was the first case. Each half drew the whole history, mirrored, so the newest
+    /// level landed against the join on both sides -- one instant drawn twice, side by side -- and
+    /// a peak appeared in the middle and travelled outward in both directions at once, which is
+    /// what a ripple in water is. Mirroring DATA duplicates it. Mirroring an ORNAMENT -- the dim
+    /// mark of a silence, the breath of a refinement, the fill of a completion -- is symmetry, and
+    /// those keep their pair.
+    ///
+    /// **`travelling` is the second case, and it became one when it got a number.** It was mirrored
+    /// for a reason that no longer exists, and the reason was written down: a single mark crossing
+    /// left to right was rejected because "the cutout is 185 pt against a 32 pt wing, so a mark
+    /// crossing at constant speed would spend six wing-widths of every cycle invisible behind it".
+    /// There are no wings. The card is one continuous row with the cutout *inside* the shape, and
+    /// the panel never had a cutout at all, so the objection retired itself.
+    ///
+    /// What forces the question rather than merely allowing it is `progressFill`. A fraction of
+    /// audio decoded is data in exactly the sense the waveform is: mirroring it would draw one
+    /// progress bar as two half-length bars growing out of the centre, which is the "deux choses
+    /// différentes qui sont symétriques" Louis asked three times to be rid of -- re-introduced on a
+    /// brand-new element. And a fill that reads left-to-right underneath a sweep that reads
+    /// outward-from-the-centre is two directions in one row. So both are one row, both read the way
+    /// the waveform reads, and a dictation runs left to right from its first bar to its last.
     ///
     /// It is here, on the mark rather than on either surface, because it is not a property of a
     /// notch or a panel: it is a property of what is being drawn, and both surfaces have to reach
     /// the same answer or the same dictation reads as two different things on two displays.
     public static func isMirrored(_ mark: Mark) -> Bool {
-        mark != .waveform
+        switch mark {
+        case .waveform, .travelling: false
+        default: true
+        }
     }
 
     /// The same question asked of a phase.
@@ -133,8 +152,15 @@ public enum NotchAppearance {
     /// animation says "something just happened", not "something is still happening". Tune by use.
     public static let travelPeriod: TimeInterval = 1
 
-    /// The mark's length, as a fraction of the width of the half it travels across.
-    public static let markWidth: Double = 0.45
+    /// The mark's length, as a fraction of the row it travels across.
+    ///
+    /// **Arbitrary, and halved when the pair became one.** At 0.45 it was 45 % of a *half*, drawn
+    /// twice; keeping the digit while the row doubled would have put a single 153 pt slab across
+    /// the card's 340 pt, which is a bar sliding about rather than a mark passing. 0.3 restores
+    /// roughly the ink the pair carried, and buys a longer beat of empty surface between one pass
+    /// and the next -- `markOverhang` needs only to clear half of this, so the wrap gets more
+    /// margin rather than less. Louis's to move.
+    public static let markWidth: Double = 0.3
 
     /// How far past each end the mark's centre travels, as a fraction of the same width.
     ///
@@ -146,22 +172,74 @@ public enum NotchAppearance {
     /// passes rather than as a loop with a seam.
     public static let markOverhang: Double = 0.35
 
-    /// Where the mark's centre sits at this instant, as a fraction of one half's width measured
-    /// **from its inner edge outwards**: 0 is the inner edge, 1 the outer one.
+    /// Where the mark's centre sits at this instant, as a fraction of the row's width measured
+    /// **from the leading edge**: 0 is the left edge, 1 the right one.
     ///
-    /// One number for both halves, which is what makes them each other's reflection: the mark
-    /// leaves the middle on both sides at once and runs outwards, the way lot 3 T3's waveform is
-    /// already mirrored. In the notch the middle is the hardware cutout, and that is also why the
-    /// obvious alternative -- one mark travelling left to right across both wings -- was rejected:
-    /// the cutout is 185 pt against a 32 pt wing (`NotchController`, `NotchView.swift:32-34` at
-    /// tag 1.1.0), so a mark crossing at constant speed would spend six wing-widths of every cycle
-    /// invisible behind it, and the notch would look stopped for most of a transcription.
+    /// **It used to be measured outward from the centre**, one number driving two mirrored halves,
+    /// and the alternative now implemented was rejected in as many words: "the cutout is 185 pt
+    /// against a 32 pt wing, so a mark crossing at constant speed would spend six wing-widths of
+    /// every cycle invisible behind it". That was true of wings either side of a hardware cutout.
+    /// The card absorbed the cutout and the panel never had one, so a single pass now crosses
+    /// continuous surface for its whole length, and `isMirrored` explains why it must.
     ///
-    /// Negative values are the mark short of the inner edge, values past 1 are it beyond the outer
-    /// one; a surface draws neither, and does not need to know that.
-    public static func markDistanceOutward(elapsed: TimeInterval) -> Double {
+    /// The arithmetic did not change with the name -- the same 0…1 ramp with the same overhang at
+    /// both ends -- so every property already pinned about it still holds. What changed is which
+    /// edge 0 means.
+    ///
+    /// Negative values are the mark short of the leading edge, values past 1 are it beyond the
+    /// trailing one; a surface draws neither, and does not need to know that.
+    public static func markDistanceAlong(elapsed: TimeInterval) -> Double {
         -markOverhang + cyclicProgress(elapsed: elapsed, period: travelPeriod) * (1 + 2 * markOverhang)
     }
+
+    /// How much of the row the decoded fraction fills, or **nil for no bar at all**.
+    ///
+    /// **The whole design of the transcription drawing is in this optional**, because the number
+    /// behind it is honest for only about half of Louis's dictations and there is no way to know
+    /// in advance which half a given one is. WhisperKit decodes in 30 s windows and advances its
+    /// progress once per window, so audio that fits in a single window measures NOTHING: 0 updates
+    /// over the 0.43-0.60 s it takes. Across 1 469 real dictations the median is 29.7 s and 49.6 %
+    /// exceed 30 s, so both regimes are the common case, not one plus an edge.
+    ///
+    /// A determinate bar sitting at zero for the whole wait is worse than no bar: it says the work
+    /// has not started, when in fact it is nearly done. So the drawing does not commit up front and
+    /// does not guess from audio length -- it asks what has actually been observed. `steps` is that
+    /// question, and it is why `DecodeProgress.finish()` deliberately does not count as one: a
+    /// short dictation reaches `fraction == 1` on success and must still draw no bar, or every
+    /// short dictation would end with a bar flashing from empty to full in a single frame.
+    ///
+    /// **There is no switch between the two regimes, which is what keeps the boundary from being a
+    /// glitch.** The sweep runs identically either way, from the first frame to the last; the fill
+    /// is an addition underneath it, not a replacement for it. A short dictation is simply the case
+    /// where the addition never happens, and it draws exactly what it drew before this existed. A
+    /// long one grows a bar beneath a mark that never stopped moving -- and it appears at the
+    /// fraction actually reached, a third of the way along for a 90 s dictation, so it reads as
+    /// having been under way rather than as starting over.
+    ///
+    /// Returning nil rather than 0 is what makes those two states different at the type level, and
+    /// they can never be confused: `observe` only counts a STRICT advance, so `steps >= 1` implies
+    /// `fraction > 0` and a bar is never drawn empty.
+    ///
+    /// The mark is asked for as well as the progress so that no other phase can show a stale bar:
+    /// the fraction outlives the transcription -- it is still 1 while `completed` is on screen --
+    /// and only `travelling` has any business drawing it.
+    public static func progressFill(for mark: Mark, progress: DecodeProgress?) -> Double? {
+        guard mark == .travelling, let progress, progress.steps > 0 else { return nil }
+        return progress.fraction
+    }
+
+    /// How long the fill takes to travel from one measurement to the next.
+    ///
+    /// **Arbitrary in its digit, bounded by a measured one.** The bar advances in visible jumps --
+    /// a 90 s dictation is 3 windows, so a third of the row at a time -- and landing that instantly
+    /// reads as a teleport rather than as progress. Animating it says the same true thing with the
+    /// motion the eye expects.
+    ///
+    /// The ceiling is not taste: consecutive updates arrive 0.66-1.5 s apart (measured, the 478.9 s
+    /// recording), so a settle longer than the shortest gap would still be moving when the next
+    /// measurement lands and the bar would lag the truth by a growing amount. 0.3 s leaves better
+    /// than a factor of two.
+    public static let progressSettle: TimeInterval = 0.3
 
     // MARK: - refining: a breath, not a journey
 

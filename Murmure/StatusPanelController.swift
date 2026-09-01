@@ -60,10 +60,11 @@ final class StatusPanelController {
     private var retraction: Task<Void, Never>?
 
     /// `levels` is the box the recorder fills; the drawing samples it while a dictation records.
+    /// `progress` is the box the decoder advances, sampled while one transcribes.
     /// Handed in rather than made here for the reason `NotchController` is handed the same one --
     /// a second box would be a waveform of a recording nobody is making.
-    init(levels: AudioLevels) {
-        model = StatusPanelModel(levels: levels)
+    init(levels: AudioLevels, progress: DecodeProgressBox) {
+        model = StatusPanelModel(levels: levels, progress: progress)
     }
 
     /// The session changed state. The only entry point.
@@ -322,8 +323,12 @@ final class StatusPanelModel: ObservableObject {
     /// The drawing PULLS from it on a timeline of its own instead.
     let levels: AudioLevels
 
-    init(levels: AudioLevels) {
+    /// The transcription's progress, pulled by the drawing on the same terms as `levels`.
+    let progress: DecodeProgressBox
+
+    init(levels: AudioLevels, progress: DecodeProgressBox) {
         self.levels = levels
+        self.progress = progress
     }
 
     /// The panel is now showing this. The one mutation, so the phase and the clock its drawing
@@ -376,6 +381,7 @@ private struct StatusPanelView: View {
                 ForEach(Array(0..<pieces), id: \.self) { index in
                     DictationPhaseView(
                         phase: model.phase, markBegan: model.markBegan, levels: model.levels,
+                        progress: model.progress,
                         // The second piece is the mirrored one, and it also carries the elapsed
                         // counter on a refinement. A lone piece is never mirrored: one waveform
                         // reads oldest to newest, left to right.

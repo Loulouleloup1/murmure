@@ -56,12 +56,44 @@ final class NotchCardTests: XCTestCase {
             accuracy: 0.0001)
     }
 
-    /// And it is the only one. Mirroring *data* duplicates it; mirroring an *ornament* -- a mark
-    /// leaving the centre in both directions, a fill spanning the row -- is symmetry, and every
-    /// other phase keeps its pair.
-    func testEveryOtherPhaseKeepsItsMirroredPair() {
-        for phase in everyPhase where !isRecording(phase) {
+    /// **The transcription joined it, and this assertion is reversed for those two phases rather
+    /// than adjusted around them.** It said every phase but the recording was a pair, and that was
+    /// true of a sweep with nothing underneath it. A transcription now fills in the audio it has
+    /// decoded, and a fraction mirrored is one progress bar drawn as two half-length bars growing
+    /// out of the centre -- the same duplication the recording was rescued from.
+    ///
+    /// The rule the split follows is unchanged and is what decides both: mirroring *data*
+    /// duplicates it, mirroring an *ornament* -- a breath, a dim dash, the fill of a completion --
+    /// is symmetry. What changed is which side of that line a transcription falls on.
+    func testOnlyTheTimelinePhasesAreASingleDrawing() {
+        for phase in everyPhase where !isRecording(phase) && !isTranscribing(phase) {
             XCTAssertEqual(NotchCard.drawingPieces(for: phase), 2, "\(phase) must be two pieces")
+        }
+    }
+
+    /// **The two functions cannot disagree, for any phase.** This is the regression the test below
+    /// it found: `drawingPieces` had been changed to say a transcription is one row while
+    /// `drawingPieceWidth` still enumerated it among the halves, which would have drawn a single
+    /// sweep across the left half of the card and left the right half black.
+    func testAPhaseDrawnAsOnePieceGetsTheWholeRow() {
+        for phase in everyPhase where NotchCard.drawingPieces(for: phase) == 1 {
+            XCTAssertEqual(
+                NotchCard.drawingPieceWidth(for: phase, contentWidth: contentWidth),
+                contentWidth,
+                accuracy: 0.0001,
+                "\(phase) draws one piece, so that piece is the row")
+        }
+    }
+
+    /// The transcription and the insertion behind it are one drawing across the whole card, for
+    /// the same reason the recording is and reading in the same direction.
+    func testTheTranscriptionIsASingleDrawingAcrossTheWholeCard() {
+        for phase in [NotchPhase.transcribing, .inserting] {
+            XCTAssertEqual(NotchCard.drawingPieces(for: phase), 1, "\(phase)")
+            XCTAssertEqual(
+                NotchCard.drawingPieceWidth(for: phase, contentWidth: contentWidth),
+                contentWidth,
+                accuracy: 0.0001)
         }
     }
 
@@ -78,17 +110,22 @@ final class NotchCardTests: XCTestCase {
         }
     }
 
-    /// Everything that is not a recording, a silence or a refinement is drawn at the same half,
-    /// which is what lets a sweep become a completion without the drawing changing where it is.
-    func testEverySteadyPhaseIsDrawnAtTheSameHalf() {
-        let half = contentWidth / 2
-        for phase in everyPhase
-        where !isRecording(phase) && !isRefining(phase) && !isNothingHeard(phase) {
+    /// Everything that is not a silence or a refinement spans the same full row, which is what
+    /// lets a sweep become a completion without the drawing changing where it is.
+    ///
+    /// **This asserted the per-piece width and now asserts the total**, because the per-piece
+    /// width stopped being the thing the claim was ever about. A transcription draws one piece of
+    /// 340 and a completion two mirrored pieces of 170; side by side those cover the same 340 pt,
+    /// so the crossfade between them still changes what is drawn and not where -- which is the
+    /// sentence above, unchanged. The recording is no longer excluded, because measured this way
+    /// it always satisfied the rule too: it was excluded for being a single piece, not for being
+    /// drawn anywhere else.
+    func testEverySteadyPhaseSpansTheSameFullRow() {
+        for phase in everyPhase where !isRefining(phase) && !isNothingHeard(phase) {
+            let total = Double(NotchCard.drawingPieces(for: phase))
+                * NotchCard.drawingPieceWidth(for: phase, contentWidth: contentWidth)
             XCTAssertEqual(
-                NotchCard.drawingPieceWidth(for: phase, contentWidth: contentWidth),
-                half,
-                accuracy: 0.0001,
-                "\(phase) must be drawn at the half")
+                total, contentWidth, accuracy: 0.0001, "\(phase) must span the row")
         }
     }
 
@@ -232,6 +269,14 @@ final class NotchCardTests: XCTestCase {
 
 private func isRecording(_ phase: NotchPhase) -> Bool {
     if case .recording = phase { true } else { false }
+}
+
+/// The two phases that share the travelling mark, and therefore share its single row.
+private func isTranscribing(_ phase: NotchPhase) -> Bool {
+    switch phase {
+    case .transcribing, .inserting: true
+    default: false
+    }
 }
 
 private func isRefining(_ phase: NotchPhase) -> Bool {
