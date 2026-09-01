@@ -44,6 +44,11 @@ struct MurmureApp: App {
     /// struct is re-created, and a plain stored object would be a new controller each time.
     @StateObject private var windowController: WindowController
 
+    /// History's state: the query, the rows, the selection. A `StateObject` for the same reason
+    /// the window controller is one — an `App` struct is re-created, and a plain stored object
+    /// would throw away Louis's search every time SwiftUI rebuilt the scene.
+    @StateObject private var historyModel: HistoryPaneModel
+
     init() {
         // Named once, here, and handed to both. `AppState` takes it for the reason its own init
         // gives -- a test must never write into the preferences of the application Louis is using
@@ -79,7 +84,18 @@ struct MurmureApp: App {
         // wrapper here (reading a `@StateObject` from `init` is unsupported).
         _appState = StateObject(wrappedValue: state)
         _windowController = StateObject(wrappedValue: WindowController(defaults: defaults))
-        controller = DictationController(appState: state)
+        let controller = DictationController(appState: state)
+        self.controller = controller
+        // The archive is opened once, by the controller, and READ here (§5.4 rule 3): one
+        // connection, one place that knows the real path. A second `HistoryStore` on the same
+        // file would be a second migration runner against Louis's own archive.
+        _historyModel = StateObject(
+            wrappedValue: HistoryPaneModel(
+                store: controller.history,
+                recordings: controller.recordingsDirectory,
+                reRefine: { transcript, mode in
+                    await controller.reRefine(transcript, with: mode)
+                }))
     }
 
     var body: some Scene {
@@ -178,7 +194,7 @@ struct MurmureApp: App {
         // Named for the application rather than "Settings", because five of its six sections are
         // settings and the sixth -- History -- is the reason it gets opened (D3).
         Window("Murmure", id: WindowController.windowID) {
-            MainWindowView(controller: windowController)
+            MainWindowView(controller: windowController, history: historyModel)
                 .environmentObject(appState)
         }
         .defaultSize(

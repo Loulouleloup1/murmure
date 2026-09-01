@@ -45,6 +45,11 @@ public enum WindowRole: String, CaseIterable, Sendable {
     /// The ground of the sidebar. Distinct from the pane so the split reads without a rule
     /// between the two.
     case sidebarBackground
+    /// The ground of anything laid ON the pane: a history row, the search field's chip, the
+    /// panel a transcript is read on. One role rather than three, because they are one idea —
+    /// a surface lifted off the pane — and three tokens with the same value are three values that
+    /// can drift.
+    case cardBackground
     /// The line closing the section header (plan §2.3). Deliberately faint — see `hairlineWidth`.
     case hairline
     /// Text that is being read.
@@ -79,6 +84,10 @@ public enum WindowPalette {
         // black because it is drawn on a hardware cutout that already is; a window is not.
         case .paneBackground: .grey(0.13)
         case .sidebarBackground: .grey(0.09)
+        // Lifted off the pane by the same distance the installed app lifts its history cards
+        // (design notes §1.3 measured `#4B4B4B` on a `#3C3C3C` pane), applied to Murmure's own
+        // darker ground rather than copied as a value.
+        case .cardBackground: .grey(0.20)
         // Drawn *through*, so this is one value that works on either ground above.
         case .hairline: .grey(1, opacity: 0.10)
         case .primaryText: .grey(0.97)

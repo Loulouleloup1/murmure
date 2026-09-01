@@ -62,6 +62,11 @@ final class WindowPaletteTests: XCTestCase {
             (.primaryText, .sidebarBackground),
             (.secondaryText, .sidebarBackground),
             (.primaryText, .selection),
+            // The history row's two lines, and the transcript in the detail pane. A card is the
+            // one surface in this window that carries a paragraph, so a mark that disappeared
+            // into it would take the whole of History with it.
+            (.primaryText, .cardBackground),
+            (.secondaryText, .cardBackground),
             (.materialGlyph, .materialTile),
             (.machineryGlyph, .machineryTile),
         ]
@@ -93,6 +98,16 @@ final class WindowPaletteTests: XCTestCase {
                 - WindowPalette.token(for: .paneBackground).brightness)
         XCTAssertGreaterThan(separation, 0.02)
         XCTAssertLessThan(separation, 0.15)
+    }
+
+    /// A card has to read as lifted off the pane it sits on, and it must not be brighter than the
+    /// text it carries -- which is the failure a card drawn "so it stands out" walks into.
+    func testACardReadsAsRaisedOffThePaneWithoutCompetingWithItsText() {
+        let card = WindowPalette.token(for: .cardBackground).brightness
+        let pane = WindowPalette.token(for: .paneBackground).brightness
+        XCTAssertGreaterThan(card, pane, "a card must be lifted off the pane, not sunk into it")
+        XCTAssertGreaterThan(card - pane, 0.03, "the lift has to be visible without a rule")
+        XCTAssertLessThan(card, WindowPalette.token(for: .primaryText).brightness)
     }
 
     // MARK: - One visual language

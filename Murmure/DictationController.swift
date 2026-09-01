@@ -45,6 +45,14 @@ final class DictationController {
     /// Nil when Application Support could not be reached at all; see `init`. Kept so the menu can
     /// re-read the folder without a restart.
     private let modesDirectory: URL?
+    /// The archive, opened once here (§5.4 rule 3) and read by two things: the session, which
+    /// writes a row per dictation, and the History pane, which is the reason the window exists.
+    /// Nil when it could not be opened -- a broken archive must not cost a dictation.
+    let history: HistoryStore?
+    /// Where the WAVs are. The PURE `Storage.url`, never `directory`: this is the path History
+    /// resolves a row's `audioFilename` against, and nothing about opening a window should create
+    /// a folder. `AudioRecorder` is what creates it, because it is what writes into it.
+    let recordingsDirectory = Storage.url(subfolder: "recordings")
     /// How far into the audio the transcription has got, for whatever draws the `.transcribing`
     /// phase to pull. Internal rather than private for exactly that reason: it is one box shared
     /// between the engine that advances it and the surface that reads it, the same arrangement as
@@ -190,6 +198,7 @@ final class DictationController {
             history = nil
             log.error("history unavailable: \(error.localizedDescription, privacy: .public)")
         }
+        self.history = history
 
         // The first dictation on a machine spends minutes inside `transcribe` fetching and loading
         // the model, and until now the session had no state for that and the surfaces no word: the
@@ -212,7 +221,7 @@ final class DictationController {
             transcriber: engine,
             inserter: inserter,
             refiner: ModeAwareRefinement(modesDirectory: modesDirectory, appState: appState),
-            recording: DictationArchive(store: history)
+            recording: DictationArchive(store: history, appState: appState)
         ) { state in
             Task { @MainActor in
                 // FIRST, ahead of every line below it, and that ordering is the feature. Louis
@@ -378,6 +387,33 @@ final class DictationController {
         }.loadAll()
     }
 
+    /// History's "Process again" (D12): a stored transcript, a mode, and the refinement that
+    /// comes back — **re-refine only, never re-transcribe.**
+    ///
+    /// Re-transcribing would need a WhisperKit model load, a progress surface and a reachable
+    /// engine driven from a window, which is `DictationController`'s whole surface area exported
+    /// into a view — and it needs the WAV, which the retention policy deletes after three days, so
+    /// the expensive variant is also the one that stops working.
+    ///
+    /// **Nothing is inserted.** This is the same `TranscriptRefiner` and the same `OllamaClient`
+    /// a dictation uses, and deliberately not the same reporting path: the notice comes back in
+    /// the return value for the pane to show beside the row it concerns, rather than going to
+    /// `AppState` where it would appear in the menu as though a dictation had just gone wrong.
+    ///
+    /// The elapsed time is measured here because it is the number the row then carries, and it is
+    /// wall-clock for the same reason `DictationSession`'s is: it is what Louis waited.
+    func reRefine(_ transcript: String, with mode: Mode) async -> HistoryPaneModel.ReRefinement {
+        let client = OllamaClient { [log] failure in
+            log.error("re-refinement failed: \(failure.description, privacy: .public)")
+        }
+        var notice: RefinementNotice?
+        let refiner = TranscriptRefiner(client: client) { notice = $0 }
+        let started = Date()
+        let text = await refiner.refine(transcript, with: mode)
+        return HistoryPaneModel.ReRefinement(
+            text: text, notice: notice, seconds: Date().timeIntervalSince(started))
+    }
+
     /// Menu action: paste the last transcript again — after an insertion failure, or into a second
     /// app. Reuses the session's own inserter; a second `PasteInserter` would be a second
     /// clipboard-outcome consumer.
@@ -444,10 +480,14 @@ private struct DictationArchive: DictationRecording {
     /// Nil when the database could not be opened; see `DictationController.init`. A dictation
     /// still runs, and still pastes -- it is simply not remembered.
     let store: HistoryStore?
+    /// Where "a row was written" is announced, so the History pane can re-read while the window
+    /// is open. Nothing else consumes it, and nothing about a dictation depends on it.
+    let appState: AppState
     private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "history")
 
-    init(store: HistoryStore?) {
+    init(store: HistoryStore?, appState: AppState) {
         self.store = store
+        self.appState = appState
     }
 
     /// On the main actor because `NSWorkspace` is read there, the same hop
@@ -479,6 +519,9 @@ private struct DictationArchive: DictationRecording {
         guard let store else { return }
         do {
             try store.insert(dictation)
+            // Only on a row that really landed: the pane re-reads the database, so announcing a
+            // write that threw would be asking it to find something that is not there.
+            await MainActor.run { appState.noteHistoryRow() }
         } catch {
             log.error("history row not written: \(error.localizedDescription, privacy: .public)")
         }

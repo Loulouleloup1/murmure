@@ -653,6 +653,54 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertThrowsError(try store.insert(voiceRecord(audioFilename: "../elsewhere.wav")))
     }
 
+    // MARK: - Update, which is what "Process again" writes back
+
+    /// D12's one edit to the archive: a re-refinement replaces the refined text **and** the mode
+    /// and model that produced it, because the metadata block describes the text on screen -- a
+    /// row that kept "Voice / no language model" beside a refined paragraph would be lying about
+    /// where that paragraph came from.
+    func testUpdatingARowRewritesItsRefinementAndTheModeThatProducedIt() throws {
+        let store = try makeStore()
+        var row = try store.insert(voiceRecord())
+
+        row.refinedText = "Il faut brancher le connecteur sur l'endpoint de staging."
+        row.modeKey = "prompt"
+        row.modeName = "Prompt"
+        row.llmModel = "s1-mini"
+        row.refinementSeconds = 0.4
+        XCTAssertTrue(try store.update(row))
+
+        let read = try XCTUnwrap(try store.record(id: XCTUnwrap(row.id)))
+        XCTAssertEqual(read, row)
+        XCTAssertEqual(read.rawTranscript,
+                       "il faut brancher le connecteur sur le endpoint de staging",
+                       "the raw transcript is not what a re-refinement rewrites")
+    }
+
+    /// The index follows, through the `synchronize` triggers the migration wrote. Without them a
+    /// re-refined dictation stays findable only by the words of the refinement it no longer has.
+    func testTheFullTextIndexFollowsAnUpdatedRow() throws {
+        let store = try makeStore()
+        var row = try store.insert(voiceRecord(refined: "Le déploiement est terminé."))
+
+        row.refinedText = "La migration est terminée."
+        XCTAssertTrue(try store.update(row))
+
+        XCTAssertEqual(try store.search("migration", limit: 10).count, 1)
+        XCTAssertEqual(try store.search("déploiement", limit: 10), [],
+                       "the old refinement must stop matching")
+    }
+
+    func testUpdatingARowThatIsNotThereWritesNothingAndSaysSo() throws {
+        let store = try makeStore()
+        var absent = voiceRecord()
+        absent.id = 404
+
+        XCTAssertFalse(try store.update(absent))
+        XCTAssertFalse(try store.update(voiceRecord()), "a record with no id was never inserted")
+        XCTAssertEqual(try store.page(limit: 10), [])
+    }
+
     // MARK: - Delete
 
     func testDeletingARowRemovesItAndReportsThatItDid() throws {

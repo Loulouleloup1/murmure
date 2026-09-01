@@ -123,6 +123,34 @@ public struct HistoryStore: Sendable {
         return inserted
     }
 
+    /// Writes one row back, by its id.
+    ///
+    /// The one edit the archive takes: "Process again" (D12) re-refines a stored transcript and
+    /// the row has to carry the result -- the new refined text, and the mode and the model that
+    /// produced it, or the metadata block would describe a refinement that is no longer the one
+    /// on screen.
+    ///
+    /// The whole row, not a set of columns, because a partial update is a second definition of
+    /// what a row is; the caller reads the record, changes what it means to change and hands it
+    /// back. The full-text index follows through the `synchronize` triggers the migration wrote,
+    /// which is what makes a re-refined dictation findable by a word only the new text contains.
+    ///
+    /// Throws `.audioFilenameNotRelative` on the same guard `insert` uses -- one door, one rule --
+    /// and returns whether a row with that id was there to write to. A record with no id at all is
+    /// a record that was never inserted, so there is nothing to update and it answers false.
+    @discardableResult
+    public func update(_ record: HistoryRecord) throws -> Bool {
+        guard let id = record.id else { return false }
+        if let name = record.audioFilename, !HistoryRecord.isSafeRelativeAudioFilename(name) {
+            throw HistoryStoreError.audioFilenameNotRelative(name)
+        }
+        return try dbQueue.write { db in
+            guard try HistoryRecord.exists(db, key: id) else { return false }
+            try record.update(db)
+            return true
+        }
+    }
+
     /// Removes one row. Returns whether there was one to remove.
     ///
     /// The WAV is left on disk: the caller reads `audioFilename` first if it wants the file gone.

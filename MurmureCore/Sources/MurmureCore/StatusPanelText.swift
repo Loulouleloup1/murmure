@@ -94,7 +94,13 @@ public enum StatusPanelText {
     /// A newline inside a strip 34 pt tall does not wrap, it pushes the rest of the sentence out
     /// of the panel, so the half of the message after the break would be invisible with no sign
     /// that it existed.
-    private static func oneLine(_ message: String) -> String {
+    ///
+    /// Visible to the package rather than private, because `HistoryRow.preview` has the identical
+    /// problem one lot later -- a transcript with newlines in a single-line row -- and the plan
+    /// asked for it to follow this rule rather than invent a second one. Two collapsing functions
+    /// that agreed today would be two that could stop agreeing, in the two places Murmure shows a
+    /// long text on one line.
+    static func oneLine(_ message: String) -> String {
         message.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 }

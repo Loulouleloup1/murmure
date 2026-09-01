@@ -10,6 +10,9 @@ import SwiftUI
 /// and what a section header is.
 struct MainWindowView: View {
     @ObservedObject var controller: WindowController
+    /// History's own state, built once in `MurmureApp` because it owns a database connection and
+    /// a search query that must survive the window being closed and reopened.
+    @ObservedObject var history: HistoryPaneModel
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
@@ -117,6 +120,12 @@ struct MainWindowView: View {
     /// transcribe-only mode, sparkles for a refining one.
     private var header: some View {
         HStack(spacing: 6) {
+            // For a LIST section the header *is* the search field (design notes §1.4), which is
+            // why History has no other place to put one and no page title above it. Models gets
+            // the same slot in T8.
+            if controller.section == .history {
+                HistorySearchField(text: $history.searchField)
+            }
             Spacer(minLength: 0)
             Image(systemName: appState.activeMode.llm.enabled ? "sparkles" : "mic.fill")
                 .font(.system(size: 11, weight: .semibold))
@@ -137,6 +146,7 @@ struct MainWindowView: View {
     @ViewBuilder
     private var pane: some View {
         switch controller.section {
+        case .history: HistoryPaneView(model: history)
         case .vocabulary: pasteProbePane
         // Empty on purpose. This task builds the frame; the contents are T5 through T9, and an
         // invented placeholder in each of five panes is five things to delete.

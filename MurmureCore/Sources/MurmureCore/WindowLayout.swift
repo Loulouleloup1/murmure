@@ -40,6 +40,16 @@ public enum WindowLayout {
     /// machinery colour split.
     public static let sidebarTileSize: CGFloat = 22
 
-    /// The chip tier of §2.3's three radii, and the only one this task draws.
+    /// The chip tier of §2.3's three radii, and the only one T1 drew.
     public static let chipCornerRadius: CGFloat = 5
+
+    /// The interactive-row tier of §2.3 (10–11 pt): a history row, and every list row after it.
+    ///
+    /// Arrived with T5, which is the first task to draw one — the note above says the other tiers
+    /// land with the panes that draw them, and this is that happening rather than a value being
+    /// added on spec.
+    public static let rowCornerRadius: CGFloat = 11
+
+    /// The large-surface tier of §2.3 (14–16 pt): the panel the detail pane's transcript sits on.
+    public static let surfaceCornerRadius: CGFloat = 14
 }

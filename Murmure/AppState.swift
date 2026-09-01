@@ -90,6 +90,19 @@ final class AppState: ObservableObject {
     /// and not a failure. Cleared when the next dictation starts.
     @Published var refinementNotice: String?
 
+    /// Bumped once per row actually written to `murmure.sqlite`, by `DictationArchive`.
+    ///
+    /// The History pane's cue to re-read, and it exists because the obvious cue does not work:
+    /// the archive is written **after** the session has already gone back to `.idle`
+    /// (`DictationSession.finishRecording`, where `complete()` transitions and the `archive` call
+    /// follows it), so a pane reloading on `.idle` would race the insert and show a list missing
+    /// the dictation that just ended. This ticks when there is genuinely something new to read.
+    @Published private(set) var historyRevision = 0
+
+    func noteHistoryRow() {
+        historyRevision &+= 1
+    }
+
     private let preference: ModePreference
 
     /// `defaults` is a parameter with the real domain as its default so the app stays a
