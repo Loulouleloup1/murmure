@@ -9,6 +9,13 @@ packages:
   WhisperKit:
     url: https://github.com/argmaxinc/WhisperKit
     from: "1.1.0"
+  # Pinned EXACTLY, not `from:`. The notch is the root component of Murmure's interface and the
+  # plan's whole no-jump argument is read off this tag's source (lot 3 §2/D1); a minor bump that
+  # changed `NotchView`'s masking or the compact/expanded defaults would move the interface
+  # without a line of Murmure changing. MIT, ~1 200 lines -- a fork is the escape hatch.
+  DynamicNotchKit:
+    url: https://github.com/MrKai77/DynamicNotchKit
+    exactVersion: "1.1.0"
 targets:
   Murmure:
     type: application
@@ -17,6 +24,7 @@ targets:
     dependencies:
       - package: MurmureCore
       - package: WhisperKit
+      - package: DynamicNotchKit
     settings:
       base:
         ENABLE_APP_SANDBOX: NO

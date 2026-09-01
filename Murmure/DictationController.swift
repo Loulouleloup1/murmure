@@ -15,6 +15,9 @@ final class DictationController {
     private let hotkeys = HotkeyManager()
     private let inserter: PasteInserter
     private let appState: AppState
+    /// The notch surface. Owned here because the only thing allowed to drive it is the session's
+    /// own state changes -- never the hotkey, which fires on presses the session then ignores.
+    private let notch: NotchController
     /// Nil when Application Support could not be reached at all; see `init`. Kept so the menu can
     /// re-read the folder without a restart.
     private let modesDirectory: URL?
@@ -22,6 +25,12 @@ final class DictationController {
 
     init(appState: AppState) {
         self.appState = appState
+
+        // Built at launch and never rebuilt; see `NotchController`. No window exists yet -- idle
+        // costs zero pixels -- so this is a `DynamicNotch` object and a screen-parameters
+        // observer, nothing on screen.
+        let notch = NotchController()
+        self.notch = notch
 
         // Task 6 made `onClipboardOutcome` a REQUIRED init parameter with no default, precisely so
         // this line cannot forget to decide. `PasteInserter()` no longer compiles.
@@ -109,6 +118,19 @@ final class DictationController {
                 case .refining: .refining
                 case .inserting: .inserting
                 case .failed: .failed
+                }
+                // The notch is driven from the same state changes as the menu, and from nothing
+                // else. Driving it from the hotkey instead would put a black band on screen for
+                // presses `DictationSession.toggle()` deliberately ignores -- a band with no
+                // dictation behind it.
+                //
+                // Task T1 shows it for the recording only: transcription, refinement and
+                // insertion retract it again, and giving each of them its own appearance is
+                // exactly what T2 and T4 do next.
+                if case .recording = state {
+                    notch.recordingStarted()
+                } else {
+                    notch.dictationEnded()
                 }
             }
         }
