@@ -12,7 +12,11 @@ private final class FakeRecorder: Recorder {
     /// Thrown by `start()`, standing in for a denied microphone or a busy device.
     var startError: Error?
     var lastFailure: Error?
+    /// How many recordings actually began. One is the whole point of the concurrency test below:
+    /// two would be two taps on one microphone.
+    private(set) var startCount = 0
     let frames: AVAudioFrameCount
+    private var isRecording = false
     private let url: URL
 
     init(frames: AVAudioFrameCount = 16_000) {
@@ -23,10 +27,17 @@ private final class FakeRecorder: Recorder {
 
     func start() throws {
         if let startError { throw startError }
+        // Mirrors the real `AudioRecorder.start()`'s `guard sink == nil else { throw
+        // .alreadyRecording }`. A fake that happily starts twice would let the concurrency test
+        // below assert something the device does not actually do.
+        guard !isRecording else { throw AlreadyRecording() }
+        isRecording = true
         started = true
+        startCount += 1
     }
 
     func stop() -> URL? {
+        isRecording = false
         if stopReturnsNil { return nil }
         if stopReturnsUnreadableFile {
             try! Data("not audio".utf8).write(to: url)
@@ -101,6 +112,13 @@ private final class SpyRefiner: DictationRefining, @unchecked Sendable {
 }
 
 private struct TestError: Error {}
+
+/// Stands in for `AudioRecorder.Failure.alreadyRecording`, which lives in the app target and
+/// cannot be imported here. `LocalizedError` so the message the session builds out of it is a
+/// stable string an assertion can pin, rather than Foundation's "error 1" boilerplate.
+private struct AlreadyRecording: LocalizedError {
+    var errorDescription: String? { "already recording" }
+}
 
 final class DictationSessionTests: XCTestCase {
     func testFullToggleCycleInsertsTranscriptAndReturnsToIdle() async {
@@ -399,6 +417,49 @@ final class DictationSessionTests: XCTestCase {
         XCTAssertEqual(refiner.calls.refined, [])
         XCTAssertEqual(inserter.inserted, [" \n \t "])
     }
+
+    /// The one window this lot opened. Resolving the mode is an `await` inside the branch lot 1
+    /// kept atomic, and `state` is still `.idle` all the way through it -- so a second press
+    /// landing inside is read as another START, not as a stop. `GatedRefiner` holds that window
+    /// open on purpose; in production it is only ever as wide as a read of four small files, and
+    /// the argument that a human cannot press twice inside it is a timing argument, not a lock.
+    ///
+    /// What must hold whatever the timing: exactly one recording, and a session that ends where
+    /// the press that started it meant to leave it -- `.recording`.
+    ///
+    /// The `.failed` in the asserted sequence is real and deliberately NOT fixed. The second press
+    /// is refused by the recorder, reports it, and the first press then overwrites it with
+    /// `.recording` when it resumes -- so the menu bar can show a failure flash before the
+    /// recording icon. It is benign, and pinning it here is what makes it a decision instead of a
+    /// surprise: the day someone reorders these lines, this assertion tells them what they moved.
+    func testASecondPressInsideTheModeResolutionCannotStartASecondRecording() async {
+        let states = StateLog()
+        let recorder = FakeRecorder()
+        let refiner = GatedRefiner()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("jamais atteint")),
+            inserter: SpyInserter(), refiner: refiner,
+            onStateChange: { states.append($0) }
+        )
+        async let firstPress: Void = session.toggle()
+        await refiner.waitUntilResolving() // the first press is parked inside the window
+
+        await session.toggle() // the second press, inside it
+
+        await refiner.finish()
+        await firstPress
+
+        let finalState = await session.state
+        XCTAssertEqual(finalState, .recording)
+        XCTAssertEqual(recorder.startCount, 1, "one press, one recording")
+        let resolutions = await refiner.resolutions
+        XCTAssertEqual(resolutions, 1, "the refused press resolves no mode")
+        XCTAssertEqual(states.values, [
+            .failed(message: "mic start failed: already recording", recoveredText: nil),
+            .recording,
+        ])
+    }
 }
 
 private final class StateLog: @unchecked Sendable {
@@ -440,5 +501,41 @@ private actor GatedTranscriber: Transcriber {
     func finish(with text: String) {
         release?.resume(returning: text)
         release = nil
+    }
+}
+
+/// `GatedTranscriber`'s counterpart for the other end of the pipeline: it parks inside
+/// `modeForNewDictation()` until the test lets it through, so a press can be timed to land in the
+/// window `toggle()` opens between `recorder.start()` and `.recording`.
+///
+/// Unlike `GatedTranscriber` it parks callers in a list rather than a single slot. Only one call
+/// should ever reach the gate -- `resolutions` asserts it -- but if a future change lets two in, a
+/// single slot would drop the first continuation and hang the whole suite instead of failing this
+/// test.
+private actor GatedRefiner: DictationRefining {
+    private var entered: CheckedContinuation<Void, Never>?
+    private var parked: [CheckedContinuation<Void, Never>] = []
+    private var hasEntered = false
+    private(set) var resolutions = 0
+
+    func modeForNewDictation() async -> Mode {
+        resolutions += 1
+        hasEntered = true
+        entered?.resume()
+        entered = nil
+        await withCheckedContinuation { parked.append($0) }
+        return .voice
+    }
+
+    func refine(_ transcript: String, with mode: Mode) async -> String { transcript }
+
+    func waitUntilResolving() async {
+        guard !hasEntered else { return }
+        await withCheckedContinuation { entered = $0 }
+    }
+
+    func finish() {
+        for continuation in parked { continuation.resume() }
+        parked = []
     }
 }

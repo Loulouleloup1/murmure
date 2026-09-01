@@ -46,6 +46,15 @@ final class DictationController {
             // Every launch, not only the first: a built-in deleted by hand comes back, which is
             // how `voice.json` repairs itself. It writes only files that are ABSENT, so a mode
             // Louis has edited is never overwritten.
+            //
+            // This `report` cannot fire on this path, and that is not an oversight to read as a
+            // covered failure: `createBuiltInsIfMissing()` only ever calls `save()`, which THROWS
+            // -- the `catch` below is the real failure path here -- and it never reads the folder,
+            // so no `ModeLoadProblem` is ever produced. It is still passed because `ModeStore.init`
+            // requires it on purpose (a store built without one would drop modes in silence), and
+            // it logs rather than does nothing so that the day this store is asked to read
+            // anything, the problem has somewhere to go. The live reporting path is
+            // `ModeAwareRefinement.modeForNewDictation()` below, which does call `loadAll()`.
             let store = ModeStore(directory: modesDirectory) { [log] problem in
                 log.error("mode file problem: \(problem.description, privacy: .public)")
             }

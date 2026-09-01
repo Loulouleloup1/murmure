@@ -100,10 +100,20 @@ public actor DictationSession {
                 //
                 // This `await` is the one suspension point in a branch lot 1 kept atomic, so a
                 // second press landing inside it is read as another start rather than as a stop.
-                // Not reachable from the hotkey -- Carbon delivers one `kEventHotKeyPressed` per
-                // press, and what is awaited is a read of four small files -- and bounded if it
-                // ever were: `AudioRecorder.start()` refuses a second recording, so the worst
-                // outcome is a reported failure, never two taps on one device.
+                //
+                // Nothing closes that window: it stays open for as long as this line takes, and
+                // the only reason a press does not land in it is TIMING -- what is awaited is a
+                // read of four small files, orders of magnitude under the reaction time of a
+                // double press. That is an argument to re-verify the day this resolution grows a
+                // network call or a model load, not a structural guarantee.
+                //
+                // What does not depend on timing is the outcome when a press DOES land inside:
+                // `AudioRecorder.start()` refuses a second recording (`guard sink == nil`), so
+                // the second press ends in `.failed` -- which the first press then overwrites
+                // with `.recording` when it resumes, a brief and harmless flash. Never two taps
+                // on one device. That exact sequence is pinned by
+                // `testASecondPressInsideTheModeResolutionCannotStartASecondRecording`, so a
+                // change to it fails a test rather than passing unnoticed.
                 activeMode = await refiner.modeForNewDictation()
                 transition(to: .recording)
             } catch {
