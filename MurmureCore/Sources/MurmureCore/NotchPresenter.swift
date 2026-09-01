@@ -31,6 +31,16 @@ public enum NotchPresenter {
     /// is gone by the time the next sentence is typed.
     public static let completionDwell: TimeInterval = 0.9
 
+    /// How long a silence stays before the notch retracts.
+    ///
+    /// **Longer than `completionDwell`, and that ordering is the decision** -- the 1.6 s itself is
+    /// as arbitrary as the 0.9 above. A green flash corroborates evidence Louis already has: his
+    /// words are sitting under his cursor, and the notch is only agreeing with them. A silence is
+    /// the *only* evidence there is -- nothing appeared anywhere, and if the notch has already
+    /// retracted by the time he looks up, the dictation is indistinguishable from a hotkey press
+    /// the app never received. A sole witness has to stay longer than a corroborating one.
+    public static let nothingHeardDwell: TimeInterval = 1.6
+
     /// How long a failure stays. Longer than a completion, because it carries a sentence to read
     /// rather than a colour to notice.
     ///
@@ -38,6 +48,26 @@ public enum NotchPresenter {
     /// text -- persist until dismissed. Everything else is a notice, and a notice that never
     /// leaves is a black band with no dictation behind it.
     public static let failureDwell: TimeInterval = 4
+
+    /// How long this phase stays on screen before the notch retracts, or nil if it does not
+    /// retract on a timer.
+    ///
+    /// Nil is the answer for every phase of a running dictation, and it is not "no dwell": those
+    /// leave when their next state says so, and a timer over them would pull the notch out from
+    /// under a dictation that was merely slow. The session holds no timer of its own -- by design,
+    /// `DictationSession.State.completed` says so -- so this function is the only thing in Murmure
+    /// that ever takes a finished dictation off the screen.
+    ///
+    /// Written without a `default`, so a phase added later cannot quietly inherit "never
+    /// retracts", which is the failure that leaves a black band with nothing behind it.
+    public static func dwell(for phase: NotchPhase) -> TimeInterval? {
+        switch phase {
+        case .completed: completionDwell
+        case .nothingHeard: nothingHeardDwell
+        case .failed, .alert: failureDwell
+        case .hidden, .recording, .transcribing, .refining, .inserting: nil
+        }
+    }
 
     /// Which phase the notch is in, given the state change that just arrived.
     ///

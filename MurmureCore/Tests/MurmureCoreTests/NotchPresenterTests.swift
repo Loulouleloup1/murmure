@@ -141,4 +141,44 @@ final class NotchPresenterTests: XCTestCase {
         XCTAssertFalse(
             NotchPresenter.expandsOnHover(hoverBegan: nil, now: t0.addingTimeInterval(600)))
     }
+
+    // MARK: - How long a finished dictation stays on screen
+
+    /// The session holds no timer -- it emits `.completed` and `.idle` in the same breath -- so
+    /// this is the only thing in Murmure that ever takes a finished dictation off the screen. A
+    /// phase that answered nil here would leave a black band with nothing behind it.
+    func testEveryPhaseThatEndsADictationRetractsOnATimer() {
+        for phase: NotchPhase in [
+            .completed(insertedCharacters: 9), .nothingHeard,
+            .failed(message: "boom", recoveredText: nil), .alert(message: "revoked"),
+        ] {
+            XCTAssertNotNil(NotchPresenter.dwell(for: phase), "\(phase) would never leave")
+        }
+    }
+
+    /// And a running dictation has no dwell at all. It leaves when its next state says so, and a
+    /// timer over it would pull the notch out from under a refinement that was merely slow -- 57.5 s
+    /// at the worst measured, against dwells of a second or two.
+    func testARunningDictationIsNeverRetractedOnATimer() {
+        for phase: NotchPhase in [.hidden, .recording, .transcribing, .refining, .inserting] {
+            XCTAssertNil(NotchPresenter.dwell(for: phase), "\(phase) would be cut off mid-dictation")
+        }
+    }
+
+    /// A green flash only corroborates what Louis can already see under his cursor. A silence is
+    /// the only evidence the press was registered at all, because nothing appeared anywhere -- so
+    /// it has to outlast the flash. The two durations are arbitrary; this ordering is not.
+    func testASilenceOutlastsAFlash() {
+        XCTAssertGreaterThan(
+            NotchPresenter.dwell(for: .nothingHeard) ?? 0,
+            NotchPresenter.dwell(for: .completed(insertedCharacters: 1)) ?? 0)
+    }
+
+    /// And a failure outlasts both: it carries a sentence to read, where the others carry a colour
+    /// to notice.
+    func testAFailureOutlastsASilence() {
+        XCTAssertGreaterThan(
+            NotchPresenter.dwell(for: .failed(message: "boom", recoveredText: nil)) ?? 0,
+            NotchPresenter.dwell(for: .nothingHeard) ?? 0)
+    }
 }

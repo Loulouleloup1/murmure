@@ -100,12 +100,12 @@ final class NotchController {
 
     private func show(_ phase: NotchPhase) {
         guard phase != model.phase else { return }
-        model.phase = phase
+        model.enter(phase, at: Date())
         // Whatever was on its way out is no longer the thing on screen.
         retraction?.cancel()
         retraction = nil
 
-        if case .hidden = phase {
+        guard NotchAppearance.showsShape(in: phase) else {
             dictationScreen = nil
             // Idempotent -- `hide()` returns immediately when the state is already `.hidden`
             // (`DynamicNotch.swift:285-288`).
@@ -142,13 +142,10 @@ final class NotchController {
         enqueue { [notch] in await notch.compact(on: screen) }
 
         // Nothing else will ever take these off the screen. The session has no timer -- how long
-        // a completion is shown is the interface's business, and it is decided here.
-        let dwell: TimeInterval? = switch phase {
-        case .completed, .nothingHeard: NotchPresenter.completionDwell
-        case .failed, .alert: NotchPresenter.failureDwell
-        default: nil // a running dictation leaves when its next state says so
-        }
-        guard let dwell else { return }
+        // a completion is shown is the interface's business, and which phases get one at all is
+        // `NotchPresenter.dwell(for:)`, in the package, where a phase added later cannot quietly
+        // inherit "never retracts".
+        guard let dwell = NotchPresenter.dwell(for: phase) else { return }
         retraction = Task { [weak self] in
             try? await Task.sleep(for: .seconds(dwell))
             guard !Task.isCancelled else { return }
@@ -174,7 +171,20 @@ final class NotchController {
 /// It decides nothing. Every decision is `NotchPresenter`, in `MurmureCore`, where it is tested.
 @MainActor
 final class NotchModel: ObservableObject {
-    @Published fileprivate(set) var phase: NotchPhase = .hidden
+    @Published private(set) var phase: NotchPhase = .hidden
+
+    /// The family of drawing the wings are making, and the instant its animation counts from.
+    ///
+    /// Deliberately NOT `@Published`: both change only when `phase` does, and `phase` already
+    /// publishes, so a second publisher would be a second redraw for one event. And `markBegan`
+    /// cannot be derived in the view at all -- it is a function of the mark that was on screen
+    /// *before*, which a view redrawing itself has no way to see.
+    ///
+    /// The clock outliving a phase change is the whole reason it is stored rather than reset:
+    /// `transcribing` → `inserting` keeps one travelling mark in flight instead of sending it back
+    /// behind the cutout for the one CGEvent round-trip an insertion lasts.
+    private(set) var mark: NotchAppearance.Mark = .none
+    private(set) var markBegan: Date = .distantPast
 
     /// The waveform's levels. Deliberately NOT `@Published`: they change about twenty-three times
     /// a second, and publishing them would re-evaluate the notch's whole body on the audio
@@ -185,10 +195,20 @@ final class NotchModel: ObservableObject {
     init(levels: AudioLevels) {
         self.levels = levels
     }
+
+    /// The notch is now showing this. The one mutation on this object, so that the phase and the
+    /// clock its drawing reads can never be set apart from each other.
+    fileprivate func enter(_ phase: NotchPhase, at now: Date) {
+        let next = NotchAppearance.mark(for: phase)
+        markBegan = NotchAppearance.animationStart(
+            previousMark: mark, previousStart: markBegan, newMark: next, now: now)
+        mark = next
+        self.phase = phase
+    }
 }
 
-/// One side of the notch: the waveform while a dictation records, a placeholder for the phases
-/// task T4 owns.
+/// One side of the notch: the waveform while a dictation records, and the four phases that follow
+/// it drawn at the same width, so every transition is a crossfade inside a shape that does not move.
 ///
 /// **The width is a constant and not a function of anything, and that is the point.** Amplitude
 /// moves bar *heights*; a wing that grew with the voice would make the shape breathe, and every
@@ -212,23 +232,87 @@ private struct NotchWing: View {
     /// buffer delayed.
     static let sampleInterval: TimeInterval = 0.05
 
+    /// The thickness of every mark that is not the waveform.
+    ///
+    /// The same as `barWidth` on purpose: the travelling mark that replaces the bars is then the
+    /// same weight of line they were, so the crossfade at the end of a recording changes the shape
+    /// of what is drawn without changing how much ink is on the wing.
+    static let markHeight: CGFloat = 3
+
+    /// The completion's fill, and the only thing in the sequence drawn heavier than a mark -- it
+    /// is the only phase that is a result rather than a progress report.
+    static let fillHeight: CGFloat = 7
+
+    /// The one accent, assembled from the components `NotchAppearance` chose (lot 3 D11, Q-NB2).
+    static let accent = Color(
+        hue: NotchAppearance.accentHue,
+        saturation: NotchAppearance.accentSaturation,
+        brightness: NotchAppearance.accentBrightness
+    )
+
+    /// Fades the last eighth of each end of a wing instead of cutting it.
+    ///
+    /// The wing's frame sits a few points inside the black of the shape (DynamicNotchKit's own
+    /// insets), so a hard clip would cut the travelling mark off in mid-black, several points
+    /// before anything the eye reads as an edge. Fading it lets the mark leave the cutout and
+    /// reach the outer edge without ever showing a cut.
+    static let edgeFade = LinearGradient(
+        stops: [
+            .init(color: .clear, location: 0),
+            .init(color: .black, location: 0.12),
+            .init(color: .black, location: 0.88),
+            .init(color: .clear, location: 1),
+        ],
+        startPoint: .leading,
+        endPoint: .trailing
+    )
+
     @ObservedObject var model: NotchModel
-    /// The trailing wing draws the same bars in reverse, so the newest is nearest the cutout on
-    /// both sides.
+    /// This is the trailing wing. It draws the same bars in reverse, so the newest is nearest the
+    /// cutout on both sides, and it runs the travelling mark the other way for the same reason:
+    /// both wings point outwards from the notch, which is what makes them each other's reflection
+    /// rather than two copies of one list.
     let mirrored: Bool
 
     var body: some View {
         Group {
-            if case .recording = model.phase {
+            switch model.mark {
+            case .none:
+                Color.clear
+            case .waveform:
                 TimelineView(.periodic(from: .now, by: Self.sampleInterval)) { _ in
                     bars(model.levels.bars())
                 }
-            } else {
-                // T1's stand-in, and T4's to replace. Kept inside the same fixed frame so the
-                // shape does not move when the recording ends.
+            case .travelling:
+                // `.animation` rather than the waveform's 20 Hz sample, and with no `.animation()`
+                // modifier under it: the position is recomputed at display rate, so it is
+                // continuous by construction. Interpolating between 20 Hz samples the way the bars
+                // do would animate the end-of-cycle wrap as a flyback back across the whole wing,
+                // which is the one visible jump this phase is able to produce.
+                TimelineView(.animation) { context in
+                    travellingMark(at: context.date)
+                }
+            case .pulsing:
+                TimelineView(.animation) { context in
+                    breath(at: context.date)
+                }
+            case .success:
+                // The whole wing, on both sides, in the one green the interface has. This is
+                // Murmure's replacement for a notification, and nothing else is drawn this heavy.
                 Capsule()
-                    .fill(fill)
-                    .frame(height: 5)
+                    .fill(.green)
+                    .frame(height: Self.fillHeight)
+            case .quiet:
+                // A progress mark with all of its movement and all of its colour taken away: an
+                // absence has to be legible AS an absence, next to a green fill it must never be
+                // mistaken for.
+                Capsule()
+                    .fill(.white.opacity(0.25))
+                    .frame(width: Self.width * NotchAppearance.markWidth, height: Self.markHeight)
+            case .warning:
+                Capsule()
+                    .fill(.orange)
+                    .frame(height: Self.markHeight)
             }
         }
         .frame(width: Self.width, height: Self.height)
@@ -253,21 +337,57 @@ private struct NotchWing: View {
         .animation(.linear(duration: Self.sampleInterval), value: levels)
     }
 
-    /// A stand-in, not a design. T4 owns what each phase actually looks like; what this proves
-    /// today is that the phase reaches the wings at all. Green for a completion and nothing for a
-    /// silence is the one distinction worth having before then -- it is the reason
-    /// `.completed(insertedCharacters:)` exists.
-    private var fill: Color {
-        switch model.phase {
-        // Unreachable: the waveform draws the recording, and this branch is what everything else
-        // falls back to.
-        case .recording: .clear
-        case .transcribing, .inserting: .white.opacity(0.55)
-        case .refining: .white.opacity(0.35)
-        case .completed: .green
-        case .nothingHeard: .white.opacity(0.2)
-        case .failed, .alert: .orange
-        case .hidden: .clear
+    /// The transcription -- and the insertion behind it: a mark leaving the cutout and running to
+    /// the outer edge, over and over.
+    ///
+    /// The distance is measured from the notch outwards and is the same number on both wings.
+    /// Turning it into an x-offset is the only line in this view that knows which side it is on:
+    /// the leading wing's inner edge is its right, the trailing wing's is its left.
+    private func travellingMark(at date: Date) -> some View {
+        let distance = NotchAppearance.markDistanceFromNotch(
+            elapsed: date.timeIntervalSince(model.markBegan))
+        return Capsule()
+            .fill(.white.opacity(0.9))
+            .frame(width: Self.width * NotchAppearance.markWidth, height: Self.markHeight)
+            .offset(x: Self.width * (mirrored ? distance - 0.5 : 0.5 - distance))
+            .frame(width: Self.width, height: Self.height)
+            .mask(Self.edgeFade)
+    }
+
+    /// The refinement: a bar breathing in the accent, and past the fifth second a counter in its
+    /// place on the trailing wing.
+    ///
+    /// This is the one phase where the two wings stop being each other's reflection, and it is
+    /// deliberate: the left one says *still working*, the right one says *for how long*. Both stay
+    /// inside the same fixed frame, so the counter arriving changes what is drawn and never the
+    /// width of the shape -- and it arrives as a crossfade, because a number appearing out of
+    /// nothing at 5 s would otherwise be the one pop in a sequence that has none.
+    private func breath(at date: Date) -> some View {
+        let showsCounter = mirrored
+            && NotchPresenter.showsElapsedCounter(
+                in: model.phase, since: model.markBegan, now: date)
+        return Group {
+            if showsCounter {
+                Text(NotchPresenter.elapsed(since: model.markBegan, now: date))
+                    // 11 pt, the muted one of the two sizes the interface has (lot 3 D11).
+                    // Monospaced digits so the number does not re-centre itself every second.
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Self.accent)
+                    .lineLimit(1)
+                    // A refinement past ten minutes is not a thing that happens -- 57.5 s is the
+                    // worst measured -- but if it did, `10:00` would shrink rather than truncate.
+                    .minimumScaleFactor(0.7)
+            } else {
+                Capsule()
+                    .fill(Self.accent)
+                    .frame(height: Self.markHeight)
+                    .opacity(
+                        NotchAppearance.pulseFloor
+                            + (1 - NotchAppearance.pulseFloor)
+                            * NotchAppearance.pulse(
+                                elapsed: date.timeIntervalSince(model.markBegan)))
+            }
         }
+        .animation(.smooth, value: showsCounter)
     }
 }
