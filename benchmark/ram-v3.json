@@ -1,0 +1,119 @@
+[
+  {
+    "model": "s1-mini",
+    "model_id": "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M",
+    "num_ctx": 8192,
+    "idle_runner_rss_gb": 0.005,
+    "peak_rss_first_load_gb": 1.555,
+    "peak_rss_warm_gb": 1.559,
+    "settled_rss_gb": 1.559,
+    "ollama_ps": [
+      {
+        "name": "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M",
+        "size": "1.5 GB",
+        "raw": "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M    cc49c07563aa    1.5 GB    100% GPU     8192       4 minutes from now"
+      }
+    ],
+    "ollama_ps_at_cold": [
+      {
+        "name": "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M",
+        "size": "1.5 GB",
+        "raw": "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M    cc49c07563aa    1.5 GB    100% GPU     8192       4 minutes from now"
+      }
+    ],
+    "cold_latency_s": [
+      0.807,
+      0.781,
+      0.785
+    ],
+    "cold_latency_median_s": 0.785,
+    "warm_latency_s": [
+      0.201,
+      0.178,
+      0.161,
+      0.161,
+      0.168,
+      0.173,
+      0.177
+    ],
+    "warm_latency_median_s": 0.173
+  },
+  {
+    "model": "gemma4-e2b-qat",
+    "model_id": "gemma4:e2b-it-qat",
+    "num_ctx": 8192,
+    "idle_runner_rss_gb": 0.005,
+    "peak_rss_first_load_gb": 4.666,
+    "peak_rss_warm_gb": 4.718,
+    "settled_rss_gb": 4.718,
+    "ollama_ps": [
+      {
+        "name": "gemma4:e2b-it-qat",
+        "size": "3.7 GB",
+        "raw": "gemma4:e2b-it-qat    07ea59a47401    3.7 GB    100% GPU     8192       4 minutes from now"
+      }
+    ],
+    "ollama_ps_at_cold": [
+      {
+        "name": "gemma4:e2b-it-qat",
+        "size": "3.7 GB",
+        "raw": "gemma4:e2b-it-qat    07ea59a47401    3.7 GB    100% GPU     8192       4 minutes from now"
+      }
+    ],
+    "cold_latency_s": [
+      3.85,
+      2.114,
+      2.115
+    ],
+    "cold_latency_median_s": 2.115,
+    "warm_latency_s": [
+      0.487,
+      0.485,
+      0.484,
+      0.486,
+      0.484,
+      0.483,
+      0.485
+    ],
+    "warm_latency_median_s": 0.485
+  },
+  {
+    "model": "gemma4-12b-qat",
+    "model_id": "gemma4:12b-it-qat",
+    "num_ctx": 8192,
+    "idle_runner_rss_gb": 0.005,
+    "peak_rss_first_load_gb": 8.453,
+    "peak_rss_warm_gb": 8.689,
+    "settled_rss_gb": 8.689,
+    "ollama_ps": [
+      {
+        "name": "gemma4:12b-it-qat",
+        "size": "7.9 GB",
+        "raw": "gemma4:12b-it-qat    38044be4f923    7.9 GB    100% GPU     8192       4 minutes from now"
+      }
+    ],
+    "ollama_ps_at_cold": [
+      {
+        "name": "gemma4:12b-it-qat",
+        "size": "7.9 GB",
+        "raw": "gemma4:12b-it-qat    38044be4f923    7.9 GB    100% GPU     8192       4 minutes from now"
+      }
+    ],
+    "cold_latency_s": [
+      8.363,
+      4.208,
+      2.736
+    ],
+    "cold_latency_median_s": 4.208,
+    "warm_latency_s": [
+      1.589,
+      1.556,
+      1.556,
+      1.565,
+      1.56,
+      1.558,
+      1.559
+    ],
+    "warm_latency_median_s": 1.559
+  }
+]

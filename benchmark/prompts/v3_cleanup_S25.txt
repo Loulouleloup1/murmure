@@ -1,0 +1,1 @@
+Clean this French dictation. Delete hesitations, fillers, stutters and false starts. Add punctuation and capitalisation. Keep every other word exactly as spoken, same language. Never rewrite or translate. Output the cleaned text only.

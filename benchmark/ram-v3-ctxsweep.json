@@ -1,0 +1,75 @@
+[
+  {
+    "num_ctx": 2048,
+    "model": "s1-mini",
+    "rss_gb": 0.839,
+    "ps": "755 MB"
+  },
+  {
+    "num_ctx": 2048,
+    "model": "gemma4-e2b-qat",
+    "rss_gb": 4.624,
+    "ps": "3.6 GB"
+  },
+  {
+    "num_ctx": 2048,
+    "model": "gemma4-12b-qat",
+    "rss_gb": 8.177,
+    "ps": "7.6 GB"
+  },
+  {
+    "num_ctx": 4096,
+    "model": "s1-mini",
+    "rss_gb": 1.075,
+    "ps": "1.0 GB"
+  },
+  {
+    "num_ctx": 4096,
+    "model": "gemma4-e2b-qat",
+    "rss_gb": 4.639,
+    "ps": "3.6 GB"
+  },
+  {
+    "num_ctx": 4096,
+    "model": "gemma4-12b-qat",
+    "rss_gb": 8.235,
+    "ps": "7.6 GB"
+  },
+  {
+    "num_ctx": 8192,
+    "model": "s1-mini",
+    "rss_gb": 1.545,
+    "ps": "1.5 GB"
+  },
+  {
+    "num_ctx": 8192,
+    "model": "gemma4-e2b-qat",
+    "rss_gb": 4.663,
+    "ps": "3.7 GB"
+  },
+  {
+    "num_ctx": 8192,
+    "model": "gemma4-12b-qat",
+    "rss_gb": 8.634,
+    "ps": "7.9 GB",
+    "note": "re-measured: the single-call sample caught RSS mid-load"
+  },
+  {
+    "num_ctx": 16384,
+    "model": "s1-mini",
+    "rss_gb": 2.482,
+    "ps": "2.5 GB"
+  },
+  {
+    "num_ctx": 16384,
+    "model": "gemma4-e2b-qat",
+    "rss_gb": 4.68,
+    "ps": "3.7 GB"
+  },
+  {
+    "num_ctx": 16384,
+    "model": "gemma4-12b-qat",
+    "rss_gb": 8.515,
+    "ps": "?"
+  }
+]

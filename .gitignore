@@ -24,3 +24,18 @@ benchmark/__pycache__/
 benchmark/results-v2.jsonl
 benchmark/run_v2.log
 benchmark/judges_v2.log
+
+# Benchmark v3 generation outputs. Same rule as v2 (ruling R12): the `real`
+# fixture set is Louis's own dictated work content (clients, internal material),
+# usable locally, NEVER committed. `results-v3.jsonl` carries it, so it is
+# ignored wholesale rather than split.
+benchmark/results-v3.jsonl
+# `results-v3-synthetic.jsonl` is the exception and is committed: it is the
+# 150-row prompt arm on `fixtures.jsonl`, which is 100 % synthetic. It is what
+# the blind judges are given, so it has to stay reproducible.
+benchmark/run_v3*.log
+
+# NOT ignored, deliberately: benchmark/ram-v3.json, ram-v3-ctxsweep.json and
+# ram-v3-cold6.json are pure machine measurements (RSS, `ollama ps`, latencies).
+# They contain no dictation text, and they are the evidence behind the v3
+# admissibility table, so they belong in the repo.
