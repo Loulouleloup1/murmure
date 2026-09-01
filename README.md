@@ -21,6 +21,19 @@ That is the whole installation. The script checks the tools, **downloads both mo
 installs, and tells you the two things macOS will not let a script do for you. Run it again any time
 — it skips whatever is already there.
 
+### When something is wrong
+
+```sh
+./scripts/doctor.sh
+```
+
+Every failure in this file was found once by typing ad-hoc commands and knowing what to look for.
+`doctor.sh` is that list, with the remedy attached to each line: the missing codesigning
+certificate, a half-downloaded Whisper variant, a mode pointing at a model nobody pulled, an
+`api`/`instructions` pair that cannot work, a copy of the app running out of DerivedData. It is
+**read-only** — it never writes, pulls, or launches anything — so it is safe to point at a machine
+that is working. Exit status is 0 when nothing failed.
+
 ### The two models, because getting this wrong looks like a crash
 
 Murmure needs **two** models and they are not interchangeable:
@@ -106,8 +119,92 @@ at `num_ctx: 8192` — the KV cache dominates, because the weights are small. Lo
 real lever on s1-mini (0.84 GB at 2048) and does nothing on gemma, which uses sliding attention.
 
 So on a 16 GB machine `Prompt` is comfortable and the 12B modes are not, especially with other work
-open. Switching `Message` and `Email` to something smaller is a mode-file edit, not a code change:
-they live in `~/Library/Application Support/Murmure/modes/*.json`.
+open. Switching `Message` and `Email` to something smaller is a mode-file edit and not a code
+change — but it is **three** fields, not one. See below.
+
+---
+
+## Switching a mode to a different refiner
+
+The mode files are hand-editable, in `~/Library/Application Support/Murmure/modes/*.json`. Three of
+their fields are correlated, and changing `llm.model` on its own produces a mode that still
+validates, still runs, and quietly inserts the **raw transcript**:
+
+| | `s1-mini` | `gemma4:12b-it-qat` |
+|---|---|---|
+| `llm.model` | `hf.co/superwhisper/s1-mini-GGUF:Q4_K_M` | `gemma4:12b-it-qat` |
+| `llm.api` | `"s1"` — `/api/generate` with `raw: true` | `"chat"` — `/api/chat` |
+| `instructions` | a **control line**: `[Context: general]` | prose |
+
+**Change `llm.model` and leave `llm.api`** and the call goes to the wrong endpoint. s1-mini cannot
+be driven through `/api/chat` at all: measured, it answers with **empty content**, because the model
+opens its turn with a `<think>` block and Ollama's chat layer takes that for reasoning and keeps it
+(`OllamaS1.swift`). Nothing reports this — the refinement comes back unusable and the raw transcript
+is inserted by design.
+
+**Change `llm.api` to `"s1"` and leave prose in `instructions`** and `Mode.validate` returns
+`instructionsAreNotControlFields`, the mode is reported unusable, and again the raw transcript is
+inserted. That refusal is not pedantry: on the v3 probe a sentence appended to the control line came
+back **verbatim at the top of the cleaned text** on 1 fixture in 4 — your dictation with someone
+else's words pasted into it.
+
+### The script that writes all three
+
+```sh
+./scripts/set-refiner.sh <mode-key> <model> [--api s1|chat] [--instructions TEXT] [--dry-run]
+```
+
+It refuses the combinations `Mode.validate` refuses, warns about the ones that validate and are
+still wrong, and copies the file aside before writing. `MURMURE_MODES_DIR` points it at a copy.
+
+```console
+$ ./scripts/set-refiner.sh message hf.co/superwhisper/s1-mini-GGUF:Q4_K_M
+message.json
+
+  before
+    model         "gemma4:12b-it-qat"
+    api           "chat"
+    instructions  "You turn dictated text into a short Slack message. The input is a…"
+
+  after
+    model         "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M"
+    api           "s1"
+    instructions  "[Context: general]"
+
+  written   ~/Library/Application Support/Murmure/modes/message.json
+  backup    ~/Library/Application Support/Murmure/modes/message.json.20260901T234059.bak
+```
+
+Going the other way needs a prompt, because a chat model is driven by prose and there is nothing to
+invent it from:
+
+```console
+$ ./scripts/set-refiner.sh prompt gemma4:12b-it-qat --api chat
+refused  switching to "chat" leaves a control line where a written prompt has to go
+```
+
+Murmure reads the modes at launch, so quit and reopen it afterwards.
+
+### The control line is `[Context: general]`, and nothing else
+
+**Do not copy the control line out of `benchmark/`.** `run_benchmark_v2.py` uses
+
+```python
+S1_CONTROL = "[Styling: semi-casual] [Structure: prose] [Context: general]"
+```
+
+which is what the grid *measured*, not what ships. Adding `[Styling: …]` — which the model card
+presents as the normal way to use the model — **drops sentence capitalisation from 96 % to 29 %**
+across the same 48 real dictations, and `[Styling: casual]` is the arm where the runaway repetitions
+behind `OllamaS1.repeatPenalty` were found (a 44-word dictation answered with 1 402 words of the
+same fragment). Nothing in the app warns about it; the output is simply worse, invisibly.
+`set-refiner.sh` warns when you pass a field beyond `[Context: …]`. Every field added there is a
+field to re-measure.
+
+The one cost of s1-mini that has no setting behind it, recorded in `Mode.swift` so that whoever
+edits the file sees it: **sentences get merged** — 9 of those 48 dictations come back with fewer
+sentences than they went in, the widest a 416-word passage going from 27 down to 22. A mode that
+cannot afford that is a mode to point back at `gemma4:12b-it-qat` with `--api chat`.
 
 ---
 
