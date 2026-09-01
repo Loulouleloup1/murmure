@@ -15,7 +15,19 @@ struct MurmureApp: App {
     /// rather than the first time a menu is drawn. `App` is `@MainActor`, so this init is too.
     private let controller: DictationController
 
+    /// The application window's state: whether it is up, where it sits, which section it is on.
+    /// A `StateObject` rather than a `let` because the window's content observes it — an `App`
+    /// struct is re-created, and a plain stored object would be a new controller each time.
+    @StateObject private var windowController: WindowController
+
     init() {
+        // Named once, here, and handed to both. `AppState` takes it for the reason its own init
+        // gives -- a test must never write into the preferences of the application Louis is using
+        // -- and `WindowController` stores the window's frame and section in the same domain, so
+        // the two cannot end up in different ones. This is the single line where the real domain
+        // is chosen.
+        let defaults = UserDefaults.standard
+
         // Spec §9, BOTH halves, and the second one is lot 3 T6's.
         //
         // First: Accessibility is detected at launch rather than at the first failed paste, and
@@ -33,7 +45,7 @@ struct MurmureApp: App {
         //
         // Set BEFORE the controller is built: its init reads `appState.alert` on its last lines to
         // put whatever is already wrong on screen.
-        let state = AppState()
+        let state = AppState(defaults: defaults)
         state.accessibilityDenied = !PasteInserter.requestAccessibilityIfNeeded()
         if state.accessibilityDenied {
             logger.error("Accessibility permission not granted -- text insertion will do nothing")
@@ -42,6 +54,7 @@ struct MurmureApp: App {
         // instance: `_appState`'s wrapped value must be handed in, not read back out of the
         // wrapper here (reading a `@StateObject` from `init` is unsupported).
         _appState = StateObject(wrappedValue: state)
+        _windowController = StateObject(wrappedValue: WindowController(defaults: defaults))
         controller = DictationController(appState: state)
     }
 
@@ -113,9 +126,48 @@ struct MurmureApp: App {
             // fallback, for the reason given above it.
             Button("Copier la dernière transcription") { controller.copyLast() }
             Divider()
+            // The window's only entry point, and it has to be: an accessory app is not in ⌘Tab,
+            // so once the window is behind Xcode nothing but this glyph brings it back
+            // (plan §2.4, consequence 1).
+            OpenWindowMenuItem(controller: windowController)
+            Divider()
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
         }
         .environmentObject(appState)
+
+        // One resizable window, not a `Settings` scene and not Superwhisper's two (D1). A
+        // `Settings` scene gives ⌘, for free and nothing else: it cannot be opened programmatically
+        // without a private selector whose name changed between macOS 13 and 14, and this menu is
+        // the only entry point there is. It is also not resizable, and History is the section that
+        // wants the size.
+        //
+        // `Window` and not `WindowGroup`, which is what makes "never a second window" structural
+        // rather than defended: a `Window` scene is single-instance by construction.
+        //
+        // Named for the application rather than "Settings", because five of its six sections are
+        // settings and the sixth -- History -- is the reason it gets opened (D3).
+        Window("Murmure", id: WindowController.windowID) {
+            MainWindowView(controller: windowController)
+                .environmentObject(appState)
+        }
+        .defaultSize(
+            width: WindowLayout.defaultSize.width, height: WindowLayout.defaultSize.height)
+        .windowResizability(.contentMinSize)
+    }
+}
+
+/// The menu item, as its own view for one reason: `openWindow` is a SwiftUI *environment* value,
+/// and reading it needs a view to read it from.
+///
+/// ⌘, is the shortcut every Mac user tries first, and it is free here — Murmure has no `Settings`
+/// scene to claim it.
+private struct OpenWindowMenuItem: View {
+    let controller: WindowController
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Ouvrir la fenêtre Murmure") { controller.show(using: openWindow) }
+            .keyboardShortcut(",")
     }
 }
