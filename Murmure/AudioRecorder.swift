@@ -37,6 +37,13 @@ final class AudioRecorder {
 
     private let engine = AVAudioEngine()
     private var sink: TapSink?
+    /// Where the waveform's numbers go. Shared with the notch, which only ever reads them; see
+    /// `AudioLevels` for why it is not behind the sink's lock.
+    private let levels: AudioLevels
+
+    init(levels: AudioLevels) {
+        self.levels = levels
+    }
 
     /// Why the last `stop()` returned `nil`. Read after `stop()`; reset by the next `start()`.
     ///
@@ -69,11 +76,20 @@ final class AudioRecorder {
 
         let directory = try Storage.appSupportDirectory(subfolder: "recordings")
         let sink = TapSink(writer: try WavWriter(directory: directory, format: format))
-        // The block captures the sink, never `self`: the engine retains the block, so capturing
-        // `self` would be a cycle, and the sink must outlive the recorder if AVFoundation ever
-        // calls back after `removeTap`.
-        input.installTap(onBus: 0, bufferSize: 4_096, format: format) { buffer, _ in
+        // Sized for this device's sample rate, and emptied, before a single buffer can arrive.
+        levels.begin(sampleRate: format.sampleRate)
+        // The block captures the sink and the levels, never `self`: the engine retains the block,
+        // so capturing `self` would be a cycle, and both must outlive the recorder if
+        // AVFoundation ever calls back after `removeTap`.
+        //
+        // The measurement is a second statement rather than a line inside `append`: the two are
+        // guarded by different locks on purpose (`AudioLevels`), and it runs whatever the writer
+        // is doing -- a disk that has stopped accepting bytes is a failure the state machine
+        // reports, not a reason for the waveform to freeze mid-sentence with nothing said about
+        // it.
+        input.installTap(onBus: 0, bufferSize: 4_096, format: format) { [levels] buffer, _ in
             sink.append(buffer)
+            levels.measure(buffer)
         }
         do {
             try engine.start()

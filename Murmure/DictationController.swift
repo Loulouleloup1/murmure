@@ -26,10 +26,16 @@ final class DictationController {
     init(appState: AppState) {
         self.appState = appState
 
+        // The waveform's one box: the recorder writes into it from the audio thread, the notch's
+        // wings read it while a dictation records. Built here because it is the only place that
+        // sees both of them, and shared rather than owned by either -- a second box would be a
+        // waveform of a recording nobody is making.
+        let levels = AudioLevels()
+
         // Built at launch and never rebuilt; see `NotchController`. No window exists yet -- idle
         // costs zero pixels -- so this is a `DynamicNotch` object and a screen-parameters
         // observer, nothing on screen.
-        let notch = NotchController()
+        let notch = NotchController(levels: levels)
         self.notch = notch
 
         // Task 6 made `onClipboardOutcome` a REQUIRED init parameter with no default, precisely so
@@ -87,7 +93,7 @@ final class DictationController {
         }
 
         session = DictationSession(
-            recorder: AudioRecorder(),
+            recorder: AudioRecorder(levels: levels),
             transcriber: WhisperKitEngine(),
             inserter: inserter,
             refiner: ModeAwareRefinement(modesDirectory: modesDirectory, appState: appState)

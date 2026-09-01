@@ -32,7 +32,7 @@ final class NotchController {
     private let notch: DynamicNotch<EmptyView, NotchWing, NotchWing>
     /// What the wings read. Held here because the two are one mechanism: the phase decides both
     /// what is drawn and whether there is a window to draw it in.
-    private let model = NotchModel()
+    private let model: NotchModel
     private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "notch")
 
     /// The state the session was in before the one being handled. `NotchPresenter.phase` needs it
@@ -64,7 +64,11 @@ final class NotchController {
     /// window.
     private var transition: Task<Void, Never>?
 
-    init() {
+    /// `levels` is the box the recorder fills; the wings sample it while a dictation records.
+    /// Handed in rather than made here because the recorder needs the same one.
+    init(levels: AudioLevels) {
+        let model = NotchModel(levels: levels)
+        self.model = model
         notch = DynamicNotch(
             // `.all` minus `.hapticFeedback`: the pointer crosses the notch on every trip to the
             // menu bar, and a tap of feedback on an accidental crossing is a notification about
@@ -73,8 +77,11 @@ final class NotchController {
             expanded: { EmptyView() },
             // `let`-captured by `DynamicNotch.init` and never re-made, which is why the phase has
             // to reach them as observed DATA rather than as a rebuilt notch.
-            compactLeading: { [model] in NotchWing(model: model) },
-            compactTrailing: { [model] in NotchWing(model: model) }
+            // Mirrored, so the two wings are each other's reflection across the cutout: the newest
+            // bar is the one nearest the notch on both sides, and the waveform reads as one shape
+            // split by the hardware rather than as two lists running the same way.
+            compactLeading: { NotchWing(model: model, mirrored: false) },
+            compactTrailing: { NotchWing(model: model, mirrored: true) }
         )
         // The default is `false` (`DynamicNotchTransitionConfiguration.swift:51`), and with it
         // every compact↔expanded conversion animates the notch to `.hidden`, sleeps 0.25 s and
@@ -168,26 +175,82 @@ final class NotchController {
 @MainActor
 final class NotchModel: ObservableObject {
     @Published fileprivate(set) var phase: NotchPhase = .hidden
+
+    /// The waveform's levels. Deliberately NOT `@Published`: they change about twenty-three times
+    /// a second, and publishing them would re-evaluate the notch's whole body on the audio
+    /// thread's schedule. The wings PULL from it on a timeline of their own instead, so a level
+    /// that arrives while nothing is being drawn costs nothing at all.
+    let levels: AudioLevels
+
+    init(levels: AudioLevels) {
+        self.levels = levels
+    }
 }
 
-/// One side of the notch. A placeholder: tasks T3 and T4 replace it with the waveform bars and
-/// with each phase's real drawing.
+/// One side of the notch: the waveform while a dictation records, a placeholder for the phases
+/// task T4 owns.
 ///
-/// The width is a constant and not a function of anything, and that is the point. Amplitude will
-/// move bar *heights*; a wing that grew with the voice would make the shape breathe, and every
-/// transition after the recording would then have to be read against a shape that never settled.
-/// The same holds for the phases: what changes below is a colour, never a size, so the shape does
-/// not move when a dictation goes from recording to transcribing to done.
+/// **The width is a constant and not a function of anything, and that is the point.** Amplitude
+/// moves bar *heights*; a wing that grew with the voice would make the shape breathe, and every
+/// transition after the recording would then have to be read against a shape that never settled --
+/// the notch is meant to deform, never to jump. The bar COUNT is fixed for the same reason
+/// (`LevelHistory` is full from its first instant, of the meter's floor), so the wing is the same
+/// width in its first frame as in its last, silent or not.
 private struct NotchWing: View {
     static let width: CGFloat = 32
+    /// The vertical room a bar may use. The compact content sits inside the notch's own height
+    /// (~32 pt) minus the 4 pt / 8 pt insets DynamicNotchKit puts above and below it
+    /// (`NotchView.swift:106-140` at tag 1.1.0), so 16 pt is the tallest bar that cannot push on
+    /// the shape.
+    static let height: CGFloat = 16
+    static let barWidth: CGFloat = 3
+    static let barSpacing: CGFloat = 2.5
+
+    /// How often the wings sample the level box. ~20 Hz: fast enough that the bars move with the
+    /// voice, slow enough that it is not a redraw storm. It is a PULL -- nothing about the audio
+    /// thread's rate reaches this timeline, and a frame missed here is a bar not drawn, never a
+    /// buffer delayed.
+    static let sampleInterval: TimeInterval = 0.05
 
     @ObservedObject var model: NotchModel
+    /// The trailing wing draws the same bars in reverse, so the newest is nearest the cutout on
+    /// both sides.
+    let mirrored: Bool
 
     var body: some View {
-        Capsule()
-            .fill(fill)
-            .frame(width: Self.width, height: 5)
-            .animation(.smooth, value: model.phase)
+        Group {
+            if case .recording = model.phase {
+                TimelineView(.periodic(from: .now, by: Self.sampleInterval)) { _ in
+                    bars(model.levels.bars())
+                }
+            } else {
+                // T1's stand-in, and T4's to replace. Kept inside the same fixed frame so the
+                // shape does not move when the recording ends.
+                Capsule()
+                    .fill(fill)
+                    .frame(height: 5)
+            }
+        }
+        .frame(width: Self.width, height: Self.height)
+        .animation(.smooth, value: model.phase)
+    }
+
+    private func bars(_ levels: [Float]) -> some View {
+        HStack(spacing: Self.barSpacing) {
+            ForEach(Array((mirrored ? levels.reversed() : levels).enumerated()), id: \.offset) { _, level in
+                Capsule()
+                    .fill(.white.opacity(0.9))
+                    .frame(
+                        width: Self.barWidth,
+                        // Never below its own width: a bar shorter than it is wide is a dot, and a
+                        // row of dots is what silence looks like -- present, flat, and still.
+                        height: max(Self.barWidth, CGFloat(level) * Self.height)
+                    )
+            }
+        }
+        // The meter's own attack and release do the smoothing; this only carries each bar from one
+        // sample to the next so 20 Hz of steps reads as movement rather than as a flicker.
+        .animation(.linear(duration: Self.sampleInterval), value: levels)
     }
 
     /// A stand-in, not a design. T4 owns what each phase actually looks like; what this proves
@@ -196,7 +259,9 @@ private struct NotchWing: View {
     /// `.completed(insertedCharacters:)` exists.
     private var fill: Color {
         switch model.phase {
-        case .recording: .white.opacity(0.85)
+        // Unreachable: the waveform draws the recording, and this branch is what everything else
+        // falls back to.
+        case .recording: .clear
         case .transcribing, .inserting: .white.opacity(0.55)
         case .refining: .white.opacity(0.35)
         case .completed: .green
