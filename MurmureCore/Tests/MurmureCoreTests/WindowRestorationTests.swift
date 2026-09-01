@@ -132,11 +132,20 @@ final class WindowRestorationTests: XCTestCase {
     /// `NaN` cannot be written to a property list, so the guard is on the way *out* as much as on
     /// the way in: a frame containing one would take the app down as it closed rather than as it
     /// opened, which is the harder crash to explain.
-    func testANonFiniteFrameIsNeitherStoredNorRead() {
+    ///
+    /// Seeded, for the reason the test below it gives at length.
+    func testANonFiniteFrameIsIgnoredRatherThanWrittenToThePlist() {
+        let good = CGRect(x: 40, y: 60, width: 900, height: 620)
+        restoration.storedFrame = good
+        XCTAssertEqual(restoration.storedFrame, good, "the seed has to land, or this is vacuous")
+
         restoration.storedFrame = CGRect(x: CGFloat.nan, y: 0, width: 900, height: 600)
 
-        XCTAssertNil(restoration.storedFrame)
-        XCTAssertNil(defaults.object(forKey: "windowFrame"))
+        XCTAssertEqual(restoration.storedFrame, good)
+        XCTAssertEqual(
+            defaults.array(forKey: "windowFrame") as? [Double],
+            [good.origin.x, good.origin.y, good.width, good.height],
+            "a NaN reached the plist, or erased the frame that was good")
     }
 
     // MARK: - The frame, as a fact about the hardware attached right now
@@ -215,11 +224,14 @@ final class WindowRestorationTests: XCTestCase {
     /// setter refused the frame, and if the setter does nothing at all. Measured — the first
     /// version of this test passed against a setter mutated to an empty body.
     ///
-    /// Writing a good frame first makes the emptiness mean something: it can only be empty if the
-    /// second write actively *removed* what the first one put there, which is what a refusal does
-    /// here. `defaults.object(forKey:)` is the assertion that carries the test, because it reads
-    /// the raw entry and so cannot be satisfied by anything the getter does.
-    func testADegenerateFrameIsRefusedOnTheWayIn() {
+    /// Writing a good frame first is what makes the assertion mean something, and it pins the
+    /// behaviour that matters rather than only the absence of the bad one: a malformed write is
+    /// **ignored**, so the last frame that was good is still there and the next launch still opens
+    /// where Louis left the window. Refusing it by *erasing* would pass a test that only checked
+    /// the junk was absent, and would cost him the position.
+    ///
+    /// `defaults.array(forKey:)` reads the raw entry, so nothing the getter does can satisfy this.
+    func testAMalformedFrameIsIgnoredAndLeavesTheLastGoodOneStanding() {
         for degenerate in [
             CGRect(x: 100, y: 100, width: 0, height: 660),
             CGRect(x: 100, y: 100, width: 980, height: 0),
@@ -230,10 +242,11 @@ final class WindowRestorationTests: XCTestCase {
 
             restoration.storedFrame = degenerate
 
-            XCTAssertNil(
-                defaults.object(forKey: "windowFrame"),
-                "\(degenerate.size) reached the store as a raw entry")
-            XCTAssertNil(restoration.storedFrame)
+            XCTAssertEqual(
+                defaults.array(forKey: "windowFrame") as? [Double],
+                [good.origin.x, good.origin.y, good.width, good.height],
+                "\(degenerate.size) was stored, or erased the frame that was good")
+            XCTAssertEqual(restoration.storedFrame, good)
         }
     }
 

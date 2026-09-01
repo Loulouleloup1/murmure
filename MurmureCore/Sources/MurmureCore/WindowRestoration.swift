@@ -84,10 +84,18 @@ public struct WindowRestoration {
             return CGRect(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3])
         }
         nonmutating set {
-            guard let frame = newValue, Self.isWellFormed(frame) else {
+            // An explicit nil is an instruction: forget where the window was.
+            guard let frame = newValue else {
                 defaults.removeObject(forKey: Self.frameKey)
                 return
             }
+            // A malformed frame is not an instruction, it is a bug upstream -- a live window never
+            // has one, so this is only reachable through a hand-edit or a mistake. Ignored, and
+            // deliberately NOT treated as the clear above: erasing would spend the last frame that
+            // WAS good and send the next launch back to AppKit's placement, which is a visible
+            // regression caused by a value that should never have arrived. Dropping it on the
+            // floor costs nothing and keeps the window where Louis last left it.
+            guard Self.isWellFormed(frame) else { return }
             defaults.set(
                 [frame.origin.x, frame.origin.y, frame.width, frame.height], forKey: Self.frameKey)
         }
