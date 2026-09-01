@@ -17,15 +17,25 @@ import MurmureCore
 /// expect a sentence.
 ///
 /// **Why a flag on this binary rather than a script that loads the model itself.** The alternatives
-/// were a `swift`-run snippet or a `swiftc`-compiled helper against WhisperKit, and both lose the
-/// same thing twice over. They would re-state the load -- variant, `downloadBase`, `modelFolder`,
-/// every argument of `WhisperKit.init` -- in a second place that has to stay in step with
-/// `WhisperKitEngine.load` and cannot be made to, and a warm-up that compiles a *different*
-/// configuration warms nothing while reporting that it did. And they would run as a different,
-/// ad-hoc-signed executable, where the compiled artefact's reuse by the real app is one more thing
-/// nobody has measured. Going through `WhisperKitEngine.prepare()` inside the app bundle that
-/// `install.sh` just signed means the warm-up is the same code, in the same binary, under the same
-/// signature, reading the same store. There is nothing left to keep in step.
+/// were a `swift`-run snippet or a `swiftc`-compiled helper against WhisperKit, and the reason
+/// against them is maintenance and only maintenance: they would re-state the load -- variant,
+/// `downloadBase`, `modelFolder`, every argument of `WhisperKit.init` -- in a second place that has
+/// to stay in step with `WhisperKitEngine.load` and cannot be made to, and a warm-up that compiles a
+/// *different* configuration warms nothing while reporting that it did. Going through
+/// `WhisperKitEngine.prepare()` reaches `loadedKit()`, which is the same private function
+/// `transcribe` reaches and therefore the file's single `WhisperKit(...)` expression. Not arguments
+/// that match: the same call. There is nothing left to keep in step.
+///
+/// **What is NOT a reason, having been measured rather than assumed.** A first draft of this note
+/// argued that a separately-built helper would compile into an artefact the real app could not
+/// reuse, on the strength of two cold loads of 111 s and 112 s seen right after full rebuilds. That
+/// is wrong, and the measurements that killed it are worth keeping: a byte-identical copy of the
+/// installed bundle run from another path loads in 1 s, and a copy re-signed ad-hoc -- different
+/// CDHash, different identity, same code -- loads in 2 s. Louis's own history says the same thing
+/// from the other end: five reinstalls in one evening and no dictation over 4.9 s, including 2.24 s
+/// on the first one after a reinstall, with `transcriptionSeconds` timed around the call that does
+/// the loading. So the compiled artefact is shared across processes, paths and code identities; the
+/// two long loads were a cold cache, and what made it cold was not established.
 ///
 /// It never touches AppKit: `Launch` answers the flag before `MurmureApp.init` exists, so no ⌥Space
 /// registration, no menu bar item, and above all no Accessibility prompt happens in a child process

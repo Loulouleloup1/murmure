@@ -162,9 +162,14 @@ EOF
 #
 # `--prepare-model` is answered by the app binary before SwiftUI exists (`Launch`, `ModelWarmup`):
 # no window, no menu bar item, no microphone, no Accessibility prompt. It loads the model through
-# the SAME `WhisperKitEngine` path a dictation uses -- same code, same binary, same signature, same
-# store -- so what it compiles here is what the app finds compiled later. A warm-up that opened a
-# different configuration would warm nothing and would report that it had.
+# the SAME `WhisperKitEngine` path a dictation uses -- `prepare()` and `transcribe()` reach one
+# private `loadedKit()` and therefore one `WhisperKit(...)` expression, so what is compiled here is
+# by construction what a dictation asks for. A warm-up that opened a different configuration would
+# warm nothing and would report that it had, which is why this one opens none of its own.
+#
+# The sharing is measured, not assumed: a copy of this bundle run from another path, and a copy
+# re-signed ad-hoc under a different CDHash, both load in 1-2 s off what a previous process
+# compiled. Path and code identity are not what the compiled artefact is keyed on.
 step "Preparing the model for this machine (once)"
 
 APP="$HOME/Applications/Murmure.app/Contents/MacOS/Murmure"
