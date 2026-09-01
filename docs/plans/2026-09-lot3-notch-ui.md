@@ -405,3 +405,33 @@ alone never close a feature).
     mid-dictation.
 11. Sleep and wake mid-dictation.
 12. Read the shape through a whole `Prompt` dictation and answer one question: **did it ever jump?**
+
+---
+
+## T11 — Audio feedback (added 2026-09-01, from real use)
+
+**Delivers.** A sound when recording starts, and a quieter one when the text is inserted.
+
+**Why it was added, and why it outranks the visual work it follows.** Louis dictates on an
+ultrawide external display. The status capsule is 260 pt on a 3440 pt screen, and his words were:
+*"je suis obligé d'aller chercher si ça a démarré ou pas avant de commencer à parler."* No amount
+of visual refinement fixes that — a small object on a very wide display is easy to miss by
+construction, and the failure it causes is the worst one this tool has: he starts speaking before
+the recorder is running and loses the front of his sentence. A sound removes the look entirely.
+Superwhisper has had one from the start; this is the feature whose absence he noticed by using
+ours, not by comparing feature lists.
+
+**The trap, to be measured and not assumed.** The start sound plays through the speakers at the
+instant the microphone starts capturing, so it can land in the WAV, reach Whisper as noise, or
+trip `SpeechGate`. The ordering is a real decision. **Delaying capture to protect the recording is
+the wrong trade**: Louis speaks as soon as he hears the sound, so audio lost to a delay is words
+lost from the front of the dictation. If the two conflict, his voice wins and the sound adapts.
+
+**MurmureCore proves.** When a sound fires and which one; that a failure never produces a start
+sound; the ordering against capture. The `NSSound`/`AVAudioPlayer` call itself cannot cross.
+
+**Only the ear proves.** Timbre, volume, and whether it is still tolerable on the fiftieth
+dictation of the day — this fires every single time, so restraint is the design constraint.
+
+**Explicitly out of scope** until asked: a sound for `nothingHeard` or for failures. An error
+chime on a tool used all day is a different decision.
