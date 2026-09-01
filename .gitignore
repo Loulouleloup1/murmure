@@ -42,3 +42,16 @@ benchmark/run_v3*.log
 
 # Agent worktrees -- transient, created by the harness, never part of the project.
 .claude/
+
+# Two tools fight over this file, so neither state is committable. Measured in a fresh clone:
+# `xcodebuild` writes FOUR pins into it (dynamicnotchkit, whisperkit, swift-argument-parser and
+# grdb.swift -- it resolves the whole app graph and, with the .xcodeproj gitignored, has nowhere
+# else to put it), and `swift build` immediately rewrites it back to the ONE that MurmureCore
+# actually depends on. Committing either state guarantees a dirty tree after the other tool runs,
+# which is what a fresh clone reported on its first build.
+#
+# What is lost by ignoring it: the resolved file also pinned the git revision behind GRDB's tag,
+# and a tag can be moved. What replaces it: `Package.swift` pins GRDB with `exact:`, which no tool
+# rewrites -- so the version is fixed in the manifest, where it is readable, and only the exact
+# commit behind an unchanged tag is unguarded.
+MurmureCore/Package.resolved
