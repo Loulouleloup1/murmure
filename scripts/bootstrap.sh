@@ -122,12 +122,15 @@ step "Building and installing"
 "$ROOT/scripts/install.sh"
 
 # ---------------------------------------------------------------------------
-# 5. What is left, which is only the things macOS will not let a script do
+# 5. The compilation, paid here rather than inside somebody's first sentence
 # ---------------------------------------------------------------------------
 
-step "Done -- two things only you can do"
-
-cat <<'EOF'
+# The closing instructions, as a function because TWO paths reach them: the ordinary end of the
+# script, and a ^C during the model preparation below. That interrupt is not a failed install and
+# must not read as one -- everything that makes Murmure work has already happened by this line.
+final_notes() {
+    step "Done -- two things only you can do"
+    cat <<'EOF'
     1. Launch it:  open ~/Applications/Murmure.app
        It has no Dock icon by design; it lives in the menu bar.
 
@@ -139,10 +142,74 @@ cat <<'EOF'
        certificate is a separate click (Manage Certificates -> + -> Apple
        Development). Without one, macOS treats every rebuild as a different app and
        revokes Accessibility silently.
-
-    Expect the FIRST dictation to be slow, and the machine with it: the model is on
-    disk now, but macOS compiles it for this machine's neural engine the first time
-    it loads. Measured on an 8-core Mac: ANECompilerService at 100 % CPU for several
-    minutes, load average above 40, everything sluggish. It is once per machine, it
-    is not a hang, and the app shows what it is doing.
 EOF
+}
+
+# Why this step exists at all, and why it is the LAST one.
+#
+# The 1.6 GB fetched above is only half of what a first run costs. macOS then compiles the model for
+# this machine's neural engine, and THAT is the half that looked like a crash. Measured on a second
+# Mac, out of the app's own history: transcriptionSeconds = 423.47, with `sample` on the process
+# showing the thread parked in MLE5ProgramLibrary.prepareAndReturnError for 2046 samples out of 2046
+# and ANECompilerService holding 100 % CPU while Murmure itself sat at 2 %, waiting. Argmax documents
+# the same cost for this exact variant -- 440 s on an M4 Pro 48 GB, 560 s on an M2 Pro 32 GB, then
+# 3-5 s on every load afterwards (WhisperKit#309). It is what the variant costs, not what a modest
+# machine costs, and the Mac this project was written on pays it too.
+#
+# The wait is the same length wherever it happens and only one of the two places is bearable: at the
+# end of an install you are waiting on purpose, at your first dictation you are waiting for a
+# sentence. That is the whole of the argument for these lines.
+#
+# `--prepare-model` is answered by the app binary before SwiftUI exists (`Launch`, `ModelWarmup`):
+# no window, no menu bar item, no microphone, no Accessibility prompt. It loads the model through
+# the SAME `WhisperKitEngine` path a dictation uses -- same code, same binary, same signature, same
+# store -- so what it compiles here is what the app finds compiled later. A warm-up that opened a
+# different configuration would warm nothing and would report that it had.
+step "Preparing the model for this machine (once)"
+
+APP="$HOME/Applications/Murmure.app/Contents/MacOS/Murmure"
+
+cat <<'EOF'
+    macOS compiles the model for this machine's neural engine the first time it is
+    loaded. Measured on a fresh install: 423 s, ANECompilerService at 100 % CPU, the
+    whole machine sluggish throughout. Argmax measures 440 s on an M4 Pro 48 GB and
+    560 s on an M2 Pro 32 GB for this same variant, then 3-5 s on every load after.
+    It happens once per machine.
+
+    ^C is safe: the install above is already complete and nothing here is left
+    half-written. It does throw the compilation away though -- quitting during it
+    starts it from zero, which is equally true of the app itself later on.
+EOF
+
+# Not an error path. A ^C here means "I would rather pay this at the first dictation", which is a
+# choice the script has no business overriding and no business punishing: the closing instructions
+# are printed either way, and the exit status stays 0 because the install did succeed.
+warm_up_interrupted() {
+    printf '\n'
+    warn "Stopped -- the model is not prepared, and nothing is broken. The install above"
+    warn "is complete; the compilation simply starts again from the beginning, either at"
+    warn "your first dictation (slow, and the app says \"Loading model, don't quit\" while"
+    warn "it happens) or the next time you run this script."
+    final_notes
+    exit 0
+}
+
+if [ ! -x "$APP" ]; then
+    warn "No app at $APP -- skipping."
+    warn "Run scripts/install.sh, then re-run this script to prepare the model."
+else
+    trap warm_up_interrupted INT
+    # Warned about rather than fatal, for the same reason Ollama's absence is: the app is installed
+    # and works, and a failure here costs a slow first dictation and nothing else.
+    if ! "$APP" --prepare-model; then
+        warn "The model could not be prepared -- the reason is on the line above. Not fatal:"
+        warn "the first dictation does it instead, and will be slow while it does."
+    fi
+    trap - INT
+fi
+
+# ---------------------------------------------------------------------------
+# 6. What is left, which is only the things macOS will not let a script do
+# ---------------------------------------------------------------------------
+
+final_notes

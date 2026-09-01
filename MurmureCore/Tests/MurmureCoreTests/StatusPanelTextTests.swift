@@ -46,6 +46,35 @@ final class StatusPanelTextTests: XCTestCase {
             StatusPanelText.label(for: .completed(insertedCharacters: 2)), "Inserted 2 characters")
     }
 
+    /// **The one moment on screen where quitting costs something, and it has to say so.**
+    ///
+    /// CoreML's compilation is not resumable. The person who installed Murmure on a second Mac
+    /// quit it twice during that wait, not knowing, because nothing on screen distinguished it
+    /// from a hang -- and each quit restarted the whole compilation, turning seven minutes into a
+    /// perceived half hour. A sentence that says only "Loading model" is a sentence that lets that
+    /// happen again, so the warning is pinned here rather than left to whoever next edits a
+    /// string in a 158 pt slot and needs to reclaim a few points.
+    ///
+    /// The download deliberately carries no such warning, and that is the second half of the same
+    /// rule: the Hub writes into a `.incomplete` file and picks it up again, so a transfer really
+    /// does survive being quit. Spending the warning where it is not needed is what would blunt it
+    /// where it is.
+    func testOnlyTheWaitThatQuittingDestroysSaysNotToQuit() {
+        let loading = StatusPanelText.label(for: .preparingModel(.loading))
+        XCTAssertTrue(
+            loading.localizedCaseInsensitiveContains("quit"),
+            "\"\(loading)\" does not warn that quitting starts the compilation over")
+        XCTAssertTrue(
+            loading.localizedCaseInsensitiveContains("loading"),
+            "\"\(loading)\" no longer says which wait it is")
+
+        let download = ModelDownload(expectedBytes: 1_638_467_188)
+        let downloading = StatusPanelText.label(for: .preparingModel(.downloading(download)))
+        XCTAssertFalse(
+            downloading.localizedCaseInsensitiveContains("quit"),
+            "a resumable transfer must not be sold as one that cannot be interrupted")
+    }
+
     /// The long wait and the short one are different words. On the panel there are no wings and no
     /// waveform, so the word carries the distinction on its own.
     func testTheTwoWaitsAreDifferentWords() {

@@ -92,15 +92,35 @@ On the first dictation macOS asks for the **microphone**, and Murmure asks for *
 (System Settings → Privacy & Security → Accessibility), because pasting into another app means
 sending it a keystroke. Both are once, provided the signature above is in order.
 
-### The first dictation is slow, and so is the whole machine while it happens
+### The wait `bootstrap.sh` now pays for you, once per machine
 
-Not "a little slower" — that wording was measured wrong and is corrected here. The model is on disk
-after bootstrap, but macOS compiles it for this machine's neural engine the first time it loads.
-Measured on an 8-core Apple Silicon Mac: `ANECompilerService` pinned at 100 % CPU for **several
-minutes**, load average above **40**, the whole machine sluggish.
+Not "a little slower", and not "several minutes" either — both were too soft. Once the model is on
+disk, macOS still has to compile it for this machine's neural engine, and that compilation is
+almost all of what a first run costs:
 
-It happens **once per machine**, it is not a hang, and the app shows what it is doing. Every later
-dictation starts immediately.
+| | |
+|---|---|
+| Observed on a real fresh install | **423 s** — `transcriptionSeconds = 423.47`, read out of the history afterwards |
+| Argmax, same variant, M4 Pro 48 GB | **440 s** |
+| Argmax, same variant, M2 Pro 32 GB | **560 s** |
+| Every load after the first | **3–5 s** |
+
+([WhisperKit #309](https://github.com/argmaxinc/WhisperKit/issues/309).) So it is what this model
+variant costs, not what a modest machine costs — the Mac this project was written on pays it too.
+While it runs, `ANECompilerService` holds **100 % CPU**, load average goes above **40** and the whole
+machine feels slow; Murmure itself sits at 2 %, waiting. `sample` on the process shows the thread
+parked in `MLE5ProgramLibrary.prepareAndReturnError` for 2046 samples out of 2046 — nothing at all
+distinguishes it from a crash.
+
+It happens **once per machine**, and `bootstrap.sh` now does it as its last step, where you are
+already waiting, rather than leaving it to your first dictation, where you are waiting for a
+sentence. `^C` there if you would rather not: the install is complete by that point, nothing is left
+half-written, and the first dictation pays it instead.
+
+**Quitting during it throws it away.** The compilation does not resume — the person who installed
+Murmure on a second Mac quit twice without knowing, and turned seven minutes into a perceived half
+hour. That is why the app says `Loading model, don't quit` and not just `Loading model`, and why
+that wait is worth sitting through. It is not a hang. Every later dictation starts immediately.
 
 ---
 

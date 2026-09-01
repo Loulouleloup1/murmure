@@ -202,6 +202,29 @@ actor WhisperKitEngine {
         return text
     }
 
+    /// Downloads and loads the model, transcribing nothing.
+    ///
+    /// **The one thing a script needs and `transcribe` cannot give it.** The wait a fresh Mac pays
+    /// on its first dictation is not transcription: `sample` on the process showed the thread
+    /// parked in `MLE5ProgramLibrary.prepareAndReturnError` for 2046 samples out of 2046, with
+    /// `ANECompilerService` at 100 % CPU -- CoreML compiling the four `.mlmodelc` bundles for this
+    /// machine's neural engine. 423 s measured on an 8-core Mac, 440 s documented by Argmax on an
+    /// M4 Pro (WhisperKit#309), 3-5 s on every load afterwards. `ab090d5` made that wait legible;
+    /// it did not move it, and at the first dictation somebody is waiting for a sentence rather
+    /// than for an install.
+    ///
+    /// So `scripts/bootstrap.sh` calls it, through `ModelWarmup`, as the last thing it does.
+    ///
+    /// **It is `loadedKit()` and nothing else, which is the whole of why this method exists rather
+    /// than a second binary that also links WhisperKit.** The compiled artefact CoreML caches is
+    /// keyed on the configuration it compiled, so a warm-up that opened another variant, another
+    /// `downloadBase` or another `WhisperKit.init` would warm nothing and would report that it
+    /// had -- a wait that looks paid and still happens, which is worse than one that does not
+    /// pretend. Every argument here is `transcribe`'s because it is literally the same call.
+    func prepare() async throws {
+        _ = try await loadedKit()
+    }
+
     /// Which 100 ms frames of the recording carry sound, as `SpeechGate`'s thresholds were
     /// calibrated to measure it.
     ///

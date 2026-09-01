@@ -40,8 +40,20 @@ public enum StatusPanelText {
         // "model loaded in …s", and the wait it covers is CoreML compiling the model for this
         // machine -- 112 s the first time, seconds after that. No number, because there is none to
         // have; the word and the glyph are the whole of the distinction.
+        //
+        // **"don't quit" is not politeness, it is the one thing that can still go wrong here.**
+        // The compilation is not resumable: the second Mac's installer quit Murmure twice during
+        // it, unknowingly, and turned seven minutes into a perceived half hour of restarts. This
+        // is precisely the moment somebody who believes the app has hung reaches for ⌘Q, and it is
+        // the only moment in the whole sequence where doing so costs them the wait again.
+        //
+        // Three words and no reason given, because the slot is 158 pt and this sentence measures
+        // 143.18 of it (`StatusPanelLayoutTests`) -- "quitting starts it over" does not fit at any
+        // wording, and the panel shares its sentence with the notch card by design. The reason
+        // lives where there is room for it: the README, and what `bootstrap.sh` prints while it
+        // pays the same wait for you.
         case .preparingModel(.loading):
-            "Loading model"
+            "Loading model, don't quit"
         case .transcribing:
             "Transcribing"
         // Its own word, not "Transcribing" continued. The two phases are seconds and 19 s

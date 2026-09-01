@@ -7,7 +7,31 @@ import os
 /// `log stream --predicate 'subsystem == "com.louiscourcier.Murmure"'` and Console.app can see it.
 private let logger = Logger(subsystem: "com.louiscourcier.Murmure", category: "app")
 
+/// The process's entry point, which is the app's only when nobody asked for anything else.
+///
+/// `@main` sits here rather than on `MurmureApp` so that ONE argument can be answered before
+/// SwiftUI exists: `--prepare-model`, which `scripts/bootstrap.sh` uses to pay the model's
+/// first-load cost at the end of an install instead of inside somebody's first dictation. The
+/// measurements, and why the warm-up is a flag on this binary rather than a helper of its own,
+/// are in `ModelWarmup`.
+///
+/// **The check is the first statement of the process, and that is a guarantee rather than a
+/// preference.** Everything `MurmureApp.init` does -- registering ⌥Space, putting an item in the
+/// menu bar, and above all PROMPTING for Accessibility -- must not happen in a child process of a
+/// shell script. Reached this way it cannot have, because none of it has been reached yet.
+///
+/// `MurmureApp.main()` below is the one `App` provides; the struct declares no `main` of its own,
+/// which is what makes it reachable from here at all.
 @main
+enum Launch {
+    static func main() {
+        if CommandLine.arguments.contains(ModelWarmup.flag) {
+            ModelWarmup.run()
+        }
+        MurmureApp.main()
+    }
+}
+
 struct MurmureApp: App {
     @StateObject private var appState: AppState
 
