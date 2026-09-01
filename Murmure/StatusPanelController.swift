@@ -33,10 +33,9 @@ final class StatusPanelController {
     /// The panel's size. Fixed for every phase: it is a status strip, and a strip that resized
     /// itself per phase would be a shape moving under a sentence being read.
     ///
-    /// 260 pt is what the two halves and the sentence need: 28 pt of padding, the 64 pt drawing,
-    /// 10 pt between them, and 158 pt left for the longest line `StatusPanelText` can produce --
-    /// "Inserted 1234 characters", about 149 pt at the 12 pt size the view uses.
-    static let size = CGSize(width: 260, height: 34)
+    /// The parts it is the sum of, and the sentence they have to fit, are `StatusPanelLayout` --
+    /// in the package, where the fit is a test rather than a paragraph. It still comes to 260 x 34.
+    static let size = StatusPanelLayout.size
 
     private let model: StatusPanelModel
     private var panel: MurmureStatusPanel?
@@ -356,10 +355,10 @@ private struct StatusPanelView: View {
     /// One half of the drawing. The notch's wing exactly (`NotchWing`, 32 x 16): the halves are
     /// the same view at the same size on both surfaces, so a dictation looks the same whichever
     /// display Louis started it on.
-    static let half = CGSize(width: 32, height: 16)
+    static let half = CGSize(width: StatusPanelLayout.drawingWidth / 2, height: 16)
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: StatusPanelLayout.spacing) {
             // Zero spacing between the halves: on the notch they are separated by the hardware
             // cutout, and here there is none to separate them -- they are one shape.
             HStack(spacing: 0) {
@@ -371,15 +370,36 @@ private struct StatusPanelView: View {
                     mirrored: true, size: Self.half)
             }
             Text(StatusPanelText.label(for: model.phase))
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(.system(size: StatusPanelLayout.labelFontSize, weight: .medium, design: .rounded))
                 .foregroundStyle(.white)
                 // One line, and the tail is what gets cut: the beginning of a failure message is
                 // the part that names what failed.
                 .lineLimit(1)
                 .truncationMode(.tail)
-            Spacer(minLength: 0)
+                // **Centred in the slot, and the slot is what moves nothing.** This was a
+                // `Spacer(minLength: 0)`, which handed the whole surplus to the right end of the
+                // capsule: the slot is 158 pt because a completion needs it, so "Refining" left
+                // 111 pt of black against one edge and none against the other -- the "partie a
+                // droite de la pastille totalement noire". Centring halves it into 55 pt a side,
+                // which reads as a word in the middle rather than as a hole.
+                //
+                // Two other ways to close that gap were available and are worse, both for the same
+                // reason -- they move something that is meant to be still:
+                //
+                // - Centring the *pair*, drawing and sentence together, moves the drawing sideways
+                //   by half the difference between two phases' sentences. Between "Refining"
+                //   (46.91 pt) and a completion (142.34 pt) that is 47.7 pt, a fifth of the
+                //   capsule, applied to the one element that is continuous across a phase change.
+                // - Sizing the capsule to each phase's sentence moves the capsule itself, by the
+                //   same 95 pt, mid-dictation. That is the one thing the notch sequence forbids
+                //   outright, and this surface is its stand-in.
+                //
+                // The sentence's own position does shift as its length changes, and that is the
+                // one movement this design accepts: the text is *replaced* at a phase change, so
+                // arriving somewhere new is what it was going to do anyway.
+                .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, StatusPanelLayout.horizontalPadding)
         .frame(width: StatusPanelController.size.width, height: StatusPanelController.size.height)
         // Nearly black rather than black, with an edge of its own: the panel floats over the target
         // application instead of sitting in a hardware cutout, so nothing else tells it from the

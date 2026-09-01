@@ -14,7 +14,10 @@ public struct ScreenGeometry: Equatable, Sendable {
     public let frame: CGRect
 
     /// The part of it left by the menu bar and the Dock (`NSScreen.visibleFrame`). The panel is
-    /// placed against this and not against `frame`, which is what keeps it off a bottom Dock.
+    /// placed against this and not against `frame`, which is what keeps it out from under the menu
+    /// bar. Measured on Louis's machine: the built-in display reserves 33 pt at the top for the
+    /// menu bar, the external one currently reserves nothing at all -- `visibleFrame == frame`
+    /// there -- and that stops being true the moment the menu bar moves to it.
     public let visibleFrame: CGRect
 
     /// Whether the display has a hardware cutout, i.e. `auxiliaryTopLeftArea` and
@@ -122,30 +125,47 @@ public enum StatusSurfaceChoice {
 
     // MARK: - Where on that display
 
-    /// How far the panel floats above the bottom of the usable area.
+    /// How far the panel floats below the top of the usable area.
     ///
-    /// **Arbitrary in its digits, deliberate in its edge.** The bottom is chosen over the top for
-    /// two reasons that are not taste: the top-centre strip of a maximised window is its title or
-    /// tab bar, the one row of it that is always occupied; and the bottom centre is where macOS
-    /// already puts its own transient status -- the volume and brightness HUDs -- so a small dark
-    /// shape there reads as the system saying something rather than as a window that has appeared.
-    /// The distance itself is Louis's to move.
-    public static let bottomMargin: CGFloat = 96
+    /// **Arbitrary in its digits, deliberate in its edge -- and the edge is the opposite of the one
+    /// this constant was born with.** It used to be a bottom margin, argued for on two grounds that
+    /// were real and are still real: the top-centre strip of a maximised window is its title or tab
+    /// bar, the one row of it that is always occupied; and the bottom centre is where macOS puts
+    /// its own volume and brightness HUDs, so a small dark shape there reads as the system saying
+    /// something. Louis overruled both with a third, which outranks them because it is about the
+    /// two surfaces being one interface: on a display with a cutout the dictation is drawn *in* the
+    /// cutout, which is at the top, so a display without one draws it at the top as well and the
+    /// same dictation is read in the same place whichever screen it was started on.
+    ///
+    /// The title-bar cost that argued for the bottom is bounded rather than dismissed. 96 pt is
+    /// measured from the top of `visibleFrame`, i.e. from below the menu bar, and a standard title
+    /// bar is 32 pt (`NSWindow.frameRect(forContentRect:styleMask:)` on a `.titled` window), so the
+    /// panel clears a maximised window's chrome by 64 pt and floats over its content instead.
+    ///
+    /// The distance is 96 because it is the gap Louis approved at the bottom edge, kept unchanged
+    /// and turned upside down; the digits are his to move.
+    public static let topMargin: CGFloat = 96
 
     /// Where a panel of this size sits on that display.
     ///
-    /// Measured against `visibleFrame`, so a Dock at the bottom pushes the panel up instead of
-    /// hiding it behind itself, and a Dock at the side leaves it where it was.
+    /// Measured against `visibleFrame`, so the menu bar pushes the panel down instead of putting it
+    /// behind itself. That distinction is new work for this function rather than the same work at
+    /// another edge: nothing macOS reserves at the bottom is drawn *over* a `.screenSaver`-level
+    /// panel, so the old bottom placement was still legible when it got `visibleFrame` wrong,
+    /// while a top placement measured from `frame` would open 33 pt into the menu bar.
     ///
     /// The origin is rounded to whole points. `midX - width / 2` lands on a half point whenever
     /// the display's usable width and the panel's width have different parities -- and a
     /// half-point origin puts a 1 pt border of the capsule across two physical pixels on a
     /// non-Retina external display, which is a border drawn at half strength twice instead of
-    /// once.
+    /// once. Louis's external display is exactly that: `backingScaleFactor` 1.0.
     public static func frame(size: CGSize, on screen: ScreenGeometry) -> CGRect {
         CGRect(
             x: (screen.visibleFrame.midX - size.width / 2).rounded(),
-            y: (screen.visibleFrame.minY + bottomMargin).rounded(),
+            // From the top edge downwards, so the *gap* above the panel is `topMargin`. Deriving
+            // the origin from `minY` plus a height would put the margin below the panel instead,
+            // and the panel would hang 34 pt further down than the number says.
+            y: (screen.visibleFrame.maxY - topMargin - size.height).rounded(),
             width: size.width,
             height: size.height
         )

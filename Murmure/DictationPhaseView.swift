@@ -38,11 +38,52 @@ struct DictationPhaseView: View {
     static let barWidth: CGFloat = 3
     static let barSpacing: CGFloat = 2.5
 
-    /// How often the waveform samples the level box. ~20 Hz: fast enough that the bars move with
-    /// the voice, slow enough that it is not a redraw storm. It is a PULL -- nothing about the
-    /// audio thread's rate reaches this timeline, and a frame missed here is a bar not drawn,
-    /// never a buffer delayed.
-    static let sampleInterval: TimeInterval = 0.05
+    /// How often the waveform samples the level box. It is a PULL -- nothing about the audio
+    /// thread's rate reaches this timeline, and a frame missed here is a bar not drawn, never a
+    /// buffer delayed.
+    ///
+    /// **60 Hz, up from 20.** What it buys is punctuality, not more waveform: `AudioLevels` cuts
+    /// each tap buffer into two blocks and appends both at once, so at the 4 096 frames and 48 kHz
+    /// of this Mac the levels genuinely change about twelve times a second, 85 ms apart, whatever
+    /// this number is. Sampling that on a 50 ms grid put each change up to 50 ms late and made the
+    /// wait between two advances alternate 50 ms and 100 ms -- a waveform that hesitates twice a
+    /// second, which is what reads as old. On a 16.7 ms grid the lateness is at most 17 ms and the
+    /// cadence is the microphone's own.
+    ///
+    /// `.animation(minimumInterval:)` and not `.periodic`, which is what it was: the schedule is
+    /// then a whole number of display frames, so every tick lands on a frame that is about to be
+    /// composited. A free-running 16.7 ms timer against an 8.3 ms refresh has no such alignment --
+    /// two ticks fall inside one frame and none inside the next -- which is a second uneven rhythm
+    /// laid over the one this change exists to remove.
+    ///
+    /// It is a *minimum interval* and not a promised rate, and the difference is visible on this
+    /// machine: measured 60.0 ticks a second, because the display link driving it runs at 120 Hz
+    /// and the schedule takes every second frame. A link that is not a multiple of 60 lands on the
+    /// next slower multiple instead -- 56.7 Hz on the 170 Hz panel Louis has on his desk.
+    ///
+    /// Measured cost, one surface's two halves rendered off-screen for 20 s with the levels fed on
+    /// the real tap cadence, six interleaved runs each: **7.6-7.9 % of one core at 20 Hz against
+    /// 8.5-9.6 % at 60 Hz.** Three times the samples for about a fifth more work, because most of
+    /// the work is not the sampling -- the bars are carried between samples by `levelCarry` below,
+    /// and CoreAnimation renders that at the display's rate whatever this timeline asks for. A
+    /// seventh run of each landed near half those figures, which is this Mac's ProMotion display
+    /// choosing a lower refresh: the cost follows the compositor more closely than it follows this
+    /// constant. On the 14-core M4 Pro this runs on, 9 % of one core is 0.6 % of the machine, and
+    /// only while a recording is on screen -- the same view with no timeline at all costs 0.03 %.
+    ///
+    /// Uncapped `.animation` measured 10.0-10.9 % for 120 ticks a second, i.e. it pays a third
+    /// again over 60 Hz to redraw a waveform that changed twelve times. That is why this is capped
+    /// at the 60 Louis asked for rather than left to follow whatever the display runs at.
+    static let sampleInterval: TimeInterval = 1.0 / 60
+
+    /// How long a bar takes to travel from one sample's height to the next.
+    ///
+    /// **Deliberately not `sampleInterval`, which it used to be**, and the two stopped being the
+    /// same number the moment the sampling got faster than the levels. This is a carry across the
+    /// gap between two *arrivals*, ~85 ms apart; setting it to 1/60 would ramp each new height in
+    /// 17 ms and then hold it still for the other 68, which is the stutter this change is meant to
+    /// remove, drawn sharper.
+    static let levelCarry: TimeInterval = 0.05
 
     /// The one accent, assembled from the components `NotchAppearance` chose (lot 3 D11, Q-NB2).
     static let accent = Color(
@@ -105,15 +146,17 @@ struct DictationPhaseView: View {
             case .none:
                 Color.clear
             case .waveform:
-                TimelineView(.periodic(from: .now, by: Self.sampleInterval)) { _ in
+                TimelineView(.animation(minimumInterval: Self.sampleInterval)) { _ in
                     bars(levels.bars())
                 }
             case .travelling:
-                // `.animation` rather than the waveform's 20 Hz sample, and with no `.animation()`
-                // modifier under it: the position is recomputed at display rate, so it is
-                // continuous by construction. Interpolating between 20 Hz samples the way the bars
-                // do would animate the end-of-cycle wrap as a flyback back across the whole
-                // surface, which is the one visible jump this phase is able to produce.
+                // Uncapped, unlike the waveform's `minimumInterval`, and with no `.animation()`
+                // modifier under it: the position is a function of the date, so recomputing it at
+                // the display's own rate is what makes it continuous, and there is no source
+                // cadence above which the extra frames would be redundant the way there is for the
+                // bars. Carrying it between samples the way the bars are carried would animate the
+                // end-of-cycle wrap as a flyback back across the whole surface, which is the one
+                // visible jump this phase is able to produce.
                 TimelineView(.animation) { context in
                     travellingMark(at: context.date)
                 }
@@ -158,8 +201,8 @@ struct DictationPhaseView: View {
             }
         }
         // The meter's own attack and release do the smoothing; this only carries each bar from one
-        // sample to the next so 20 Hz of steps reads as movement rather than as a flicker.
-        .animation(.linear(duration: Self.sampleInterval), value: levels)
+        // arrival to the next so a burst of levels reads as movement rather than as a flicker.
+        .animation(.linear(duration: Self.levelCarry), value: levels)
     }
 
     /// The transcription -- and the insertion behind it: a mark leaving the inner edge and running

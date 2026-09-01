@@ -116,34 +116,49 @@ final class StatusSurfaceTests: XCTestCase {
 
     // MARK: - Where on that display
 
-    func testThePanelIsCentredJustAboveTheBottomOfTheUsableArea() {
+    /// The panel hangs from the top edge, and `topMargin` is the gap *above* it.
+    ///
+    /// This assertion is the reverse of the one it replaces, which pinned the panel to the bottom
+    /// of the usable area. The change is Louis's: the notch is at the top, so the surface that
+    /// stands in for it on a display without a cutout is at the top too. `StatusSurfaceChoice`'s
+    /// own note carries the reasoning and what it costs.
+    ///
+    /// `maxY` rather than `minY` is the whole point of the assertion. A panel placed 96 pt above
+    /// `visibleFrame.minY + height` would also be "96 from an edge" and would hang 34 pt lower
+    /// than the number reads.
+    func testThePanelIsCentredJustBelowTheTopOfTheUsableArea() {
         let size = CGSize(width: 220, height: 34)
         let frame = StatusSurfaceChoice.frame(size: size, on: external)
         XCTAssertEqual(frame.midX, external.visibleFrame.midX)
-        XCTAssertEqual(frame.minY, external.visibleFrame.minY + StatusSurfaceChoice.bottomMargin)
+        XCTAssertEqual(frame.maxY, external.visibleFrame.maxY - StatusSurfaceChoice.topMargin)
         XCTAssertEqual(frame.size, size)
     }
 
-    /// `visibleFrame`, not `frame`. A Dock along the bottom edge raises `visibleFrame.minY`, and a
-    /// panel measured from `frame` would sit behind it -- on the display Louis is working on,
-    /// which is the display whose Dock is showing.
-    func testABottomDockPushesThePanelUpInsteadOfHidingItBehindItself() {
-        let dockHeight: CGFloat = 80
-        let docked = ScreenGeometry(
+    /// `visibleFrame`, not `frame`. This replaces the Dock test that guarded the bottom placement,
+    /// and it guards strictly more: a panel that got the bottom edge wrong floated over the Dock,
+    /// which is ugly, while one that gets the top edge wrong opens *inside the menu bar*, at
+    /// `.screenSaver` level, on top of the clock.
+    ///
+    /// 33 pt is the band measured on Louis's built-in display. The external one reserves none
+    /// today, which is exactly why this is tested against a fixture and not against his desk.
+    func testTheMenuBarPushesThePanelDownInsteadOfOpeningInsideIt() {
+        let menuBar: CGFloat = 33
+        let withMenuBar = ScreenGeometry(
             frame: external.frame,
             visibleFrame: CGRect(
-                x: external.visibleFrame.minX,
-                y: external.visibleFrame.minY + dockHeight,
-                width: external.visibleFrame.width,
-                height: external.visibleFrame.height - dockHeight
+                x: external.frame.minX,
+                y: external.frame.minY,
+                width: external.frame.width,
+                height: external.frame.height - menuBar
             ),
             hasNotch: false
         )
-        let frame = StatusSurfaceChoice.frame(size: CGSize(width: 220, height: 34), on: docked)
+        let frame = StatusSurfaceChoice.frame(size: CGSize(width: 220, height: 34), on: withMenuBar)
         XCTAssertEqual(
-            frame.minY,
-            external.visibleFrame.minY + dockHeight + StatusSurfaceChoice.bottomMargin
+            frame.maxY,
+            external.frame.maxY - menuBar - StatusSurfaceChoice.topMargin
         )
+        XCTAssertLessThanOrEqual(frame.maxY, withMenuBar.visibleFrame.maxY, "opened into the menu bar")
     }
 
     /// A display whose usable width and the panel's width have different parities puts the centred
