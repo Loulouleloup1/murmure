@@ -186,6 +186,33 @@ final class PasteInserter {
         )
     }
 
+    /// Puts text on the clipboard and leaves it there.
+    ///
+    /// **The one write in Murmure that does not borrow.** `insert(_:)` goes through
+    /// `PasteboardSnapshot.borrow` and hands the clipboard back 300 ms later, because the user did
+    /// not ask for their clipboard to be touched. This is the user asking: it is what the standing
+    /// panel's Copy button and the menu item behind it do, and a copy that undid itself would be a
+    /// Copy that does not copy.
+    ///
+    /// It exists because it is the recovery that survives a denied Accessibility. Without that
+    /// permission `CGEvent.post` does nothing at all, so re-pasting cannot work and the clipboard
+    /// is the only way the transcript leaves Murmure.
+    ///
+    /// Returns whether the pasteboard accepted it. False means someone else took ownership between
+    /// the two calls and the transcript is NOT on the clipboard -- which matters more here than
+    /// anywhere, because the next thing the user does is press ⌘V.
+    @discardableResult
+    static func copyToClipboard(_ text: String) -> Bool {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.setString(text, forType: .string) else {
+            logger.error("copy refused by the pasteboard -- the transcript is NOT on the clipboard")
+            return false
+        }
+        logger.info("transcript copied (\(text.count, privacy: .public) characters)")
+        return true
+    }
+
     /// Prompts for Accessibility permission if it has not been granted. Returns whether the
     /// process is trusted, so the caller can say something rather than fail silently later.
     static func requestAccessibilityIfNeeded() -> Bool {

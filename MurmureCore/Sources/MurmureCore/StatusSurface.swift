@@ -146,6 +146,22 @@ public enum StatusSurfaceChoice {
     /// and turned upside down; the digits are his to move.
     public static let topMargin: CGFloat = 96
 
+    /// How far the standing failure panel floats below the top of the usable area.
+    ///
+    /// **Derived, not chosen: it is exactly the strip's own margin plus the strip.** The two
+    /// surfaces can be on screen at the same instant -- a paste failure opens the standing panel
+    /// while the transient one is still showing the failure it is about, for the four seconds of
+    /// `NotchPresenter.failureDwell` -- and on a display with no cutout they are both placed by
+    /// this function, centred on the same midX. Any margin under `topMargin + StatusPanelLayout
+    /// .height` would put the panel over the sentence explaining it. `StatusSurfaceTests` pins
+    /// the inequality rather than the digits.
+    ///
+    /// The gap over the floor is `StandingPanelLayout.blockSpacing`, so the space between the two
+    /// surfaces is the space between two blocks inside one of them. **That much is arbitrary**;
+    /// the floor under it is not.
+    public static let standingTopMargin =
+        topMargin + StatusPanelLayout.height + StandingPanelLayout.blockSpacing
+
     /// Where a panel of this size sits on that display.
     ///
     /// Measured against `visibleFrame`, so the menu bar pushes the panel down instead of putting it
@@ -159,7 +175,9 @@ public enum StatusSurfaceChoice {
     /// half-point origin puts a 1 pt border of the capsule across two physical pixels on a
     /// non-Retina external display, which is a border drawn at half strength twice instead of
     /// once. Louis's external display is exactly that: `backingScaleFactor` 1.0.
-    public static func frame(size: CGSize, on screen: ScreenGeometry) -> CGRect {
+    public static func frame(
+        size: CGSize, on screen: ScreenGeometry, topMargin: CGFloat = topMargin
+    ) -> CGRect {
         CGRect(
             x: (screen.visibleFrame.midX - size.width / 2).rounded(),
             // From the top edge downwards, so the *gap* above the panel is `topMargin`. Deriving

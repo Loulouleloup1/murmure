@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Foundation
 import MurmureCore
 import os
@@ -23,6 +24,16 @@ final class DictationController {
     /// because each asks `StatusSurfaceChoice.surface(on:)` about the display it resolved. They
     /// resolve that display by different signals, though -- see `StatusPanelController`.
     private let statusPanel: StatusPanelController
+    /// The one surface that takes clicks and the only one that waits: it holds a dictation the
+    /// paste could not deliver, with Re-paste and Copy, and it holds an `AppAlert` when Murmure
+    /// itself cannot work. Everything else in lot 3 retracts on a timer; this does not, and that
+    /// asymmetry is the whole of task T6.
+    ///
+    /// Not the notch, and `ProblemPanelController` argues why at length: buttons need mouse
+    /// events, both existing surfaces refuse them on purpose, and the notch's window is
+    /// DynamicNotchKit's -- `canBecomeKey` is `true` there and cannot be overridden from outside,
+    /// so the guarantee that keeps ⌘V going to Louis's terminal could not be made.
+    private let problemPanel: ProblemPanelController
     /// The third surface, and the only one Louis does not have to look at. Driven from the same
     /// state changes as the other two, and by the same rule: nothing but the session's own state
     /// is allowed to make Murmure a sound.
@@ -64,6 +75,31 @@ final class DictationController {
         let statusPanel = StatusPanelController(levels: levels, progress: transcriptionProgress)
         self.statusPanel = statusPanel
 
+        // Task 6 made `onClipboardOutcome` a REQUIRED init parameter with no default, precisely so
+        // this line cannot forget to decide. `PasteInserter()` no longer compiles.
+        let inserter = PasteInserter { outcome in
+            Task { @MainActor in appState.noteClipboard(outcome) }
+        }
+        self.inserter = inserter
+
+        // Built here, before the session, because its re-paste needs only the inserter -- and it
+        // has to exist before the state-change closure below, which is what drives it. There is
+        // exactly one `PasteInserter` in the process and both re-paste routes go through it, so
+        // the clipboard-restore consumer stays unique (`PasteInserter.onClipboardOutcome` is a
+        // required parameter for precisely that reason).
+        //
+        // It is handed the TEXT rather than asked to fetch it. The menu's `repasteLast()` reads
+        // `session.lastTranscript`, which is the right question there -- it is offered even when
+        // nothing failed. The panel already holds the transcript it is displaying, so pasting
+        // that one is what makes the button unable to deliver a different dictation from the one
+        // on screen. `Self.repaste` is the single implementation both call.
+        let problemPanel = ProblemPanelController { [log] text in
+            Task { @MainActor in
+                await Self.repaste(text, inserter: inserter, appState: appState, log: log)
+            }
+        }
+        self.problemPanel = problemPanel
+
         // Built at launch rather than at the first dictation: `CuePlayer` decodes both sounds and
         // gets an `AVAudioEngine` running here, so the press that starts a dictation only has to
         // enqueue a buffer that is already in memory (measured at 0.06 ms, against 21.8 ms for
@@ -78,13 +114,6 @@ final class DictationController {
             log.error("cue unavailable: \(problem, privacy: .public)")
         })
         self.feedback = feedback
-
-        // Task 6 made `onClipboardOutcome` a REQUIRED init parameter with no default, precisely so
-        // this line cannot forget to decide. `PasteInserter()` no longer compiles.
-        let inserter = PasteInserter { outcome in
-            Task { @MainActor in appState.noteClipboard(outcome) }
-        }
-        self.inserter = inserter
 
         // `modes/`, never the `Murmure/` folder above it: `recordings/` and the Whisper models
         // are its siblings. Nil when Application Support cannot be reached at all -- dictation
@@ -165,6 +194,20 @@ final class DictationController {
                     // and nothing else would ever take it off the screen. `modeProblems` is
                     // deliberately NOT cleared here -- a broken mode file survives the press.
                     appState.refinementNotice = nil
+                    // **Re-asked here, and not only at launch.** Accessibility is granted against
+                    // the app's code signature, so a rebuild revokes it with no dialog and no
+                    // error -- `CGEvent.post` simply does nothing. Louis lost it exactly that way,
+                    // and the only symptom was a paste that did not happen. A flag read once at
+                    // launch would keep answering for a world that has changed underneath it.
+                    //
+                    // `AXIsProcessTrusted()` READS the trust database and never prompts;
+                    // `PasteInserter.requestAccessibilityIfNeeded()`, which does prompt, is called
+                    // once at launch and never from here -- a permission dialog opening on the
+                    // hotkey would land on top of whatever Louis is dictating into.
+                    //
+                    // Assigned, not or-ed: this is a fresh reading, so granting the permission
+                    // clears the alert on the very next dictation without anything else running.
+                    appState.accessibilityDenied = !AXIsProcessTrusted()
                 }
                 // The message is not just an icon (ruling L7): `.failed`'s payload says whether the
                 // microphone is denied, the model failed to download or the paste was refused, and
@@ -203,6 +246,19 @@ final class DictationController {
                 // setting: both are driven, and each draws only on the kind of display it is for,
                 // so plugging a monitor in mid-session needs nothing switched.
                 statusPanel.apply(state)
+                // And the surface that waits. Driven from the same state changes as the other
+                // two so there is one source of truth, but it is the only one that outlives the
+                // dictation: `FailureSurface.standing` says which of a paste failure, an alert
+                // and a clipboard loss gets it, and `ProblemPanelController` keeps a dismissal.
+                //
+                // `clipboardWarning` is read here rather than passed in because it is set on a
+                // main-actor `Task` that `PasteInserter` enqueues BEFORE the throw that produces
+                // this `.failed` -- so it has already run by the time this line does. If that
+                // ordering ever changed, the clipboard note would arrive one state change late,
+                // which is a missing second line and never a missing offer.
+                problemPanel.show(FailureSurface.standing(
+                    state: state, alert: appState.alert,
+                    clipboardWarning: appState.clipboardWarning))
             }
         }
 
@@ -216,6 +272,32 @@ final class DictationController {
             log.error("⌥Space registration refused -- another application owns the combination")
             appState.hotkeyUnavailable = true
             appState.status = .failed
+        }
+
+        // Whatever is already wrong at launch, put on screen now rather than at the first
+        // dictation. For the hotkey that is the ONLY chance: without ⌥Space no dictation can
+        // start, so no phase can ever arrive and no transient surface would ever appear to say
+        // why. `MurmureApp` has already asked for Accessibility by this point and stored the
+        // answer, so both flags are settled.
+        //
+        // Two surfaces, two lifetimes, and both are wanted. The notch or the strip flashes it so
+        // it is NOTICED -- a menu-bar app has no window Louis is looking at -- and the standing
+        // panel keeps it, with the System Settings button for the one alert that has somewhere to
+        // go. `NotchController.raise` and `StatusPanelController.raise` each draw only on the kind
+        // of display they are for, so this shows once, not twice.
+        //
+        // Deferred by one main-actor turn rather than done inline. This init runs inside
+        // `MurmureApp.init`, i.e. before SwiftUI has finished bringing the application up, and
+        // two of the three lines below put a window on screen (`StatusPanelController` makes an
+        // `NSPanel` synchronously; `ProblemPanelController` the same). Ordering a window in from
+        // inside an `App`'s initialiser is not something this task can verify, and a hop costs
+        // nothing here -- the alert is about a permission, not about a dictation in flight.
+        if let alert = appState.alert {
+            Task { @MainActor in
+                notch.raise(alert)
+                statusPanel.raise(alert)
+                problemPanel.show(.alert(alert))
+            }
         }
 
         // The menu has to be able to list the modes before the first dictation ever resolves one.
@@ -246,15 +328,48 @@ final class DictationController {
                 log.notice("re-paste requested but the last dictation produced no text")
                 return
             }
-            do {
-                try await inserter.insert(text)
-            } catch {
-                // A re-paste is itself an insertion and fails for the same reasons. Swallowing it
-                // would make the menu item look like it did nothing for no stated reason.
-                log.error("re-paste failed: \(error.localizedDescription, privacy: .public)")
-                appState.lastFailureMessage = "Recollage échoué : \(error.localizedDescription)"
-                appState.status = .failed
+            await Self.repaste(text, inserter: inserter, appState: appState, log: log)
+        }
+    }
+
+    /// Menu action: put the last transcript on the clipboard.
+    ///
+    /// The standing panel's Copy button reaches the same `PasteInserter.copyToClipboard`, and this
+    /// item is deliberately its fallback rather than a duplicate feature. Whether a click on a
+    /// panel that can never become key reaches a SwiftUI button is AppKit behaviour on real
+    /// hardware that no test here can settle, and the one outcome T6 exists to prevent is a
+    /// transcript with no way out. A menu item is a route that is known to work.
+    func copyLast() {
+        Task {
+            guard let text = await session.lastTranscript else {
+                log.notice("copy requested but the last dictation produced no text")
+                return
             }
+            PasteInserter.copyToClipboard(text)
+        }
+    }
+
+    /// Puts this text into the frontmost application, and says so when it cannot.
+    ///
+    /// The one implementation behind both re-paste routes -- the menu item above and the standing
+    /// panel's button -- and a `static` for a reason rather than for tidiness: the panel is built
+    /// before `self` is complete, so its closure cannot capture the controller. What it captures
+    /// instead is the same `inserter`, which is the invariant that matters (one
+    /// clipboard-restore consumer, `PasteInserter.onClipboardOutcome`).
+    ///
+    /// A re-paste is itself an insertion and fails for the same reasons. Swallowing it would make
+    /// the control look like it did nothing for no stated reason -- and after an Accessibility
+    /// revocation, that is exactly what would happen twice in a row.
+    @MainActor
+    private static func repaste(
+        _ text: String, inserter: PasteInserter, appState: AppState, log: Logger
+    ) async {
+        do {
+            try await inserter.insert(text)
+        } catch {
+            log.error("re-paste failed: \(error.localizedDescription, privacy: .public)")
+            appState.lastFailureMessage = "Recollage échoué : \(error.localizedDescription)"
+            appState.status = .failed
         }
     }
 }

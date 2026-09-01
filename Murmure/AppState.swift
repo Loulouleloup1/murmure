@@ -35,6 +35,32 @@ final class AppState: ObservableObject {
     /// exactly what task 4 refused to ship.
     @Published var hotkeyUnavailable = false
 
+    /// `AXIsProcessTrusted()` answered false the last time it was asked: at launch, and at the
+    /// start of every dictation since.
+    ///
+    /// **Re-asked per dictation because the launch answer goes stale, and silently.** The
+    /// permission is stored against the app's code signature, so a rebuild revokes it without any
+    /// dialog, and the only symptom is a ⌘V that does nothing -- which is exactly how Louis lost
+    /// it. A flag set once at launch would go on reporting the state of the world at launch for as
+    /// long as the app stayed running.
+    ///
+    /// Not cleared by the next `.recording` the way `clipboardWarning` and its neighbours are:
+    /// it is REPLACED there by a fresh reading, which is the same shape `modeProblems` has and for
+    /// the same reason -- the problem outlives the dictation that revealed it.
+    @Published var accessibilityDenied = false
+
+    /// The one problem with Murmure itself worth a surface of its own, or nil.
+    ///
+    /// Not `@Published`, and it does not need to be: it is derived from two properties that both
+    /// are, so a SwiftUI view reading it is invalidated by whichever of them changed. The ranking
+    /// is `AppAlert.mostSevere(among:)`, in the package, where it is tested.
+    var alert: AppAlert? {
+        AppAlert.mostSevere(among: [
+            hotkeyUnavailable ? AppAlert.hotkeyUnavailable : nil,
+            accessibilityDenied ? AppAlert.accessibilityDenied : nil,
+        ].compactMap(\.self))
+    }
+
     /// The clipboard was not handed back intact. Cleared when the next dictation starts.
     @Published var clipboardWarning: String?
 

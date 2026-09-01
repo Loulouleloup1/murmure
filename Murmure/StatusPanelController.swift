@@ -74,6 +74,13 @@ final class StatusPanelController {
         show(phase)
     }
 
+    /// A problem with Murmure itself, on the surface a dictation would otherwise be using. The
+    /// notch's twin -- see `NotchController.raise(_:)` for why a dictation always outranks it and
+    /// why this notice still leaves on a timer.
+    func raise(_ alert: AppAlert) {
+        show(FailureSurface.transient(dictation: model.phase, alert: alert))
+    }
+
     private func show(_ phase: NotchPhase) {
         guard phase != model.phase else { return }
         retraction?.cancel()
@@ -259,7 +266,16 @@ extension ScreenGeometry {
 /// overrides `canBecomeKey` to return `true` (`DynamicNotchPanel.swift:29`), which the plan's
 /// risk table records as unfixable from outside the library.
 final class MurmureStatusPanel: NSPanel {
-    init(contentRect: NSRect) {
+    /// `takesClicks` is false for every status surface and true for exactly one window: the
+    /// standing failure panel, whose Re-paste and Copy are buttons (`ProblemPanelController`).
+    ///
+    /// **It does not weaken the guarantee above; that is the point of putting it here rather than
+    /// on a window of its own.** `canBecomeKey` is what keeps ⌘V going to the terminal, and it
+    /// returns false for every instance of this class whatever this flag says. What
+    /// `ignoresMouseEvents` decides is only whether clicks *stop* at the window or fall through
+    /// it: an indicator must never swallow a click meant for the window underneath, a control
+    /// must receive its own. Neither answer can make a window key.
+    init(contentRect: NSRect, takesClicks: Bool = false) {
         super.init(
             contentRect: contentRect,
             // `.nonactivatingPanel` is the second half of the same property, at the application
@@ -283,7 +299,14 @@ final class MurmureStatusPanel: NSPanel {
         // A status indicator, not a control (lot 3 T7, V1). Mouse events pass straight through to
         // whatever is underneath, which is the window being dictated into -- so the panel cannot
         // swallow a click meant for the text Louis is about to paste into.
-        ignoresMouseEvents = true
+        //
+        // The one exception is the standing failure panel, which is a control: see `takesClicks`.
+        ignoresMouseEvents = !takesClicks
+        // Only relevant when it takes clicks, and harmless otherwise. A click anywhere but on a
+        // button must do nothing at all -- dragging the panel by its background would let Louis
+        // park a window that never becomes key over something he needs, with no title bar to put
+        // it back.
+        isMovableByWindowBackground = false
 
         hasShadow = false
         isOpaque = false

@@ -245,4 +245,37 @@ final class StatusSurfaceTests: XCTestCase {
         XCTAssertEqual(twice.origin.x, start.x)
         XCTAssertEqual(twice.origin.y, start.y)
     }
+    // MARK: - The standing failure panel, placed under the strip
+
+    /// The two surfaces can be on screen together: a paste failure opens the standing panel while
+    /// the strip is still showing the failure it is about, for `NotchPresenter.failureDwell`. On a
+    /// display with no cutout both are placed by the same function on the same midX, so an
+    /// overlap would put the panel across the sentence explaining it.
+    func testTheStandingPanelClearsTheStatusStripOnADisplayWithNoCutout() {
+        let strip = StatusSurfaceChoice.frame(size: StatusPanelLayout.size, on: external)
+        let standing = StatusSurfaceChoice.frame(
+            size: StandingPanelLayout.size(for: .alert(.accessibilityDenied)),
+            on: external, topMargin: StatusSurfaceChoice.standingTopMargin)
+        XCTAssertFalse(strip.intersects(standing))
+        // Below it, not above: the strip is nearer the menu bar, and y grows upwards.
+        XCTAssertLessThan(standing.maxY, strip.minY)
+    }
+
+    /// The floor under `standingTopMargin`, stated as the inequality rather than as the digits.
+    func testTheStandingMarginClearsTheWholeHeightOfTheStrip() {
+        XCTAssertGreaterThanOrEqual(
+            StatusSurfaceChoice.standingTopMargin,
+            StatusSurfaceChoice.topMargin + StatusPanelLayout.height)
+    }
+
+    /// The default argument is the strip's margin, so every existing caller places what it always
+    /// placed. A default that drifted would move the one surface Louis has been reading.
+    func testThePlacementDefaultIsStillTheStripsOwnMargin() {
+        XCTAssertEqual(
+            StatusSurfaceChoice.frame(size: StatusPanelLayout.size, on: external),
+            StatusSurfaceChoice.frame(
+                size: StatusPanelLayout.size, on: external,
+                topMargin: StatusSurfaceChoice.topMargin))
+    }
+
 }

@@ -122,6 +122,21 @@ final class NotchController {
         show(phase)
     }
 
+    /// A problem with Murmure itself -- Accessibility revoked, ⌥Space refused -- on the surface a
+    /// dictation would otherwise be using.
+    ///
+    /// `FailureSurface.transient` is what decides, and its answer is that a dictation always wins:
+    /// with one on screen this resolves to the phase already showing and `show` returns at its
+    /// first line. So this can be called at any moment without ever painting over a waveform.
+    ///
+    /// It leaves on `NotchPresenter.dwell`, like every other notice, because the card is a black
+    /// slab across the menu bar and one that outlived what it was about is the "band with no
+    /// dictation behind it" the plan refuses. The surface that WAITS is `ProblemPanelController`,
+    /// which is also the only one that can be acted on.
+    func raise(_ alert: AppAlert) {
+        show(FailureSurface.transient(dictation: model.phase, alert: alert))
+    }
+
     private func show(_ phase: NotchPhase) {
         guard phase != model.phase else { return }
         model.enter(phase, at: Date())
