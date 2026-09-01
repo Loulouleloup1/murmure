@@ -744,3 +744,35 @@ unit tests alone never close a feature).
     it starts recording, not after.
 16. Dictate with the window open and focused. The text lands in the app you meant, not in Murmure.
 17. Resize the window, quit, relaunch. It comes back the size and section you left it.
+
+---
+
+## Retention — decided by Louis, 2026-09-01
+
+Supersedes spec §7's "no auto-purge, manual clear only", which was not a policy: measured at
+461 MB for 99 recordings (~4.6 MB each), the corpus's 1 469 dictations project to **~6.8 GB**.
+
+**Three tiers, and the third is what makes the second affordable.**
+
+1. **Audio: deleted after 3 days.** His words: *"je vois même pas de cas où ce soit intéressant de
+   le garder"*. The WAV is not the recovery path — a failed paste is recovered from the text
+   (lot 3 T6), not the audio. Three days covers the only real case: a transcription that produced
+   garbage and has to be re-run.
+2. **Text (raw + refined): deleted after 30 days.** Dictations carry client and internal work
+   content, so a bounded window is a privacy property, not only a disk one.
+3. **Derived vocabulary: kept indefinitely.** This tier exists because of tier 2. Louis asked
+   whether anything could be learned from the accumulated text. Fine-tuning cannot: the only pairs
+   available are raw transcript → the model's *own* refined output, which is not a human
+   correction and training on it degrades rather than improves. What does work is Whisper's
+   `initialPrompt` (T6): recurring technical terms mined from history, fed back as context.
+   Because the terms are **derived** — a word list, no sentences, no client content — they survive
+   the 30-day purge that the text does not, and the vocabulary keeps improving from a corpus that
+   is continuously forgotten. The extraction must therefore run **before** a row expires, not over
+   whatever happens to remain.
+
+**Consequences for the schema (T3):** rows need an expiry the purge can index; audio and text
+expire on different clocks, so the WAV path must be nullable on a row whose text is still live;
+the vocabulary table is not a view over history and must outlive it.
+
+**Deliberately not built:** any fine-tuning or model-adaptation path. Recorded so it is not
+re-proposed as an oversight.
