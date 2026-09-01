@@ -17,8 +17,12 @@ import Foundation
 ///   1 482 dictations as the level below which a frame is not voiced. Reusing it means the
 ///   waveform is flat exactly when the gate would reject what it is drawing, so what he sees
 ///   predicts what he gets.
-/// - **The scale is logarithmic.** A linear map of RMS would leave ordinary speech (0.02…0.15 RMS)
-///   in the bottom seventh of the wing and reserve the rest for a shout.
+/// - **The scale is logarithmic, between two measured RMS values.** A linear map would leave
+///   ordinary speech in the bottom tenth of the wing; but a log map that still ran to *digital*
+///   full scale wasted just as much, in the other direction — a MacBook's own microphone never
+///   comes near 1.0, so the top half of the wing was reserved for a level the hardware cannot
+///   produce. Both ends are now levels Louis's voice actually reaches (`floorRootMeanSquare`,
+///   `ceilingRootMeanSquare`).
 ///
 /// A consequence worth naming because it is the second thing Louis will look at: everything at or
 /// below the floor maps to *exactly* the same height, so a silent wing does not shimmer. Noise
@@ -35,15 +39,37 @@ public struct AudioLevelMeter: Equatable {
     /// into the black of the notch.
     public static let floorHeight: Float = 0.18
 
+    /// The RMS at which the scale tops out. **Measured, not 1.0.**
+    ///
+    /// Full scale used to be the top of the wing, and that was the bug Louis reported as "much too
+    /// discreet": a MacBook's built-in microphone does not saturate on a voice. Over his own 26
+    /// Murmure recordings that carry signal, scored with this app's exact block layout (2 048
+    /// frames at 48 kHz), the RMS of a voiced block runs p10 = 0.0072, p50 = 0.0158, p90 = 0.0306,
+    /// p99 = 0.0482 — the whole of ordinary speech inside 0.005…0.05, three percent of the range the
+    /// scale was drawn against. Ninety percent of the wing's height was unreachable.
+    ///
+    /// 0.06 is just above that p99, which is what makes the top *reachable but not permanent*: on
+    /// those recordings no file spends more than 18 % of its speech at full height and the median
+    /// file spends 0 %, so a loud sentence tops out and a normal one visibly does not. Lowering it
+    /// further (0.05, 0.04) buys a point of height and starts pinning whole quiet-room sessions.
+    public static let ceilingRootMeanSquare: Float = 0.06
+
     /// How much of the distance to a *louder* level is covered per block. High: a syllable has to
     /// be on screen while it is being said, and a 20 Hz meter that took five blocks to rise would
     /// lag a quarter of a second behind the voice.
-    public static let attack: Float = 0.6
+    public static let attack: Float = 0.7
 
-    /// How much of the distance to a *quieter* level is covered per block. Much lower than the
-    /// attack: the gaps between syllables are real silence, and a fall as fast as the rise would
-    /// make the wings strobe on every consonant.
-    public static let release: Float = 0.2
+    /// How much of the distance to a *quieter* level is covered per block. Lower than the attack:
+    /// the gaps between syllables are real silence, and a fall as fast as the rise would make the
+    /// wings strobe on every consonant.
+    ///
+    /// It is nonetheless faster than it was (0.2), and the reason is measured. Fed the real
+    /// recordings, a release of 0.2 took 516 ms to give up nine tenths of a drop — longer than a
+    /// whole wing is wide in time (six bars × 43 ms = 258 ms), so every bar on screen held the
+    /// loudest thing said in the last half-second and the six of them were one flat plateau. At
+    /// 0.3 that fall takes 344 ms and the plateau breaks up. The two coefficients are still
+    /// asymmetric better than 2:1, which is the property that keeps a consonant from strobing.
+    public static let release: Float = 0.3
 
     /// The root mean square of a block of samples, 0 for an empty one.
     ///
@@ -68,17 +94,19 @@ public struct AudioLevelMeter: Equatable {
         samples.withUnsafeBufferPointer { rootMeanSquare(of: $0) }
     }
 
-    /// The bar height an RMS deserves: `floorHeight` at or below the floor, 1 at full scale, and a
-    /// decibel-linear ramp in between.
+    /// The bar height an RMS deserves: `floorHeight` at or below the floor, 1 at or above the
+    /// ceiling, and a decibel-linear ramp across the ~21.6 dB in between.
     ///
     /// The comparison is written as `rms > floorRootMeanSquare` rather than as a clamp so that a
     /// `NaN` -- every comparison against which is false -- takes the floor branch instead of
-    /// reaching `log10`.
+    /// reaching `log10`. The second guard is `>=` for the same shape of reason: it catches
+    /// everything a clipping microphone could send, up to and past digital full scale.
     public static func height(forRootMeanSquare rms: Float) -> Float {
         guard rms > floorRootMeanSquare else { return floorHeight }
-        guard rms < 1 else { return 1 }
+        guard rms < ceilingRootMeanSquare else { return 1 }
         let floorDecibels = 20 * log10(floorRootMeanSquare)
-        let fraction = (20 * log10(rms) - floorDecibels) / -floorDecibels
+        let ceilingDecibels = 20 * log10(ceilingRootMeanSquare)
+        let fraction = (20 * log10(rms) - floorDecibels) / (ceilingDecibels - floorDecibels)
         return floorHeight + (1 - floorHeight) * fraction
     }
 
