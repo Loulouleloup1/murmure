@@ -39,8 +39,8 @@ public protocol DictationRefining: Sendable {
 }
 
 /// One dictation end-to-end: idle → recording → transcribing → [refining] → inserting →
-/// idle/failed. `refining` only when the resolved mode has an LLM; `Voice` runs lot 1's sequence
-/// unchanged.
+/// completed → idle, or failed. `refining` only when the resolved mode has an LLM; `Voice` runs
+/// lot 1's sequence unchanged.
 ///
 /// The seams above are protocols so the whole state machine is testable in `MurmureCore`: the app
 /// target has no test bundle, and the four real implementations each touch hardware, the network
@@ -48,6 +48,17 @@ public protocol DictationRefining: Sendable {
 public actor DictationSession {
     public enum State: Equatable {
         case idle, recording, transcribing, refining, inserting
+        /// The dictation ran to its end, and `insertedCharacters` is how much of it reached the
+        /// target application. Always followed immediately by `.idle`: this state says what
+        /// happened, it is not a state the session sits in, and how long a completion stays on
+        /// screen is the interface's business, not the machine's.
+        ///
+        /// Zero is the case this state exists for. Until lot 3 the success path and the two
+        /// silences -- a recording with no frames, a transcript Whisper returned empty -- all
+        /// ended in `.idle`, so nothing downstream could tell "your text was pasted" from
+        /// "nothing you said got through". A green flash driven by `.idle` would congratulate
+        /// Louis for a dictation that inserted nothing.
+        case completed(insertedCharacters: Int)
         case failed(message: String, recoveredText: String?)
     }
 
@@ -90,7 +101,10 @@ public actor DictationSession {
             await finishRecording()
         case .transcribing, .refining, .inserting:
             break // pipeline already running; ignore extra presses
-        case .idle, .failed:
+        // `.completed` is here for the compiler and not for the machine: it is emitted and left
+        // in the same call (`complete(insertedCharacters:)`), so no press can ever observe it.
+        // Grouped with `.idle` because that is what it becomes a line later.
+        case .idle, .completed, .failed:
             do {
                 try recorder.start()
                 // Resolved here rather than in `finishRecording()`: what decides is the
@@ -157,7 +171,7 @@ public actor DictationSession {
             return
         }
         guard frames > 0 else {
-            transition(to: .idle)
+            complete(insertedCharacters: 0)
             return
         }
 
@@ -180,12 +194,46 @@ public actor DictationSession {
         transition(to: .inserting)
         do {
             try await inserter.insert(text)
-            transition(to: .idle)
+            // The refined text, which is what `inserter` was handed and therefore what landed --
+            // not the raw transcript, and not a boolean "it worked". `PasteInserter` returns
+            // early on an empty string, so a count of 0 here is exactly the case where nothing
+            // was pasted.
+            complete(insertedCharacters: text.count)
         } catch {
             // Spec §9: the dictation is never lost -- keep the text for recovery.
             transition(to: .failed(
                 message: "insert failed: \(error.localizedDescription)", recoveredText: text))
         }
+    }
+
+    /// The dictation is over: say what it inserted, then go back to idle in the same breath.
+    ///
+    /// Two transitions rather than one state carrying a flag, because the interface needs both
+    /// facts and they are not the same fact: what this dictation did, and that the session is
+    /// free again. A consumer that only cares about the second keeps working unchanged.
+    private func complete(insertedCharacters: Int) {
+        transition(to: .completed(insertedCharacters: insertedCharacters))
+        transition(to: .idle)
+    }
+
+    /// Abandon the recording in progress: stop the microphone, transcribe nothing, insert
+    /// nothing, go back to idle.
+    ///
+    /// The WAV is kept. It is already on disk while the recording runs, and lot 4 makes it a
+    /// history entry that can be replayed -- so there is nothing to destroy, and therefore
+    /// nothing to confirm before doing this (lot 3 D8).
+    ///
+    /// A no-op outside `.recording`, and not "best effort": once the pipeline has started, the
+    /// transcription and the paste are already in flight and stopping the recorder would stop
+    /// nothing. `lastTranscript` is deliberately untouched -- a cancelled dictation produced no
+    /// text of its own, so the last dictation that DID produce text is still the right answer for
+    /// a re-paste. That is the opposite of `finishRecording()`, which clears it: there a
+    /// dictation really was transcribed, and reaching back past it into an older one would paste
+    /// something Louis never asked for twice.
+    public func cancel() {
+        guard state == .recording else { return }
+        _ = recorder.stop()
+        transition(to: .idle)
     }
 
     /// The transcript as it will be inserted.

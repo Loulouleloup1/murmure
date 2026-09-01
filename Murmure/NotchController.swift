@@ -1,5 +1,6 @@
 import AppKit
 import DynamicNotchKit
+import MurmureCore
 import SwiftUI
 import os
 
@@ -29,7 +30,20 @@ import os
 @MainActor
 final class NotchController {
     private let notch: DynamicNotch<EmptyView, NotchWing, NotchWing>
+    /// What the wings read. Held here because the two are one mechanism: the phase decides both
+    /// what is drawn and whether there is a window to draw it in.
+    private let model = NotchModel()
     private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "notch")
+
+    /// The state the session was in before the one being handled. `NotchPresenter.phase` needs it
+    /// because `DictationSession` emits `.completed` and `.idle` in the same breath: without the
+    /// previous state the notch would retract in the instant it was told the dictation succeeded.
+    private var previousState: DictationSession.State = .idle
+
+    /// Retracts a completion or a failure once it has been on screen long enough. Cancelled by
+    /// the next phase, so a dictation started during a flash never has its notch pulled out from
+    /// under it by the previous one's timer.
+    private var retraction: Task<Void, Never>?
 
     /// The screen the dictation in progress is drawn on, captured once when its recording starts
     /// and passed explicitly to every appearance.
@@ -57,8 +71,10 @@ final class NotchController {
             // nothing. `.keepVisible` and `.increaseShadow` are what a hover is meant to do.
             hoverBehavior: [.keepVisible, .increaseShadow],
             expanded: { EmptyView() },
-            compactLeading: { NotchWing() },
-            compactTrailing: { NotchWing() }
+            // `let`-captured by `DynamicNotch.init` and never re-made, which is why the phase has
+            // to reach them as observed DATA rather than as a rebuilt notch.
+            compactLeading: { [model] in NotchWing(model: model) },
+            compactTrailing: { [model] in NotchWing(model: model) }
         )
         // The default is `false` (`DynamicNotchTransitionConfiguration.swift:51`), and with it
         // every compact↔expanded conversion animates the notch to `.hidden`, sleeps 0.25 s and
@@ -67,28 +83,70 @@ final class NotchController {
         notch.transitionConfiguration.skipIntermediateHides = true
     }
 
-    /// A recording has started: fix the screen for this dictation and grow the notch.
-    func recordingStarted() {
+    /// The session changed state. The only entry point, and the only thing allowed to move the
+    /// notch: `NotchPresenter` turns the change into a phase, and this shows it.
+    func apply(_ state: DictationSession.State) {
+        let phase = NotchPresenter.phase(previous: previousState, current: state)
+        previousState = state
+        show(phase)
+    }
+
+    private func show(_ phase: NotchPhase) {
+        guard phase != model.phase else { return }
+        model.phase = phase
+        // Whatever was on its way out is no longer the thing on screen.
+        retraction?.cancel()
+        retraction = nil
+
+        if case .hidden = phase {
+            dictationScreen = nil
+            // Idempotent -- `hide()` returns immediately when the state is already `.hidden`
+            // (`DynamicNotch.swift:285-288`).
+            enqueue { [notch] in await notch.hide() }
+            return
+        }
+
         // `NSScreen.main` is the screen with the key window, or with the menu bar when no window
         // is key -- and Murmure is `LSUIElement`, so it never has one. `.first` rather than the
         // plan's `screens[0]`: an index into an empty array would crash the whole app over a
         // decoration, and `NSScreen.screens` is empty on a Mac with every display asleep.
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
-            log.error("no screen available -- the dictation runs, the notch does not appear")
-            return
+        //
+        // Resolved when the dictation starts and then reused, so nothing can move the surface
+        // mid-dictation. A phase that arrives with no dictation behind it -- a microphone that
+        // refused to start, so there was never a `.recording` -- resolves one here rather than
+        // saying nothing at all.
+        let screen: NSScreen
+        if case .recording = phase {
+            guard let current = NSScreen.main ?? NSScreen.screens.first else {
+                log.error("no screen available -- the dictation runs, the notch does not appear")
+                return
+            }
+            screen = current
+            dictationScreen = current
+        } else if let known = dictationScreen {
+            screen = known
+        } else {
+            guard let current = NSScreen.main ?? NSScreen.screens.first else { return }
+            screen = current
+            dictationScreen = current
         }
-        dictationScreen = screen
+        // `.compact` for every phase of a dictation: `compact()`/`expand()` are the only calls
+        // that can produce a discontinuity, and lot 3 spends at most two of them per dictation.
         enqueue { [notch] in await notch.compact(on: screen) }
-    }
 
-    /// The dictation is over, one way or another: retract the notch and let the panel go.
-    ///
-    /// Idempotent -- `hide()` returns immediately when the state is already `.hidden`
-    /// (`DynamicNotch.swift:285-288`) -- which is what lets the caller drive this from every
-    /// non-recording state without tracking which one it came from.
-    func dictationEnded() {
-        dictationScreen = nil
-        enqueue { [notch] in await notch.hide() }
+        // Nothing else will ever take these off the screen. The session has no timer -- how long
+        // a completion is shown is the interface's business, and it is decided here.
+        let dwell: TimeInterval? = switch phase {
+        case .completed, .nothingHeard: NotchPresenter.completionDwell
+        case .failed, .alert: NotchPresenter.failureDwell
+        default: nil // a running dictation leaves when its next state says so
+        }
+        guard let dwell else { return }
+        retraction = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(dwell))
+            guard !Task.isCancelled else { return }
+            self?.show(.hidden)
+        }
     }
 
     private func enqueue(_ work: @escaping @MainActor () async -> Void) {
@@ -100,17 +158,51 @@ final class NotchController {
     }
 }
 
-/// One side of the notch. A placeholder: task T3 replaces it with the waveform bars.
+/// What the notch's views read, and the only mutable thing between the session and the screen.
+///
+/// Deliberately not `AppState`: the waveform of task T3 publishes about 20 times a second, and
+/// every `@Published` change on `AppState` re-evaluates `MurmureApp.body`, which draws the
+/// menu-bar scene. Two observable objects, two refresh rates.
+///
+/// It decides nothing. Every decision is `NotchPresenter`, in `MurmureCore`, where it is tested.
+@MainActor
+final class NotchModel: ObservableObject {
+    @Published fileprivate(set) var phase: NotchPhase = .hidden
+}
+
+/// One side of the notch. A placeholder: tasks T3 and T4 replace it with the waveform bars and
+/// with each phase's real drawing.
 ///
 /// The width is a constant and not a function of anything, and that is the point. Amplitude will
 /// move bar *heights*; a wing that grew with the voice would make the shape breathe, and every
 /// transition after the recording would then have to be read against a shape that never settled.
+/// The same holds for the phases: what changes below is a colour, never a size, so the shape does
+/// not move when a dictation goes from recording to transcribing to done.
 private struct NotchWing: View {
     static let width: CGFloat = 32
 
+    @ObservedObject var model: NotchModel
+
     var body: some View {
         Capsule()
-            .fill(.white.opacity(0.85))
+            .fill(fill)
             .frame(width: Self.width, height: 5)
+            .animation(.smooth, value: model.phase)
+    }
+
+    /// A stand-in, not a design. T4 owns what each phase actually looks like; what this proves
+    /// today is that the phase reaches the wings at all. Green for a completion and nothing for a
+    /// silence is the one distinction worth having before then -- it is the reason
+    /// `.completed(insertedCharacters:)` exists.
+    private var fill: Color {
+        switch model.phase {
+        case .recording: .white.opacity(0.85)
+        case .transcribing, .inserting: .white.opacity(0.55)
+        case .refining: .white.opacity(0.35)
+        case .completed: .green
+        case .nothingHeard: .white.opacity(0.2)
+        case .failed, .alert: .orange
+        case .hidden: .clear
+        }
     }
 }

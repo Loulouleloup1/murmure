@@ -15,9 +15,13 @@ private final class FakeRecorder: Recorder {
     /// How many recordings actually began. One is the whole point of the concurrency test below:
     /// two would be two taps on one microphone.
     private(set) var startCount = 0
+    /// How many times the recorder was asked to stop. A cancel that forgot to stop the
+    /// microphone would leave the device running for the rest of the session.
+    private(set) var stopCount = 0
     let frames: AVAudioFrameCount
     private var isRecording = false
-    private let url: URL
+    /// The WAV `stop()` returns. Read by the cancel tests: a cancel keeps the recording.
+    let url: URL
 
     init(frames: AVAudioFrameCount = 16_000) {
         self.frames = frames
@@ -34,10 +38,16 @@ private final class FakeRecorder: Recorder {
         isRecording = true
         started = true
         startCount += 1
+        // The real `AudioRecorder` opens its WAV when the recording starts and writes into it as
+        // it goes, so the file exists from here on. Mirrored because the cancel tests ask whether
+        // the recording SURVIVES a cancel -- a fake that only created the file in `stop()` would
+        // answer that question with a stop that never happened.
+        FileManager.default.createFile(atPath: url.path, contents: nil)
     }
 
     func stop() -> URL? {
         isRecording = false
+        stopCount += 1
         if stopReturnsNil { return nil }
         if stopReturnsUnreadableFile {
             try! Data("not audio".utf8).write(to: url)
@@ -271,7 +281,14 @@ final class DictationSessionTests: XCTestCase {
         )
         await session.toggle()
         await session.toggle()
-        XCTAssertEqual(states.values, [.recording, .transcribing, .inserting, .idle])
+        XCTAssertEqual(states.values, [
+            .recording, .transcribing, .inserting,
+            // "bonjour" -- 7 characters really pasted. Lot 3 T2 inserted this state between the
+            // insertion and the idle: without it nothing downstream can tell a dictation that
+            // landed from one that had nothing to say.
+            .completed(insertedCharacters: 7),
+            .idle,
+        ])
     }
 
     /// An actor is re-entrant: while `toggle()` awaits the transcriber it releases the executor,
@@ -381,7 +398,11 @@ final class DictationSessionTests: XCTestCase {
         )
         await session.toggle()
         await session.toggle()
-        XCTAssertEqual(states.values, [.recording, .transcribing, .refining, .inserting, .idle])
+        XCTAssertEqual(states.values, [
+            .recording, .transcribing, .refining, .inserting,
+            .completed(insertedCharacters: 11), // "euh bonjour", unchanged by the spy refiner
+            .idle,
+        ])
     }
 
     /// Whisper answers silence with an empty transcript, and the refiner's anti-refusal rule is a
@@ -459,6 +480,196 @@ final class DictationSessionTests: XCTestCase {
             .failed(message: "mic start failed: already recording", recoveredText: nil),
             .recording,
         ])
+    }
+
+    // MARK: - Lot 3: what a dictation ended up inserting, and abandoning one
+
+    /// The state the whole notch rests on. A dictation that pasted text and one that pasted
+    /// nothing both used to end in `.idle`, so the only surface Murmure has could not tell them
+    /// apart -- and a green flash on `.idle` would congratulate Louis for a dictation that
+    /// inserted nothing.
+    func testASuccessfulDictationSaysHowManyCharactersItInserted() async {
+        let states = StateLog()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("bonjour murmure")),
+            inserter: SpyInserter(), refiner: SpyRefiner(),
+            onStateChange: { states.append($0) }
+        )
+        await session.toggle()
+        await session.toggle()
+        XCTAssertTrue(
+            states.values.contains(.completed(insertedCharacters: 15)),
+            "got \(states.values)")
+    }
+
+    /// The other half of the same fact, and the one that gives the notch its "nothing heard":
+    /// pressing the hotkey twice in a row records a valid 0-frame WAV, transcribes nothing and
+    /// pastes nothing. Zero characters, reported as such -- not a silent return to idle.
+    func testAnEmptyRecordingCompletesWithZeroCharactersInsteadOfGoingIdleInSilence() async {
+        let states = StateLog()
+        let inserter = SpyInserter()
+        let session = DictationSession(
+            recorder: FakeRecorder(frames: 0),
+            transcriber: FakeTranscriber(result: .success("hallucination sur du silence")),
+            inserter: inserter, refiner: SpyRefiner(),
+            onStateChange: { states.append($0) }
+        )
+        await session.toggle()
+        await session.toggle()
+        XCTAssertEqual(states.values, [.recording, .completed(insertedCharacters: 0), .idle])
+        XCTAssertTrue(inserter.inserted.isEmpty)
+    }
+
+    /// The third silence: the recording had audio, Whisper returned nothing. `PasteInserter`
+    /// refuses an empty string, so nothing reaches the pasteboard -- and the count says so
+    /// rather than claiming a success of zero characters.
+    func testATranscriptWhisperReturnedEmptyCompletesWithZeroCharacters() async {
+        let states = StateLog()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("")),
+            inserter: SpyInserter(), refiner: SpyRefiner(),
+            onStateChange: { states.append($0) }
+        )
+        await session.toggle()
+        await session.toggle()
+        XCTAssertTrue(
+            states.values.contains(.completed(insertedCharacters: 0)),
+            "got \(states.values)")
+    }
+
+    /// What is counted is what was INSERTED, so under a mode with an LLM it is the refined text
+    /// -- the raw transcript is not what landed, and on a refinement that expands a mumble into a
+    /// paragraph the two numbers are nowhere near each other.
+    func testTheCountIsTheRefinedTextNotTheRawTranscript() async {
+        let states = StateLog()
+        let inserter = SpyInserter()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("euh bonjour")),
+            inserter: inserter,
+            refiner: SpyRefiner(mode: .prompt, answer: { "reformulé : \($0)" }),
+            onStateChange: { states.append($0) }
+        )
+        await session.toggle()
+        await session.toggle()
+        XCTAssertEqual(inserter.inserted, ["reformulé : euh bonjour"]) // 23 characters, not 11
+        XCTAssertTrue(
+            states.values.contains(.completed(insertedCharacters: 23)),
+            "got \(states.values)")
+    }
+
+    /// Cancel (lot 3 D8): the recording is abandoned, and abandoned means nothing downstream runs
+    /// -- the transcriber here answers with a failure, so a cancel that transcribed anyway would
+    /// end in `.failed` instead of `.idle`.
+    func testCancellingARecordingReturnsToIdleWithoutTranscribingOrInserting() async {
+        let states = StateLog()
+        let inserter = SpyInserter()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .failure(TestError())),
+            inserter: inserter, refiner: SpyRefiner(),
+            onStateChange: { states.append($0) }
+        )
+        await session.toggle()
+        await session.cancel()
+        let finalState = await session.state
+        XCTAssertEqual(finalState, .idle)
+        XCTAssertEqual(states.values, [.recording, .idle])
+        XCTAssertTrue(inserter.inserted.isEmpty)
+    }
+
+    /// The microphone really stops. Without this the device would stay live for the rest of the
+    /// session with nothing on screen saying so -- the worst possible outcome for a cancel.
+    func testCancellingStopsTheMicrophone() async {
+        let recorder = FakeRecorder()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("jamais atteint")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.cancel()
+        XCTAssertEqual(recorder.stopCount, 1)
+    }
+
+    /// And the audio is KEPT (D8). It is already on disk while the recording runs and lot 4 makes
+    /// it a history entry, so there is nothing to destroy here -- which is also why a cancel asks
+    /// for no confirmation.
+    func testCancellingKeepsTheRecordingOnDisk() async {
+        let recorder = FakeRecorder()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("jamais atteint")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.cancel()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: recorder.url.path))
+        try? FileManager.default.removeItem(at: recorder.url)
+    }
+
+    /// A cancel with nothing to cancel does nothing at all -- not even an `.idle` no consumer
+    /// asked for. The button only exists while a dictation is on screen, but the method is public
+    /// and a stray call must not retract a notch, stop a device or clear a warning.
+    func testACancelWithNoRecordingRunningDoesNothing() async {
+        let states = StateLog()
+        let recorder = FakeRecorder()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("jamais atteint")),
+            inserter: SpyInserter(), refiner: SpyRefiner(),
+            onStateChange: { states.append($0) }
+        )
+        await session.cancel()
+        let finalState = await session.state
+        XCTAssertEqual(finalState, .idle)
+        XCTAssertEqual(states.values, [])
+        XCTAssertEqual(recorder.stopCount, 0)
+    }
+
+    /// The same guard where it actually costs something: once the pipeline is running, the
+    /// transcription is in flight and the paste is about to happen. Stopping the recorder there
+    /// would stop nothing and returning to `.idle` would let the next press start a second
+    /// recording under a running insertion.
+    func testACancelDuringTheRunningPipelineIsIgnored() async {
+        let transcriber = GatedTranscriber()
+        let inserter = SpyInserter()
+        let session = DictationSession(
+            recorder: FakeRecorder(), transcriber: transcriber,
+            inserter: inserter, refiner: SpyRefiner(), onStateChange: { _ in }
+        )
+        await session.toggle() // start
+        async let pipeline: Void = session.toggle() // stop; blocks inside the transcriber
+        await transcriber.waitUntilTranscribing()
+
+        await session.cancel() // the stray cancel
+        let midState = await session.state
+        XCTAssertEqual(midState, .transcribing)
+
+        await transcriber.finish(with: "bonjour")
+        await pipeline
+        XCTAssertEqual(inserter.inserted, ["bonjour"], "the dictation ran to its end")
+    }
+
+    /// A cancelled dictation produced no text of its own, so the last dictation that DID produce
+    /// text is still the right answer for a re-paste. The opposite of a dictation that runs and
+    /// fails, which clears it -- there the pipeline really ran, and reaching back past it would
+    /// paste an older transcript a second time.
+    func testCancellingLeavesTheLastTranscriptOfTheDictationBeforeIt() async {
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("première dictée")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+
+        await session.toggle() // a second dictation...
+        await session.cancel() // ...abandoned
+        let last = await session.lastTranscript
+        XCTAssertEqual(last, "première dictée")
     }
 }
 

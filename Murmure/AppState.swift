@@ -41,6 +41,15 @@ final class AppState: ObservableObject {
     /// Why the last dictation failed, in the user's words. Cleared when the next one starts.
     @Published var lastFailureMessage: String?
 
+    /// The text a failed insertion could not deliver, kept so it can be offered rather than lost
+    /// (spec §9). Nil for every failure that happened before there was any text -- a refused
+    /// microphone, a transcription that threw -- and cleared when the next dictation starts,
+    /// alongside the message it belongs to.
+    ///
+    /// `DictationSession.lastTranscript` is what `repasteLast()` actually pastes; this is the
+    /// same text held where a surface can SHOW it. Lot 3 T6 is what puts it on screen.
+    @Published var recoveredText: String?
+
     /// The mode files that could not be used, and the selections that could not be honoured --
     /// one line per file to fix, because `ModeStore` reports them one by one for exactly that.
     ///

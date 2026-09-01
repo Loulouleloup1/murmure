@@ -100,6 +100,7 @@ final class DictationController {
                     // leave the last warning on screen indefinitely.
                     appState.clipboardWarning = nil
                     appState.lastFailureMessage = nil
+                    appState.recoveredText = nil
                     // Same reason: a refinement notice is about the dictation that just ended,
                     // and nothing else would ever take it off the screen. `modeProblems` is
                     // deliberately NOT cleared here -- a broken mode file survives the press.
@@ -108,8 +109,11 @@ final class DictationController {
                 // The message is not just an icon (ruling L7): `.failed`'s payload says whether the
                 // microphone is denied, the model failed to download or the paste was refused, and
                 // an exclamation triangle with no text is a failure mechanism with no consumer.
-                if case .failed(let message, _) = state {
+                if case .failed(let message, let recovered) = state {
                     appState.lastFailureMessage = message
+                    // Kept, where lot 1 dropped it: this is the dictation the paste could not
+                    // deliver, and it exists nowhere else. Lot 3 T6 offers it for a re-paste.
+                    appState.recoveredText = recovered
                 }
                 appState.status = switch state {
                 case .idle: .idle
@@ -117,6 +121,11 @@ final class DictationController {
                 case .transcribing: .transcribing
                 case .refining: .refining
                 case .inserting: .inserting
+                // The menu bar gets no new symbol for it. `.completed` is emitted and immediately
+                // followed by `.idle`, so a glyph of its own would be a flicker of a frame or
+                // two; the surface that shows a completion is the notch, which holds it on
+                // purpose. What lot 1's menu did is exactly what it keeps doing.
+                case .completed: .idle
                 case .failed: .failed
                 }
                 // The notch is driven from the same state changes as the menu, and from nothing
@@ -124,14 +133,11 @@ final class DictationController {
                 // presses `DictationSession.toggle()` deliberately ignores -- a band with no
                 // dictation behind it.
                 //
-                // Task T1 shows it for the recording only: transcription, refinement and
-                // insertion retract it again, and giving each of them its own appearance is
-                // exactly what T2 and T4 do next.
-                if case .recording = state {
-                    notch.recordingStarted()
-                } else {
-                    notch.dictationEnded()
-                }
+                // Every phase, not just the recording: `NotchPresenter` (in `MurmureCore`, where
+                // it is tested) turns each state change into the phase to show, including the two
+                // the machine used to collapse into one -- a dictation that inserted text and one
+                // that inserted nothing.
+                notch.apply(state)
             }
         }
 
