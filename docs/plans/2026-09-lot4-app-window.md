@@ -663,7 +663,7 @@ opinions about them.
 
 | | Answer | Why it was taken rather than asked |
 |---|---|---|
-| **Q-B1** | **Yes** — `.regular` while the window is open, back to accessory when it closes. | It is what makes ⌘V and ⌘Z work in the mode-instructions and vocabulary fields; the alternative is a text editor you cannot paste into. Behind one function (D2), so a bad result at T1's eye-gate reverts in a line. |
+| **Q-B1** | **Yes — and CONFIRMED at the eye-gate on 2026-09-01**, which is what T1's "done when" required. Louis ran all nine steps and ⌘V pastes into a text field in the window. The policy flip buys what it was taken for; D2 stands. | It is what makes ⌘V and ⌘Z work in the mode-instructions and vocabulary fields; the alternative is a text editor you cannot paste into. Behind one function (D2), so a bad result at T1's eye-gate reverts in a line. |
 | **Q-B2** | **GRDB**, `exactVersion:`. | §5.3 already priced the alternative: ~200 lines of C-API wrapper and hand-written FTS5 triggers, written once, badly, by us. "Privilégier les solutions générales et simples" is his own rule and it points here. |
 | **Q-B3** | **Already answered by Louis on 2026-09-01** — audio 3 days, text 30 days. See the retention section at the end of this file; it was never open. |
 | **Q-NB1** | **Re-refine only.** | D12's recommendation. Re-transcribing needs the WAV, which after 3 days is gone — so the expensive variant is the one that stops working. |
