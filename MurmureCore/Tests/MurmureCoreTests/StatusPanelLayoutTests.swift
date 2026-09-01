@@ -56,6 +56,26 @@ final class StatusPanelLayoutTests: XCTestCase {
         XCTAssertGreaterThan(StatusPanelLayout.labelSlot - shortest, 100)
     }
 
+    /// **Why the drawing is not widened, priced rather than argued.**
+    ///
+    /// Handing the waveform every point the longest sentence can spare buys it at most one more
+    /// bar -- 43 ms of history -- because the panel's bars sit on `minimumBarWidth` and each one
+    /// therefore costs a flat pitch in width. That is the whole case for leaving `drawingWidth`
+    /// alone, and it is arithmetic rather than taste, so it belongs in a test: if a future change
+    /// to the bar geometry ever makes width cheap here, this fails and the question reopens on its
+    /// own instead of staying settled by a comment nobody rechecks.
+    func testTheSlotsHeadroomCannotBuyTheDrawingAWaveform() throws {
+        let widest = try XCTUnwrap(sentences.map { try width(StatusPanelText.label(for: $0)) }.max())
+        let headroom = StatusPanelLayout.labelSlot - widest
+        XCTAssertGreaterThan(headroom, 0, "the slot must clear its longest sentence at all")
+        let asIs = WaveformLayout.barCount(inWidth: Double(StatusPanelLayout.drawingWidth))
+        let ifWidened = WaveformLayout.barCount(
+            inWidth: Double(StatusPanelLayout.drawingWidth + headroom))
+        XCTAssertLessThanOrEqual(
+            ifWidened - asIs, 1,
+            "width has become cheap enough here that widening the drawing is worth reconsidering")
+    }
+
     /// The total, pinned deliberately as a total.
     ///
     /// This is a change-detector and it is meant to be one. `width` is a sum of five numbers that
