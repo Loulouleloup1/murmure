@@ -39,3 +39,6 @@ benchmark/run_v3*.log
 # ram-v3-cold6.json are pure machine measurements (RSS, `ollama ps`, latencies).
 # They contain no dictation text, and they are the evidence behind the v3
 # admissibility table, so they belong in the repo.
+
+# Agent worktrees -- transient, created by the harness, never part of the project.
+.claude/
