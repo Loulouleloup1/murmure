@@ -9,72 +9,73 @@ panel on one that does not.
 
 ---
 
-## Setting it up on a second Mac
-
-Written from a real second-machine install rather than from memory, so each step says what it is for
-and what it costs.
-
-### 1. What has to be there first
-
-| | |
-|---|---|
-| **macOS 14.0** or later | `project.yml` sets the deployment target |
-| **Xcode**, opened once and signed in with your Apple ID | needed to build, and it is what puts a codesigning identity in the keychain — see step 4 |
-| **`brew install xcodegen`** | the `.xcodeproj` is generated, not committed |
-| **[Ollama](https://ollama.com)** | only if you want the refinement modes; transcription alone does not need it |
-
-### 2. Clone and pull the language model
+## Setting it up on another Mac
 
 ```sh
 git clone https://github.com/Loulouleloup1/murmure.git
 cd murmure
-ollama pull hf.co/superwhisper/s1-mini-GGUF:Q4_K_M
+./scripts/bootstrap.sh
 ```
 
-That one model is what the `Prompt` mode uses, and `Prompt` is the mode that matters if you dictate
-into terminals and agent prompts. Murmure reaches Ollama at `http://localhost:11434`; nothing else
-has to be configured.
+That is the whole installation. The script checks the tools, **downloads both models**, builds and
+installs, and tells you the two things macOS will not let a script do for you. Run it again any time
+— it skips whatever is already there.
 
-`Message` and `Email` are set to `gemma4:12b-it-qat`, which is a separate 7.2 GB pull. **On a 16 GB
-machine, think before you pull it** — see *Memory*, below. Transcription works with no model pulled
-at all; only refinement fails, and it fails by inserting the raw transcript rather than losing it.
+### The two models, because getting this wrong looks like a crash
 
-### 3. Build and install
+Murmure needs **two** models and they are not interchangeable:
 
-```sh
-./scripts/install.sh
-```
+| | What | Size | Without it |
+|---|---|---|---|
+| **Transcription** | Whisper `large-v3-turbo`, from Hugging Face | **1.6 GB** | **nothing works** — the app sits on "transcribing" while it downloads the model itself |
+| **Refinement** | `s1-mini` via Ollama | 484 MB | dictation still works; you get the raw transcript instead of a cleaned-up one |
 
-It generates the project, builds, and installs to `~/Applications/Murmure.app` — one stable path, on
-purpose. Then launch it from there, not from Xcode's build folder.
+This table exists because an earlier version of this file led with the *refinement* model and left the
+transcription one as a footnote about the first run being slow. A fresh install then spent a long
+time apparently frozen, doing a 1.6 GB download behind a screen that said "transcribing". The
+transcription model is the mandatory one. `bootstrap.sh` fetches it before the app ever asks.
 
-### 4. Why the codesigning identity matters more than it looks
+`Message` and `Email` are set to `gemma4:12b-it-qat`, a separate 7.2 GB pull that the script does
+**not** do. **On a 16 GB machine, think before you pull it** — see *Memory*, below.
+
+### What has to be there first
+
+The script checks all of these and installs the last two itself:
+
+| | |
+|---|---|
+| **macOS 14.0** or later | the deployment target |
+| **Xcode**, opened once and signed in with your Apple ID | needed to build, and it is what puts a codesigning identity in the keychain — see below |
+| **Homebrew** | to install the two tools |
+| `xcodegen`, `huggingface-cli` | installed for you |
+| **[Ollama](https://ollama.com)** | optional; only refinement needs it |
+
+### Why the codesigning identity matters more than it looks
 
 macOS keys a permission grant to **both** an app's location *and* its code signature. An ad-hoc
 signature has no stable identity, so every rebuild looks like a different app and Accessibility is
 silently revoked — the app records and transcribes normally and then the paste does nothing.
 
-`install.sh` picks whatever codesigning identity is in your keychain (`security find-identity`) and
-signs with it, which keys the grant to the identifier instead of to the bytes. If it prints
+`install.sh` signs with whatever identity is in your keychain, which keys the grant to the identifier
+instead of to the bytes. If it prints
 
 ```
 WARNING: no codesigning identity found -- falling back to ad-hoc.
 ```
 
-then open Xcode, sign in with your Apple ID under *Settings → Accounts*, and run it again. It will
-otherwise work, but macOS will ask for microphone and Accessibility again after every single build.
+open Xcode, sign in under *Settings → Accounts*, and run the script again. It will otherwise work,
+but macOS will ask for microphone and Accessibility again after every single build.
 
-### 5. Permissions, once
+### Permissions, once
 
 On the first dictation macOS asks for the **microphone**, and Murmure asks for **Accessibility**
-(System Settings → Privacy & Security → Accessibility) because pasting into another app means
-sending it a keystroke. Both are once, provided step 4 went well.
+(System Settings → Privacy & Security → Accessibility), because pasting into another app means
+sending it a keystroke. Both are once, provided the signature above is in order.
 
-### 6. The first dictation is slow, and only the first
+### The first dictation is still a little slower
 
-Whisper `large-v3-turbo` (~1.6 GB) downloads on first use and then loads through CoreML, which takes
-a while the first time on a given machine. There is a progress surface for it. Later dictations
-start immediately.
+The model is on disk after bootstrap, but macOS compiles it for this machine's neural engine the
+first time it loads. Every later dictation starts immediately.
 
 ---
 
