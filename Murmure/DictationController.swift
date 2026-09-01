@@ -23,6 +23,10 @@ final class DictationController {
     /// because each asks `StatusSurfaceChoice.surface(on:)` about the display it resolved. They
     /// resolve that display by different signals, though -- see `StatusPanelController`.
     private let statusPanel: StatusPanelController
+    /// The third surface, and the only one Louis does not have to look at. Driven from the same
+    /// state changes as the other two, and by the same rule: nothing but the session's own state
+    /// is allowed to make Murmure a sound.
+    private let feedback: CueFeedback
     /// Nil when Application Support could not be reached at all; see `init`. Kept so the menu can
     /// re-read the folder without a restart.
     private let modesDirectory: URL?
@@ -59,6 +63,21 @@ final class DictationController {
         // these directly, so it never has to reach back through `self`.
         let statusPanel = StatusPanelController(levels: levels, progress: transcriptionProgress)
         self.statusPanel = statusPanel
+
+        // Built at launch rather than at the first dictation: `CuePlayer` decodes both sounds and
+        // gets an `AVAudioEngine` running here, so the press that starts a dictation only has to
+        // enqueue a buffer that is already in memory (measured at 0.06 ms, against 21.8 ms for
+        // `NSSound.play()` -- see `CuePlayer`).
+        //
+        // A cue that cannot be loaded is logged and nothing more, which is the one place in this
+        // file where that is the right answer: the sound is a convenience laid over surfaces that
+        // already say everything it says, so a missing file must not cost Louis a dictation. It
+        // still has to be SAID, or a bundle that shipped without its sounds would go mute with
+        // nothing anywhere admitting why.
+        let feedback = CueFeedback(player: CuePlayer { [log] problem in
+            log.error("cue unavailable: \(problem, privacy: .public)")
+        })
+        self.feedback = feedback
 
         // Task 6 made `onClipboardOutcome` a REQUIRED init parameter with no default, precisely so
         // this line cannot forget to decide. `PasteInserter()` no longer compiles.
@@ -121,6 +140,19 @@ final class DictationController {
             refiner: ModeAwareRefinement(modesDirectory: modesDirectory, appState: appState)
         ) { state in
             Task { @MainActor in
+                // FIRST, ahead of every line below it, and that ordering is the feature. Louis
+                // starts speaking the moment he hears the start cue, so everything queued in front
+                // of it is time his microphone is live and he does not know it. What follows is a
+                // `DynamicNotch` being asked to put a window on screen, which is the most
+                // expensive thing in this closure by a wide margin.
+                //
+                // It is also the reason the cue is queued from HERE rather than played inside
+                // `DictationSession`: the session emits `.recording` only once `recorder.start()`
+                // has returned, and everything between that and this line is a read of four small
+                // mode files (measured: median 0.45 ms) plus one hop onto the main actor
+                // (median 0.02 ms). Half a millisecond, against the 27 ms the output device itself
+                // costs -- so the session keeps its side effects and its tests unchanged.
+                feedback.apply(state)
                 if case .recording = state {
                     // Starting a dictation clears the previous one's warnings, and this is the only
                     // thing that ever will: `PasteInserter` reports an outcome only when it actually
