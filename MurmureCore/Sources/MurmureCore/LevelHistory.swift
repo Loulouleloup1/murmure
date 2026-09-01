@@ -11,8 +11,15 @@ import Foundation
 /// It is therefore prefilled with the meter's floor: a new dictation opens on a flat line of
 /// bars, which is what the waveform shows for silence anyway.
 public struct LevelHistory: Equatable {
-    /// How many levels are kept: **the most bars any surface can draw**, which is
-    /// `WaveformLayout.maximumBars`.
+    /// How many levels are kept: **the most bars any surface can draw, plus the look-back the read
+    /// head needs behind them** — `WaveformLayout.maximumBars + WaveformLayout.scrollHeadroom`.
+    ///
+    /// The second term arrived with `WaveformScroll` and is not decoration: the head is parked a
+    /// margin behind the newest level so it never reads one that has not landed, and the oldest bar
+    /// of a full row reads a whole row further back than that. Without the headroom those bars fall
+    /// off the end of the ring and clamp — a few bars at the left of the card holding still and
+    /// jumping by two, which is the staircase this all exists to remove. `WaveformLayout` owns both
+    /// numbers and the cap that keeps the margin inside the headroom.
     ///
     /// It used to be six, and six was a *display* choice: the only surface then was a 32 pt notch
     /// wing, and six bars at the fixed pitch came to exactly 32 pt. Once the notch grew into a
@@ -24,7 +31,7 @@ public struct LevelHistory: Equatable {
     /// Nothing asserted about six changes with it, because nothing ever asserted six: the tests
     /// below pin that the ring is full from creation, drops the oldest and reads out oldest-first,
     /// and they do it at capacities of their own.
-    public static let defaultCapacity = WaveformLayout.maximumBars
+    public static let defaultCapacity = WaveformLayout.maximumBars + WaveformLayout.scrollHeadroom
 
     public let capacity: Int
     /// The ring itself, always exactly `capacity` long. Written in place, never appended to.

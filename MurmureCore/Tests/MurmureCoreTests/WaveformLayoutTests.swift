@@ -207,9 +207,28 @@ final class WaveformLayoutTests: XCTestCase {
             LevelHistory.defaultCapacity, WaveformLayout.barCount(inWidth: panelRow))
     }
 
-    /// And it holds no more than that: a ring longer than the widest surface can draw is history
-    /// nothing will ever show, allocated on every frame of every recording.
-    func testTheHistoryHoldsNoMoreThanThat() {
-        XCTAssertEqual(LevelHistory.defaultCapacity, WaveformLayout.maximumBars)
+    /// And it holds no more than that plus the read head's look-back: a ring longer still is
+    /// history nothing will ever show, allocated on every frame of every recording.
+    ///
+    /// **This used to assert exact equality with `maximumBars`, and `WaveformScroll` is why it no
+    /// longer can.** The head is parked a margin behind the newest level, and the oldest bar of a
+    /// full row reads a whole row behind THAT; with the ring exactly as long as the row those bars
+    /// fall off its end and clamp, which drew the left of the card as a small block that held still
+    /// and jumped by two. The bound is still a bound -- the extra is a named constant, not slack --
+    /// and the assertion below is what keeps the two from drifting apart.
+    func testTheHistoryHoldsNoMoreThanTheRowPlusItsLookBack() {
+        XCTAssertEqual(
+            LevelHistory.defaultCapacity,
+            WaveformLayout.maximumBars + WaveformLayout.scrollHeadroom)
+    }
+
+    /// The look-back has to be at least the margin, or the oldest bar of the widest row reads past
+    /// the oldest level kept. This is the coupling that broke, pinned where both halves are.
+    func testTheLookBackCoversTheMarginTheReadHeadKeeps() {
+        for burst in 0...12 {
+            XCTAssertLessThanOrEqual(
+                WaveformScroll.margin(burst: burst), Double(WaveformLayout.scrollHeadroom),
+                "a burst of \(burst) would push the oldest bar off the end of the ring")
+        }
     }
 }

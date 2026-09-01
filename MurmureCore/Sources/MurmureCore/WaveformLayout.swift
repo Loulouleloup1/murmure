@@ -60,15 +60,28 @@ public enum WaveformLayout {
 
     /// How much audio one bar measures.
     ///
-    /// ~43 ms, i.e. about 23 bars a second. It is a *fraction of a tap buffer*, not a buffer: at
-    /// the 48 kHz of this Mac a 4 096-frame buffer is 85.3 ms, so one level per callback would
-    /// update the waveform 11.7 times a second and a syllable would be a single bar. Two blocks
-    /// per buffer is what puts the update rate above the 20 Hz the eye reads as continuous.
+    /// ~43 ms, i.e. 23.3 bars a second. It is a *fraction of a tap buffer*, not a buffer: at the
+    /// 48 kHz of this Mac a 4 096-frame buffer is 85.3 ms, so one level per callback would give a
+    /// syllable a single bar.
     ///
     /// (The lot-3 plan says "100 ms sub-blocks … so the level updates at ~20 Hz". Those two are
     /// not the same statement: a 100 ms block is *longer* than the 85.3 ms buffer it would have to
     /// be cut from, and would have lowered the rate to 10 Hz. The 20 Hz is the intent worth
     /// keeping, so it is the number implemented.)
+    ///
+    /// **It is a duration and not a buffer count, and `AudioLevels` now honours that literally.**
+    /// The rate used to be a consequence of the tap's frame count -- two blocks per 4 096-frame
+    /// buffer -- which made it hostage to a number `installTap` is only ever *asked* for. The
+    /// buffer's remainder is carried now, so a level is one block of audio at any buffer size and
+    /// this constant alone sets the rate.
+    ///
+    /// **23.3 a second is not, and never was, a frame rate.** It was once defended as "above the
+    /// 20 Hz the eye reads as continuous", and that defence was wrong twice over: the levels
+    /// arrived in lumps of two so the picture only changed 11.7 times a second, and a picture that
+    /// changes 23 times a second is a picture that steps 23 times a second. What makes the waveform
+    /// continuous is `WaveformScroll`, which slides between these samples; this number is the
+    /// waveform's *time resolution*, and raising it would mean more bars in the same window rather
+    /// than smoother motion.
     ///
     /// It lives here rather than in `AudioLevels`, where it was written, because it is now the
     /// waveform's time resolution and not merely the recorder's block size: `maximumBars` is
@@ -103,11 +116,31 @@ public enum WaveformLayout {
     /// scroll speed; what this buys back is the speed itself -- 353 pt/s against the wing's 128.
     public static let window: TimeInterval = 1
 
-    /// The most bars any surface draws, and therefore the number of levels `LevelHistory` must
-    /// hold (`LevelHistory.defaultCapacity`).
+    /// The most bars any surface draws.
     ///
     /// Truncating rather than rounding, so the window is a ceiling that is never exceeded.
     public static let maximumBars = Int(window / blockDuration)
+
+    /// How many levels are kept **beyond** the widest row, so the read head can look back.
+    ///
+    /// It used to be none: the ring held exactly `maximumBars` because that was exactly what the
+    /// widest surface drew. `WaveformScroll` broke that equality, and the way it broke it is worth
+    /// writing down because the symptom was specific. The head is parked
+    /// `WaveformScroll.margin(burst:)` levels behind the newest so it never reads a level that has
+    /// not landed; the oldest bar of the row then reads `maximumBars - 1` further back still, which
+    /// with no headroom is off the end of the ring. Those bars clamped to the oldest level -- so
+    /// the left-hand three or four bars of the card were a little block that held still and then
+    /// jumped by two whenever the ring shifted, i.e. the exact staircase the change exists to
+    /// remove, surviving in the corner of the drawing.
+    ///
+    /// Eight is **arbitrary in its digit** and bounded on one side: it must be at least the margin,
+    /// which is the burst plus a block and a half, and eight therefore covers a tap buffer of up to
+    /// six blocks -- 258 ms, far past anything `AVAudioEngine` hands out. `WaveformScroll.margin`
+    /// is capped at this number so the two cannot drift apart.
+    ///
+    /// These levels are never drawn. They are 32 bytes of look-back, and the alternative to them is
+    /// a stepping left edge.
+    public static let scrollHeadroom = 8
 
     // MARK: - Fitting them to a frame
 

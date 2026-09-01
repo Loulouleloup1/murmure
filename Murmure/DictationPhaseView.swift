@@ -54,13 +54,12 @@ struct DictationPhaseView: View {
     /// thread's rate reaches this timeline, and a frame missed here is a bar not drawn, never a
     /// buffer delayed.
     ///
-    /// **60 Hz, up from 20.** What it buys is punctuality, not more waveform: `AudioLevels` cuts
-    /// each tap buffer into two blocks and appends both at once, so at the 4 096 frames and 48 kHz
-    /// of this Mac the levels genuinely change about twelve times a second, 85 ms apart, whatever
-    /// this number is. Sampling that on a 50 ms grid put each change up to 50 ms late and made the
-    /// wait between two advances alternate 50 ms and 100 ms -- a waveform that hesitates twice a
-    /// second, which is what reads as old. On a 16.7 ms grid the lateness is at most 17 ms and the
-    /// cadence is the microphone's own.
+    /// **60 Hz, up from 20 -- and, since `WaveformScroll`, sixty *different* pictures.** This
+    /// number was raised once already, in answer to the same complaint, and it did not fix it:
+    /// levels arrive about twelve times a second in lumps of two, so sixty samples of them were
+    /// fifty repeats and ten changes however punctual the sampling was. What the waveform draws is
+    /// now a function of the instant rather than of which levels have landed, so every one of these
+    /// ticks moves the picture. The tick rate was never the fault; it is only now worth having.
     ///
     /// `.animation(minimumInterval:)` and not `.periodic`, which is what it was: the schedule is
     /// then a whole number of display frames, so every tick lands on a frame that is about to be
@@ -82,27 +81,18 @@ struct DictationPhaseView: View {
     ///
     /// Measured cost, one surface's two halves rendered off-screen for 20 s with the levels fed on
     /// the real tap cadence, six interleaved runs each: **7.6-7.9 % of one core at 20 Hz against
-    /// 8.5-9.6 % at 60 Hz.** Three times the samples for about a fifth more work, because most of
-    /// the work is not the sampling -- the bars are carried between samples by `levelCarry` below,
-    /// and CoreAnimation renders that at the display's rate whatever this timeline asks for. A
-    /// seventh run of each landed near half those figures, which is this Mac's ProMotion display
-    /// choosing a lower refresh: the cost follows the compositor more closely than it follows this
-    /// constant. On the 14-core M4 Pro this runs on, 9 % of one core is 0.6 % of the machine, and
-    /// only while a recording is on screen -- the same view with no timeline at all costs 0.03 %.
+    /// 8.5-9.6 % at 60 Hz** (measured before `WaveformScroll`, when a tick that changed nothing
+    /// still cost a render; the arithmetic it added is 23 lerps a frame, which is not a figure this
+    /// budget can see). On the 14-core M4 Pro this runs on, 9 % of one core is 0.6 % of the
+    /// machine, and only while a recording is on screen -- the same view with no timeline at all
+    /// costs 0.03 %.
     ///
-    /// Uncapped `.animation` measured 10.0-10.9 % for 120 ticks a second, i.e. it pays a third
-    /// again over 60 Hz to redraw a waveform that changed twelve times. That is why this is capped
-    /// at the 60 Louis asked for rather than left to follow whatever the display runs at.
+    /// Uncapped `.animation` measured 10.0-10.9 % for 120 ticks a second. **It stays capped at 60
+    /// all the same, and now for a better reason than cost.** Every previous round changed a rate
+    /// and hoped; this round changes what a tick draws, so leaving the rate exactly where the last
+    /// round left it is what makes the difference attributable to the change. Uncapping is one
+    /// constant away if the 120 Hz built-in display turns out to want it.
     static let sampleInterval: TimeInterval = 1.0 / 60
-
-    /// How long a bar takes to travel from one sample's height to the next.
-    ///
-    /// **Deliberately not `sampleInterval`, which it used to be**, and the two stopped being the
-    /// same number the moment the sampling got faster than the levels. This is a carry across the
-    /// gap between two *arrivals*, ~85 ms apart; setting it to 1/60 would ramp each new height in
-    /// 17 ms and then hold it still for the other 68, which is the stutter this change is meant to
-    /// remove, drawn sharper.
-    static let levelCarry: TimeInterval = 0.05
 
     /// The one accent, assembled from the components `NotchAppearance` chose (lot 3 D11, Q-NB2).
     static let accent = Color(
@@ -180,7 +170,7 @@ struct DictationPhaseView: View {
                 Color.clear
             case .waveform:
                 TimelineView(.animation(minimumInterval: Self.sampleInterval)) { _ in
-                    bars(levels.bars())
+                    bars(levels.reading())
                 }
             case .travelling:
                 // Uncapped, unlike the waveform's `minimumInterval`, and with no `.animation()`
@@ -228,10 +218,19 @@ struct DictationPhaseView: View {
     /// numbers from `size.width` instead: how many of the newest levels this surface has room for,
     /// and how far apart they go so that they fill it exactly.
     ///
-    /// The newest levels and not the first ones: `levels` is oldest-first and a narrow surface
+    /// The newest levels and not the first ones: the ring is oldest-first and a narrow surface
     /// showing the *start* of the history would be a waveform running a second behind the voice.
-    private func bars(_ levels: [Float]) -> some View {
-        let shown = Array(levels.suffix(WaveformLayout.barCount(inWidth: size.width)))
+    ///
+    /// **The heights are read at an instant, not taken off the end of the ring**, and that is the
+    /// answer to the third report of "saccadé". Taking the last *n* levels gave the same row for
+    /// every frame between two arrivals and then a jump of two bars, which is a staircase however
+    /// often it is redrawn; `WaveformScroll` reads the same ring at a fractional position that
+    /// advances with the clock, so consecutive frames differ by a fraction of a bar and the row
+    /// slides. Nothing about the row's *shape* changes here -- the count, the widths and the gaps
+    /// are `WaveformLayout`'s, untouched.
+    private func bars(_ reading: WaveformReading) -> some View {
+        let shown = WaveformScroll.heights(
+            reading, count: WaveformLayout.barCount(inWidth: size.width))
         let width = CGFloat(WaveformLayout.barWidth(inWidth: size.width, barCount: shown.count))
         let spacing = WaveformLayout.barSpacing(inWidth: size.width, barCount: shown.count)
         return HStack(spacing: spacing) {
@@ -246,9 +245,13 @@ struct DictationPhaseView: View {
                     )
             }
         }
-        // The meter's own attack and release do the smoothing; this only carries each bar from one
-        // arrival to the next so a burst of levels reads as movement rather than as a flicker.
-        .animation(.linear(duration: Self.levelCarry), value: shown)
+        // No implicit animation, and its absence is the point. `.animation(.linear, value: shown)`
+        // used to carry each bar across the 85 ms between two arrivals, which meant every bar
+        // simultaneously cross-fading to the height of its neighbour-but-one -- halfway through,
+        // the row was the average of the waveform and the waveform shifted by two, so peaks
+        // flattened and re-sharpened eleven times a second. That average was the "saccadé".
+        // The row is now recomputed from the clock on every tick, so the movement between two
+        // ticks is already in the numbers and an animation could only lag them.
     }
 
     /// The transcription -- and the insertion behind it: a mark crossing the row from left to

@@ -82,11 +82,23 @@ public struct AudioLevelMeter: Equatable {
     /// must not allocate: this reads the tap buffer's own memory in place.
     public static func rootMeanSquare(of samples: UnsafeBufferPointer<Float>) -> Float {
         guard !samples.isEmpty else { return 0 }
+        return (sumOfSquares(of: samples) / Float(samples.count)).squareRoot()
+    }
+
+    /// The sum of the squares of a run of samples — half a root mean square, and the half that
+    /// can be added up across calls.
+    ///
+    /// It exists because a block of audio is no longer guaranteed to arrive in one piece.
+    /// `AudioLevels` measures exactly `blockDuration` of audio per level whatever frame count the
+    /// tap hands it, so a block routinely spans two tap buffers; the sum survives that boundary,
+    /// where an RMS could only have been averaged with an RMS — which is not the RMS of the two
+    /// runs together unless they happen to be the same length.
+    public static func sumOfSquares(of samples: UnsafeBufferPointer<Float>) -> Float {
         var sum: Float = 0
         for sample in samples {
             sum += sample * sample
         }
-        return (sum / Float(samples.count)).squareRoot()
+        return sum
     }
 
     /// Array overload, for callers that already hold one (the tests).
