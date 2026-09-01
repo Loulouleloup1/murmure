@@ -87,6 +87,17 @@ actor WhisperKitEngine {
 
     private var loading: Task<LoadedModel, Error>?
 
+    /// Where "how far into the audio has the decoder got" is left for the interface to pull.
+    ///
+    /// No default, for the reason `DictationRefining` has none: a box nobody passed would compile
+    /// at every call site, report nothing forever, and fail no test. `DictationController` owns
+    /// the one box and hands it to whoever draws it, the way it already does with `AudioLevels`.
+    private let progress: DecodeProgressBox
+
+    init(progress: DecodeProgressBox) {
+        self.progress = progress
+    }
+
     /// Transcribes a WAV file. The first call also downloads and loads the model.
     ///
     /// The recording keeps the capture hardware's format; WhisperKit resamples to 16 kHz mono
@@ -107,6 +118,13 @@ actor WhisperKitEngine {
     /// `"Thank you."` for each of the 22 silent windows in between. See
     /// `SpeechGate.framesWorthDecoding`.
     func transcribe(wav: URL) async throws -> String {
+        // Here rather than beside the WhisperKit call: everything between the two -- reading the
+        // file, measuring it for silence, and on the first dictation of a session loading the
+        // model, 112 s measured cold -- happens while the interface is already showing
+        // `.transcribing`. Without this the bar would spend all of it showing the previous
+        // dictation's full one.
+        progress.begin()
+
         let samples: [Float]
         do {
             samples = try Self.samples(of: wav)
@@ -146,7 +164,8 @@ actor WhisperKitEngine {
 
         let results: [TranscriptionResult]
         do {
-            results = try await model.transcribe(audio: audio, options: Self.decodeOptions)
+            results = try await model.transcribe(
+                audio: audio, options: Self.decodeOptions, reporting: progress)
         } catch {
             logger.error("transcription failed: \(error.localizedDescription, privacy: .public)")
             throw Failure.transcriptionFailed(error)
@@ -413,8 +432,24 @@ private final class LoadedModel: @unchecked Sendable {
         self.kit = kit
     }
 
-    func transcribe(audio: [Float], options: DecodingOptions) async throws -> [TranscriptionResult] {
-        try await kit.transcribe(audioArray: audio, decodeOptions: options)
+    /// Runs the transcription and leaves its progress where the interface can pull it.
+    ///
+    /// `kit.progress` is read ONCE, before the call, and that object is what the box follows.
+    /// Re-reading the property would report a different object: WhisperKit replaces it with a
+    /// fresh `Progress` as soon as the transcription finishes (`WhisperKit.swift:1167-1169`), and
+    /// measured on three real recordings the captured object reads 1.0 afterwards while the
+    /// property reads 0. It is also read here rather than in `WhisperKitEngine` because that is
+    /// what this class is for: the instance stays on this side of the isolation boundary.
+    ///
+    /// `finish()` only on the success path. A transcription that threw has not reached the end of
+    /// the audio, and saying it did would be the one thing this whole mechanism exists not to do.
+    func transcribe(
+        audio: [Float], options: DecodingOptions, reporting box: DecodeProgressBox
+    ) async throws -> [TranscriptionResult] {
+        box.follow(kit.progress)
+        let results = try await kit.transcribe(audioArray: audio, decodeOptions: options)
+        box.finish()
+        return results
     }
 }
 

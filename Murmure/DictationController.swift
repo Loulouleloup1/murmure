@@ -26,6 +26,18 @@ final class DictationController {
     /// Nil when Application Support could not be reached at all; see `init`. Kept so the menu can
     /// re-read the folder without a restart.
     private let modesDirectory: URL?
+    /// How far into the audio the transcription has got, for whatever draws the `.transcribing`
+    /// phase to pull. Internal rather than private for exactly that reason: it is one box shared
+    /// between the engine that advances it and the surface that reads it, the same arrangement as
+    /// `AudioLevels`.
+    ///
+    /// It is honest for roughly half of Louis's dictations and only for those: WhisperKit advances
+    /// its progress once per 30 s decoding window, so audio that fits in one window measures
+    /// nothing at all (0 updates in 0.43-0.60 s, on 3.1 s to 13.7 s recordings), while an 87.8 s
+    /// one gets 3 updates and a 478.9 s one gets 19. Across the 1 469 real dictations in the
+    /// corpus, 50 % are under 29.7 s. `DecodeProgress.steps` is what says which case a given
+    /// dictation turned out to be.
+    let transcriptionProgress = DecodeProgressBox()
     private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "dictation")
 
     init(appState: AppState) {
@@ -104,7 +116,7 @@ final class DictationController {
 
         session = DictationSession(
             recorder: AudioRecorder(levels: levels),
-            transcriber: WhisperKitEngine(),
+            transcriber: WhisperKitEngine(progress: transcriptionProgress),
             inserter: inserter,
             refiner: ModeAwareRefinement(modesDirectory: modesDirectory, appState: appState)
         ) { state in
