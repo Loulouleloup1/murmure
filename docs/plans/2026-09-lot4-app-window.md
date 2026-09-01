@@ -496,6 +496,42 @@ a 400-word refined transcript is readable in the detail pane rather than a wall.
 
 ---
 
+### Found in flight, and owed to the tasks that come after
+
+Written down when it was found rather than left in a report, because each of these is a trap for a
+specific later task and none of them is visible from the code that will hit it.
+
+**For T5 — the Raw/Refined lens has a one-invisible-character trap.** `OllamaChat.verdict(on:)`
+trims the model's answer (`OllamaChat.swift:328`), while the transcript reaches storage byte for
+byte — lot 1 pins that deliberately, and its test fixture is literally `"  bonjour   Murmure\n"`.
+So a transcript with whitespace at its edges and a refinement that changed nothing else differ
+**only at the edges**: `refinedText` is stored, and the lens offers two panes that look identical.
+T4 was right not to trim in `storedRefinement` — what is stored must stay exactly what was pasted —
+so the fix belongs to T5 and it is a split: **the rule that decides whether to OFFER the lens
+compares the two texts trimmed; the rule that decides what to STORE compares them exactly.**
+
+**For T9 — three surfaces that now have nothing behind them.**
+
+- `HistoryStore` names a corrupt database as an error, and no screen shows it.
+- A dictation whose row failed to write is silent; the dictation itself still succeeded, which is
+  the right priority, but the archive is then quietly incomplete.
+- `DictationSession.cancel()` writes a `.cancelled` row and **has no caller in the app**. The path
+  is tested and unreachable in real use — lot 3 T5 (the hover dashboard with Stop/Cancel) is what
+  would reach it, and that task is blocked on `ignoresMouseEvents`. Either a later task gives cancel
+  a caller or the row type is aspirational; say which rather than leaving it ambiguous.
+
+**Nobody's task yet — the retention decision has no mechanism.** `clearText` and `clearAudio` exist
+and have no caller, so the 30-day / 3-day rule Louis decided on 2026-09-01 is at present a sentence
+in a document. It is deliberately not smuggled into T3 or T4; it needs its own task, with the
+scheduling question answered (at launch? on a timer? on the window opening?) and a test that proves
+a row older than the window is actually cleared while a younger one is not.
+
+**Known and not guarded: the duration comes from `Date`.** An NTP correction mid-dictation writes a
+wrong `durationSeconds`. A monotonic clock would fix it; T4 declined to add an untested guard, which
+is the right call, and this is the note that stops it being forgotten.
+
+---
+
 ### T6 — Vocabulary, and the transcription seam that makes it possible
 
 **Delivers.** The seam first, then the feature.
