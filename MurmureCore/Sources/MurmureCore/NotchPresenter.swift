@@ -65,8 +65,38 @@ public enum NotchPresenter {
         case .completed: completionDwell
         case .nothingHeard: nothingHeardDwell
         case .failed, .alert: failureDwell
-        case .hidden, .recording, .transcribing, .refining, .inserting: nil
+        // The preparation joins the phases with no timer, and it is the one that would suffer most
+        // from inheriting one: a 1.6 GB download is minutes long, and a dwell would retract the
+        // only thing on screen explaining the wait and leave exactly the blank Louis read as a
+        // crash. It leaves when the model is ready, which is a state change, not a clock.
+        case .hidden, .recording, .preparingModel, .transcribing, .refining, .inserting: nil
         }
+    }
+
+    /// The phase to show, given what the dictation itself is doing and a model preparation in
+    /// flight.
+    ///
+    /// **The preparation is only ever shown over `transcribing`, and that single rule is what makes
+    /// a report that arrives late harmless.** The model can only be fetched or loaded from inside
+    /// `Transcriber.transcribe`, which the session calls between emitting `.transcribing` and
+    /// emitting whatever comes next -- so `.transcribing` is the only phase during which a
+    /// preparation is *true*. Anything else means the report is stale, and the dictation's own
+    /// phase is the current fact.
+    ///
+    /// The case that matters is `.failed`. A download that stalls throws
+    /// `WhisperKitEngine.Failure.modelDownloadStalled`, the session turns it into `.failed`, and
+    /// that failure has to reach the surface **carrying its own sentence** -- it is the one thing
+    /// on screen that will tell Louis his connection died rather than that Murmure is slow. A rule
+    /// that let a stale `.downloading` outrank it would replace the explanation with a percentage
+    /// frozen at whatever it had reached, which is the original defect wearing the fix's clothes.
+    ///
+    /// It is also what recovers an out-of-order report. The session's state change and the engine's
+    /// first `.loading` reach the main actor by two different routes; if the preparation won the
+    /// race it is suppressed here, and the caller composes again on the `.transcribing` that
+    /// follows -- so the worst a race can cost is one frame, never a lost state.
+    public static func phase(dictation: NotchPhase, preparing: ModelPreparation?) -> NotchPhase {
+        guard let preparing, case .transcribing = dictation else { return dictation }
+        return .preparingModel(preparing)
     }
 
     /// Which phase the notch is in, given the state change that just arrived.

@@ -94,8 +94,29 @@ actor WhisperKitEngine {
     /// the one box and hands it to whoever draws it, the way it already does with `AudioLevels`.
     private let progress: DecodeProgressBox
 
-    init(progress: DecodeProgressBox) {
+    /// Where the model's own preparation is announced, and nil when there is none in flight.
+    ///
+    /// **The seam the shipped comment on `load()` promised and never got.** The download has had a
+    /// progress callback since lot 1 and it went to `os_log`; the interface said "Transcribing"
+    /// for the whole 1.6 GB, and on a second Mac that is indistinguishable from a hang.
+    ///
+    /// It is `@MainActor` and **awaited** rather than a plain `@Sendable` closure hopping onto the
+    /// main actor with an unstructured `Task`. Two such tasks have no ordering guarantee between
+    /// them, and the one thing this value must never do is go backwards -- so the ordering is made
+    /// structural instead of hoped for: awaiting the hop means this actor cannot issue report *n+1*
+    /// until report *n* has run. It suspends rather than blocks, so a main actor busy drawing the
+    /// card cannot deadlock the download waiting on it.
+    ///
+    /// No default, for the reason the box above has none: a reporter nobody passed would compile at
+    /// every call site and reproduce exactly the defect this parameter exists to remove.
+    private let report: @MainActor @Sendable (ModelPreparation?) -> Void
+
+    init(
+        progress: DecodeProgressBox,
+        reportingPreparation report: @escaping @MainActor @Sendable (ModelPreparation?) -> Void
+    ) {
         self.progress = progress
+        self.report = report
     }
 
     /// Transcribes a WAV file. The first call also downloads and loads the model.
@@ -236,16 +257,28 @@ actor WhisperKitEngine {
     /// the next dictation retries: a dropped Wi-Fi connection must not disable transcription for
     /// the lifetime of the process. Clearing unconditionally is safe -- a new task can only be
     /// created by a caller that found `loading` nil, and this is the only place that nils it.
+    /// The loaded model, loading it exactly once.
+    ///
+    /// The `report(nil)` on both exits is what hands the surfaces back to the dictation: whichever
+    /// way the load ends, the model is no longer being prepared, and a preparation left standing
+    /// would sit on screen saying "Loading model" for the whole of the transcription that follows.
+    /// It is deliberately NOT on the early return above -- a second dictation finds the model
+    /// already loaded, reports nothing at all, and its card is the dictation's from the first frame.
     private func loadedKit() async throws -> LoadedModel {
         if let loading {
             return try await loading.value
         }
-        let task = Task { try await Self.load() }
+        let task = Task { [report] in try await Self.load(report: report) }
         loading = task
         do {
-            return try await task.value
+            let model = try await task.value
+            await report(nil)
+            return model
         } catch {
             loading = nil
+            // Before the throw, so the failure the session is about to turn into `.failed` reaches
+            // a card that is no longer showing a percentage frozen where the connection died.
+            await report(nil)
             throw error
         }
     }
@@ -253,9 +286,15 @@ actor WhisperKitEngine {
     /// Downloading and loading are separate steps so that "the model could not be fetched"
     /// (network, wrong identifier, Hugging Face down) is reportable as something other than
     /// "the model could not be loaded" (spec §9 wants a distinguishable failure per row), and so
-    /// that the download has a progress callback for a later lot to route to the UI. WhisperKit
-    /// would do both inside its initialiser and collapse them into one `modelsUnavailable`.
-    private static func load() async throws -> LoadedModel {
+    /// that the download has a progress callback routed to the UI. WhisperKit would do both inside
+    /// its initialiser and collapse them into one `modelsUnavailable`.
+    ///
+    /// **The split is now visible from outside the app as well as inside it**, which is what that
+    /// last clause was written for and never got: each of the two steps announces itself through
+    /// `report`, so the wait a fresh Mac spends here says which half of it is happening.
+    private static func load(
+        report: @escaping @MainActor @Sendable (ModelPreparation?) -> Void
+    ) async throws -> LoadedModel {
         let modelStore = try Storage.directory(subfolder: "models")
 
         // Warm start: the model is already on disk, so skip WhisperKit.download entirely.
@@ -265,6 +304,11 @@ actor WhisperKitEngine {
         // dictation of every session, in an app whose whole value is being fast.
         if let cached = cachedModelFolder(in: modelStore) {
             do {
+                // Announced on the warm path too, and that is not belt-and-braces: this is the
+                // branch Louis's OWN Mac takes on the first dictation of every session, and the
+                // load behind it was measured at 112 s cold. The machine with the model already on
+                // disk has the same right to know what it is waiting for as the one downloading it.
+                await report(.loading)
                 return try await loadKit(from: cached, downloadBase: modelStore)
             } catch {
                 // The folder looked complete but CoreML would not load it -- a truncated or
@@ -278,9 +322,10 @@ actor WhisperKitEngine {
             }
         }
 
-        let modelFolder = try await downloadModel(into: modelStore)
+        let modelFolder = try await downloadModel(into: modelStore, report: report)
 
         do {
+            await report(.loading)
             return try await loadKit(from: modelFolder, downloadBase: modelStore)
         } catch {
             logger.error("model load failed: \(error.localizedDescription, privacy: .public)")
@@ -329,13 +374,19 @@ actor WhisperKitEngine {
     /// gap between two progress reports, which is what a dropped connection actually looks like.
     /// Without this, a flaky connection leaves the caller suspended forever and Task 7's state
     /// machine stuck in `.transcribing`, which spec §9's error table has no row for.
-    private static func downloadModel(into modelStore: URL) async throws -> URL {
+    private static func downloadModel(
+        into modelStore: URL,
+        report: @escaping @MainActor @Sendable (ModelPreparation?) -> Void
+    ) async throws -> URL {
         let lastProgress = OSAllocatedUnfairLock(initialState: Date())
         let start = Date()
 
         let modelFolder: URL
         do {
             modelFolder = try await withThrowingTaskGroup(of: URL?.self) { group in
+                group.addTask {
+                    try await announceBytesReceived(in: modelStore, report: report)
+                }
                 group.addTask {
                     let log = downloadProgressLogger()
                     return try await WhisperKit.download(
@@ -358,8 +409,8 @@ actor WhisperKitEngine {
                     }
                 }
                 defer { group.cancelAll() }
-                // The watchdog only ever finishes by throwing, so the first result is the
-                // download's, and cancelling the group here stops the watchdog.
+                // The watchdog and the byte reporter only ever finish by throwing, so the first
+                // result is the download's, and cancelling the group here stops both.
                 for try await result in group {
                     if let result { return result }
                 }
@@ -393,8 +444,80 @@ actor WhisperKitEngine {
     private static let downloadStallTimeout: TimeInterval = 180
     private static let stallCheckInterval: TimeInterval = 5
 
-    /// Logs the first download once per completed tenth. Until the models lot gives this a UI,
-    /// the log is what tells the difference between "downloading" and "stuck".
+    /// How often the store is measured while the model comes down.
+    ///
+    /// A second, because the percentage it feeds is quantised to whole points and this is what
+    /// bounds how late a point can be. It does not bound how often the interface changes: on a fast
+    /// link several points land in one second and only the last is reported, on a slow one a point
+    /// takes half a minute and nothing is reported in between. What actually keeps the card moving
+    /// throughout is not this rate at all -- it is the sweep, which is a function of the clock.
+    private static let byteCheckInterval: TimeInterval = 1
+
+    /// Reports how much of the model is on disk, for as long as it is being downloaded.
+    ///
+    /// **Bytes on disk, rather than the fraction WhisperKit hands out**, and `ModelDownload`'s own
+    /// note carries the measurement that forces it: the Hub's `Progress` averages 24 files
+    /// unweighted, two of which are 98.6 % of the bytes, so its `fractionCompleted` reaches 91.7 %
+    /// in the first seconds and crawls for the rest. Walking the store instead counts the
+    /// `.incomplete` file currently being written as well as everything already moved into place,
+    /// which is exactly the quantity the wait is made of.
+    ///
+    /// It never returns: it is cancelled by the group when the download finishes. The first report
+    /// is sent before the first sleep so the card says what it is doing from the outset rather than
+    /// a second in.
+    ///
+    /// **The store, not the variant folder.** `HubApiWrapper.localRepoLocation` is where the
+    /// repository lands, and it is where both the finished files and the `.cache/…/*.incomplete`
+    /// ones live. It holds one variant on a machine that has only ever run Murmure; a store that
+    /// also held another would make this over-count, which the ceiling in `ModelDownload` bounds
+    /// at 99 %.
+    private static func announceBytesReceived(
+        in modelStore: URL,
+        report: @escaping @MainActor @Sendable (ModelPreparation?) -> Void
+    ) async throws -> URL? {
+        let repo = HubApiWrapper(downloadBase: modelStore)
+            .localRepoLocation(HubApiWrapper.Repo(id: modelRepo, type: .models))
+        var download = ModelDownload(expectedBytes: ModelDownload.transcriptionModelBytes)
+        await report(.downloading(download))
+        while true {
+            try await Task.sleep(for: .seconds(byteCheckInterval))
+            let shown = download
+            download.observe(receivedBytes: bytesOnDisk(in: repo))
+            // Only when what Louis would READ has changed. `ModelDownload` stores the percentage it
+            // shows, so this comparison is that question rather than an approximation of it -- and
+            // each report it skips is a hop onto the main actor, a route through `StatusRouter` and
+            // a redraw of both surfaces that would have changed nothing.
+            guard download != shown else { continue }
+            await report(.downloading(download))
+        }
+    }
+
+    /// Every byte under a folder, hidden files included.
+    ///
+    /// The `.incomplete` file being written right now lives in `.cache/huggingface/download/`, so
+    /// skipping hidden files would skip the only part of the tree that is currently growing and the
+    /// count would advance in whole-file steps -- the very defect the byte count exists to avoid.
+    ///
+    /// An unreadable folder measures zero, which `ModelDownload.observe` drops rather than treats
+    /// as a reading: a percentage must not fall back to 0 because a directory walk failed once.
+    private static func bytesOnDisk(in folder: URL) -> Int64 {
+        guard let files = FileManager.default.enumerator(
+            at: folder, includingPropertiesForKeys: [.fileSizeKey])
+        else { return 0 }
+        var total: Int64 = 0
+        for case let file as URL in files {
+            let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize
+            total += Int64(size ?? 0)
+        }
+        return total
+    }
+
+    /// Logs the first download once per completed tenth, in WhisperKit's own terms.
+    ///
+    /// Kept now that the download has a surface, and deliberately NOT replaced by it: this is the
+    /// file-count fraction, the card shows the byte one, and having both in the record is what
+    /// would let a future "the bar sat at 40 % for ten minutes" be diagnosed rather than guessed
+    /// at. It is also the only thing that still says anything at all if the reporting path breaks.
     private static func downloadProgressLogger() -> ProgressCallback {
         let lastTenth = OSAllocatedUnfairLock(initialState: -1)
         return { progress in

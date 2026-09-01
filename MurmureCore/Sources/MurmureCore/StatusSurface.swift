@@ -147,6 +147,24 @@ public enum StatusSurfaceChoice {
         return held ?? resolved
     }
 
+    /// Whether resolving a display afresh can change the answer `route(for:held:resolved:)` gives.
+    ///
+    /// **A read of the rule above, not a second rule**, and the tests pin it as such: for every
+    /// phase and every hold where this says no, passing a resolved route and passing nil produce
+    /// the same route. So a caller may skip the resolution entirely whenever it says no, and the
+    /// two can never drift into disagreeing about a display.
+    ///
+    /// It exists because resolving is not free. `StatusRouter` reads the focused window through the
+    /// Accessibility API, which is a synchronous message into another process on the main actor
+    /// with a 150 ms bound. That was invisible while placements happened a handful of times per
+    /// dictation. A model download reports about once a second for minutes, and paying for an
+    /// answer that rule 3 discards on every one of them would put a few hundred cross-process
+    /// round-trips behind a progress bar.
+    public static func resolvesAfresh(for phase: NotchPhase, held: StatusRoute?) -> Bool {
+        if case .recording = phase { return true }
+        return held == nil
+    }
+
     /// Whether the display a dictation resolved outlives this state.
     ///
     /// **The hold has to be released by something, and the phase alone cannot do it.** A dictation

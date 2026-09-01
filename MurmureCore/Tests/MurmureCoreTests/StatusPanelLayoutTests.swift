@@ -28,10 +28,39 @@ final class StatusPanelLayoutTests: XCTestCase {
     ///
     /// The completion is listed at five digits, which is more than a dictation will ever insert;
     /// the point is that the count truncating is the one failure this slot exists to prevent.
+    ///
+    /// The download is listed at 100 %, which a running one never reaches
+    /// (`ModelDownload.ceilingWhileRunning`) -- for the same reason: the widest form has to fit
+    /// even though it will not be shown, so a later change to the wording is measured against the
+    /// worst case rather than the usual one. It is the sentence with the least headroom of the
+    /// three the panel writes itself for a running dictation, and a truncated "Downloading model
+    /// 10…" would take away the one number this whole task exists to put on screen.
     private let sentences: [NotchPhase] = [
-        .recording, .transcribing, .refining, .inserting, .nothingHeard,
+        .recording,
+        .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
+        .preparingModel(.loading),
+        .transcribing, .refining, .inserting, .nothingHeard,
         .completed(insertedCharacters: 1), .completed(insertedCharacters: 12345),
     ]
+
+    /// The widest the download's sentence can be, measured rather than assumed: three digits.
+    ///
+    /// `sentences` above carries a download at 0 %, which is what the panel actually opens on; this
+    /// pins the other end, because the digits grow the sentence and the slot is a fixed budget.
+    func testTheDownloadFitsTheSlotAtEveryPercentageItCanShow() throws {
+        var download = ModelDownload(expectedBytes: 1_638_467_188)
+        for percent in 0...100 {
+            download.observe(receivedBytes: Int64(percent) * 16_384_672)
+            let label = StatusPanelText.label(for: .preparingModel(.downloading(download)))
+            let measured = try width(label)
+            XCTAssertLessThanOrEqual(
+                measured, StatusPanelLayout.labelSlot,
+                "\"\(label)\" needs \(measured) pt and the slot is \(StatusPanelLayout.labelSlot)")
+        }
+        XCTAssertEqual(download.percent, ModelDownload.ceilingWhileRunning)
+        // The form that can never actually be reached, kept as the true ceiling of the budget.
+        XCTAssertLessThanOrEqual(try width("Downloading model 100%"), StatusPanelLayout.labelSlot)
+    }
 
     func testEverySentenceThePanelWritesItselfFitsTheSlot() throws {
         for phase in sentences {

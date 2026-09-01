@@ -11,7 +11,10 @@ private let contentWidth = NotchCard.contentWidth(
 /// Every phase, so a phase added later has to be added here too rather than being silently
 /// untested by the properties that quantify over all of them.
 private let everyPhase: [NotchPhase] = [
-    .hidden, .recording, .transcribing, .refining, .inserting,
+    .hidden, .recording,
+    .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
+    .preparingModel(.loading),
+    .transcribing, .refining, .inserting,
     .completed(insertedCharacters: 47), .nothingHeard,
     .failed(message: "paste refused", recoveredText: "bonjour"), .alert(message: "no hotkey"),
 ]
@@ -66,7 +69,7 @@ final class NotchCardTests: XCTestCase {
     /// duplicates it, mirroring an *ornament* -- a breath, a dim dash, the fill of a completion --
     /// is symmetry. What changed is which side of that line a transcription falls on.
     func testOnlyTheTimelinePhasesAreASingleDrawing() {
-        for phase in everyPhase where !isRecording(phase) && !isTranscribing(phase) {
+        for phase in everyPhase where !isRecording(phase) && !drawsOneTimelineRow(phase) {
             XCTAssertEqual(NotchCard.drawingPieces(for: phase), 2, "\(phase) must be two pieces")
         }
     }
@@ -271,10 +274,20 @@ private func isRecording(_ phase: NotchPhase) -> Bool {
     if case .recording = phase { true } else { false }
 }
 
-/// The two phases that share the travelling mark, and therefore share its single row.
-private func isTranscribing(_ phase: NotchPhase) -> Bool {
+/// The phases that share the travelling mark, and therefore share its single row.
+///
+/// **Enumerated by hand rather than asked of `NotchAppearance.mark(for:)`, on purpose.**
+/// `drawingPieces(for:)` is defined through the mark, so a predicate that also went through the
+/// mark would make the assertion above compare a function with itself. Listing the phases is what
+/// keeps it a claim about the interface -- and what makes a phase added later fail here until
+/// somebody decides, in as many words, which side of the line it falls on.
+///
+/// The model's preparation joined the list when it joined the family: it fills its row with the
+/// bytes it has downloaded, and a fraction mirrored is one bar drawn as two half-length bars
+/// growing out of the centre -- the duplication the recording was rescued from.
+private func drawsOneTimelineRow(_ phase: NotchPhase) -> Bool {
     switch phase {
-    case .transcribing, .inserting: true
+    case .preparingModel, .transcribing, .inserting: true
     default: false
     }
 }

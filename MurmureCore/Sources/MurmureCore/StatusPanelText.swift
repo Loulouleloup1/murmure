@@ -24,6 +24,24 @@ public enum StatusPanelText {
             ""
         case .recording:
             "Recording"
+        // **The two sentences this task was written for.** Neither may read as "Transcribing":
+        // that word is what a fresh Mac showed Louis for minutes while it pulled 1.6 GB, and a
+        // wait whose cause is not stated is indistinguishable from a hang. The percentage is not
+        // decoration either -- it is the difference between "it is working" and "it is working and
+        // it will end", and it is a percentage of BYTES (`ModelDownload`), never of the file count
+        // WhisperKit reports, which reaches 91.7 % in the first seconds.
+        //
+        // Both fit `StatusPanelLayout.labelSlot` at their widest, which is what
+        // `StatusPanelLayoutTests` measures rather than estimates: "Downloading model 100%" is
+        // 147.53 pt against a 158 pt slot.
+        case .preparingModel(.downloading(let download)):
+            "Downloading model \(download.percent)%"
+        // "Loading", not "Preparing": it names the mechanism, the log line beside it already says
+        // "model loaded in …s", and the wait it covers is CoreML compiling the model for this
+        // machine -- 112 s the first time, seconds after that. No number, because there is none to
+        // have; the word and the glyph are the whole of the distinction.
+        case .preparingModel(.loading):
+            "Loading model"
         case .transcribing:
             "Transcribing"
         // Its own word, not "Transcribing" continued. The two phases are seconds and 19 s

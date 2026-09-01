@@ -12,6 +12,22 @@ public enum NotchPhase: Equatable {
     /// No window. Between dictations, and after a completion has finished being shown.
     case hidden
     case recording
+    /// The model itself is being fetched or loaded, which is what the FIRST dictation on a machine
+    /// spends its minutes doing while the session sits in `.transcribing`.
+    ///
+    /// **It is a phase of its own rather than a variant of `transcribing`, and the split is this
+    /// type's founding argument applied a second time.** `NotchPhase` exists because the machine
+    /// has states the interface must not draw one-for-one: `.completed(0)` had to become two
+    /// phases because one state meant two things. This is the mirror case -- one *state*,
+    /// `.transcribing`, covers three waits that are minutes apart in length and different in kind,
+    /// and the interface has to say which. Louis installed Murmure on a second Mac, watched
+    /// "Transcribing" for a long time and concluded the app was broken; it was downloading 1.6 GB.
+    ///
+    /// It is one case with a payload rather than two cases because everything the surfaces decide
+    /// about it is shared -- the same white tint, the same travelling mark, the same "never
+    /// retracts on a timer" -- and only the sentence, the glyph and whether there is a bar differ.
+    /// Two cases would have to be kept in step by hand at five call sites.
+    case preparingModel(ModelPreparation)
     case transcribing
     /// The long one: 19 s at the p-high of the measured refinements, 57.5 s on the worst real
     /// case. It has to look different from `transcribing`, which is why it is a phase of its own

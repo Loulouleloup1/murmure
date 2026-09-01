@@ -191,9 +191,25 @@ final class DictationController {
             log.error("history unavailable: \(error.localizedDescription, privacy: .public)")
         }
 
+        // The first dictation on a machine spends minutes inside `transcribe` fetching and loading
+        // the model, and until now the session had no state for that and the surfaces no word: the
+        // card said "Transcribing" for the whole 1.6 GB. Louis installed Murmure on a second Mac,
+        // watched that, and concluded it was broken.
+        //
+        // The report is routed exactly as a dictation's own state change is -- one `placement`,
+        // both surfaces, so the same single display answers -- and it is composed with the phase
+        // the dictation is in rather than replacing it (`NotchPresenter.phase(dictation:preparing:)`),
+        // which is what keeps a stalled download's `.failed` from being painted over by the
+        // percentage it stalled at.
+        let engine = WhisperKitEngine(progress: transcriptionProgress) { preparation in
+            let placement = router.placement(preparing: preparation)
+            notch.apply(placement)
+            statusPanel.apply(placement)
+        }
+
         session = DictationSession(
             recorder: AudioRecorder(levels: levels),
-            transcriber: WhisperKitEngine(progress: transcriptionProgress),
+            transcriber: engine,
             inserter: inserter,
             refiner: ModeAwareRefinement(modesDirectory: modesDirectory, appState: appState),
             recording: DictationArchive(store: history)

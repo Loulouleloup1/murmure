@@ -71,7 +71,17 @@ public enum NotchAppearance {
         switch phase {
         case .hidden: .none
         case .recording: .waveform
-        case .transcribing, .inserting: .travelling
+        // **The preparation shares the transcription's family deliberately, and it buys the one
+        // thing a multi-minute first run needs most.** `animationStart(previousMark:...:)` restarts
+        // a drawing's clock only when the FAMILY changes, so downloading → loading → transcribing
+        // is a single mark travelling without interruption from the first second of the download
+        // to the last of the decode. Nothing in the sequence jumps, and the thing that says the app
+        // is alive never stops to say it again.
+        //
+        // What separates the three is not the motion -- it is the sentence, the glyph, and whether
+        // there is a bar underneath (`progressFill(for:decoding:)`). A family of its own would have
+        // bought a fourth drawing to design and would have cost the continuity above.
+        case .preparingModel, .transcribing, .inserting: .travelling
         case .refining: .pulsing
         case .completed: .success
         case .nothingHeard: .quiet
@@ -226,6 +236,36 @@ public enum NotchAppearance {
     public static func progressFill(for mark: Mark, progress: DecodeProgress?) -> Double? {
         guard mark == .travelling, let progress, progress.steps > 0 else { return nil }
         return progress.fraction
+    }
+
+    /// The bar to draw for a phase: the download's own percentage while the model is being
+    /// fetched, the decoded fraction while a dictation is being transcribed, and no bar at all
+    /// anywhere else.
+    ///
+    /// **The one function a surface calls, so that no surface has to know which of the two sources
+    /// applies.** Two phases now share the `travelling` family, and they fill their row from
+    /// different numbers: the download counts bytes it has written, the transcription counts audio
+    /// it has decoded. A view choosing between them would be a decision in a target that has no
+    /// test bundle.
+    ///
+    /// **A download at 0 % returns `0`, where a transcription with nothing measured returns `nil`,
+    /// and the difference is deliberate.** `progressFill(for:progress:)` withholds the bar until
+    /// the decoder has actually moved, because a determinate bar at zero would claim the work had
+    /// not started when in fact it may be nearly done -- half of Louis's dictations decode in a
+    /// single window and measure nothing at all. A download has no such case: 0 % is measured, it
+    /// is true, and it becomes 1 % within seconds. So the empty bar is the honest drawing here and
+    /// the withheld bar is the honest drawing there, which is also what makes the two states
+    /// distinguishable on screen rather than only in the sentence.
+    ///
+    /// `loading` has no bar because it has no counter: CoreML compiles the model for this
+    /// machine's neural engine and reports nothing while it does. Drawing an empty bar there would
+    /// be a measurement claiming to exist.
+    public static func progressFill(for phase: NotchPhase, decoding: DecodeProgress?) -> Double? {
+        if case .preparingModel(let step) = phase {
+            guard case .downloading(let download) = step else { return nil }
+            return download.fraction
+        }
+        return progressFill(for: mark(for: phase), progress: decoding)
     }
 
     /// The stretch of the row the sweep is allowed to run in, as fractions of the row.

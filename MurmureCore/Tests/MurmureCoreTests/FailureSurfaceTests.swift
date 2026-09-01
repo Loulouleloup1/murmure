@@ -125,7 +125,8 @@ final class FailureSurfaceTests: XCTestCase {
     /// only thing on screen saying the microphone is live.
     func testADictationPhaseOutranksAnAlertOnTheTransientSurface() {
         for phase: NotchPhase in [
-            .recording, .transcribing, .refining, .inserting,
+            .recording, .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
+            .preparingModel(.loading), .transcribing, .refining, .inserting,
             .completed(insertedCharacters: 47), .nothingHeard,
             .failed(message: "insert failed", recoveredText: spoken),
         ] {

@@ -119,7 +119,8 @@ final class StatusSurfaceTests: XCTestCase {
         let held = StatusRoute(screenIndex: 1, surface: .panel)
         let elsewhere = StatusRoute(screenIndex: 0, surface: .notch)
         for phase in [
-            NotchPhase.transcribing, .refining, .inserting,
+            NotchPhase.transcribing, .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
+            .preparingModel(.loading), .refining, .inserting,
             .completed(insertedCharacters: 12), .nothingHeard,
             .failed(message: "no", recoveredText: nil), .alert(message: "no"),
         ] {

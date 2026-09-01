@@ -8,7 +8,10 @@ final class StatusPanelTextTests: XCTestCase {
     func testEveryVisiblePhaseSaysSomething() {
         XCTAssertEqual(StatusPanelText.label(for: .hidden), "")
         let visible: [NotchPhase] = [
-            .recording, .transcribing, .refining, .inserting,
+            .recording,
+            .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
+            .preparingModel(.loading),
+            .transcribing, .refining, .inserting,
             .completed(insertedCharacters: 42), .nothingHeard,
             .failed(message: "clipboard lost", recoveredText: nil),
             .alert(message: "Accessibility is off"),

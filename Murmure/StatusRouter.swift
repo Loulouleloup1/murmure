@@ -57,6 +57,19 @@ final class StatusRouter {
     /// controller, and the panel's was never released.
     private var held: StatusRoute?
 
+    /// The phase the dictation itself is in, kept because a model preparation arrives on its own
+    /// schedule and has to be composed with it. See `NotchPresenter.phase(dictation:preparing:)`.
+    private var dictationPhase: NotchPhase = .hidden
+
+    /// The model preparation in flight, or nil. Kept for the mirror reason: a state change arriving
+    /// during a download has to be composed with the download, or the card would drop back to
+    /// "Transcribing" for one frame every time the session said anything.
+    ///
+    /// It is never cleared here. `NotchPresenter.phase(dictation:preparing:)` shows it only over
+    /// `.transcribing`, and `WhisperKitEngine` reports nil on both exits of the load, so a value
+    /// left standing here can reach the screen through neither route.
+    private var preparation: ModelPreparation?
+
     private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "status")
 
     /// The placement for a session state change. The only caller is `DictationController`, once
@@ -64,7 +77,9 @@ final class StatusRouter {
     func placement(for state: DictationSession.State) -> StatusPlacement {
         let phase = NotchPresenter.phase(previous: previousState, current: state)
         previousState = state
-        let placement = placement(for: phase)
+        dictationPhase = phase
+        let placement = placement(
+            for: NotchPresenter.phase(dictation: phase, preparing: preparation))
         // AFTER the placement, so the state that ends a dictation is still shown on the display
         // that dictation resolved. `StatusSurfaceChoice.routeOutlives(_:)` argues why this is
         // keyed on the state and cannot be keyed on the phase.
@@ -72,15 +87,34 @@ final class StatusRouter {
         return placement
     }
 
+    /// The placement for a step of the model's preparation, which happens inside a dictation and
+    /// therefore on the display that dictation already resolved.
+    ///
+    /// Called from `WhisperKitEngine`'s reporter, about once a second while 1.6 GB comes down. It
+    /// goes through the same one router as everything else on purpose: a download that resolved a
+    /// display of its own would be the two-surfaces bug (`643165c`) reintroduced by a new caller.
+    func placement(preparing: ModelPreparation?) -> StatusPlacement {
+        preparation = preparing
+        return placement(
+            for: NotchPresenter.phase(dictation: dictationPhase, preparing: preparing))
+    }
+
     /// The placement for a phase that has no state change behind it -- an alert raised at launch.
     func placement(for phase: NotchPhase) -> StatusPlacement {
         let screens = NSScreen.screens
         let geometries = screens.map(ScreenGeometry.init(_:))
-        let resolved = StatusSurfaceChoice.route(
-            among: geometries,
-            focusedWindow: focusedWindowFrame(),
-            mouseLocation: NSEvent.mouseLocation
-        )
+        // Resolved only when it can change the answer. `focusedWindowFrame()` is a synchronous
+        // Accessibility message into the front application, bounded at 150 ms, on the main actor --
+        // affordable a few times per dictation, and a few hundred cross-process round-trips over a
+        // download that reports once a second. `resolvesAfresh(for:held:)` is a reading of
+        // `route(for:held:resolved:)` rather than a second rule about displays, and the package
+        // tests pin that the two agree for every phase.
+        let resolved = StatusSurfaceChoice.resolvesAfresh(for: phase, held: held)
+            ? StatusSurfaceChoice.route(
+                among: geometries,
+                focusedWindow: focusedWindowFrame(),
+                mouseLocation: NSEvent.mouseLocation)
+            : nil
         let route = StatusSurfaceChoice.route(for: phase, held: held, resolved: resolved)
         held = route
 

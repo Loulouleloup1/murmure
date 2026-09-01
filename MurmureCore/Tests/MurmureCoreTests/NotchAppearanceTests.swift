@@ -19,7 +19,10 @@ final class NotchAppearanceTests: XCTestCase {
     func testEveryPhaseButHiddenHasAShape() {
         XCTAssertFalse(NotchAppearance.showsShape(in: .hidden))
         let visible: [NotchPhase] = [
-            .recording, .transcribing, .refining, .inserting,
+            .recording,
+            .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
+            .preparingModel(.loading),
+            .transcribing, .refining, .inserting,
             .completed(insertedCharacters: 12), .nothingHeard,
             .failed(message: "boom", recoveredText: nil), .alert(message: "accessibility"),
         ]

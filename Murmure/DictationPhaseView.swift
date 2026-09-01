@@ -278,7 +278,11 @@ struct DictationPhaseView: View {
     /// before it and the fill beneath it both read -- is the only one in the row.
     private func travellingMark(at date: Date) -> some View {
         let distance = NotchAppearance.markDistanceAlong(elapsed: date.timeIntervalSince(markBegan))
-        let fill = NotchAppearance.progressFill(for: .travelling, progress: progress.current())
+        // Asked of the PHASE, not of the mark: three phases now share this drawing and they fill
+        // its row from two different measurements -- the download counts bytes it has written, the
+        // transcription counts audio it has decoded, and the load has nothing to count.
+        // `NotchAppearance` owns which is which, so neither surface has to.
+        let fill = NotchAppearance.progressFill(for: phase, decoding: progress.current())
         let runway = NotchAppearance.sweepRunway(fill: fill)
         let runwayWidth = size.width * runway.width
         return ZStack(alignment: .leading) {

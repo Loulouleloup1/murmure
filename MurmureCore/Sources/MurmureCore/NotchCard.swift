@@ -171,7 +171,11 @@ public enum NotchCard {
     /// quietly inheriting white.
     public static func tint(for phase: NotchPhase) -> Tint {
         switch phase {
-        case .hidden, .recording, .transcribing, .inserting: .neutral
+        // The preparation is white for the reason every working phase is: the card is saying what
+        // it is doing, not how it went. It is emphatically NOT a warning -- nothing is wrong with a
+        // first run that downloads a model, and orange would turn the ordinary cost of installing
+        // Murmure into an incident.
+        case .hidden, .recording, .preparingModel, .transcribing, .inserting: .neutral
         case .refining: .accent
         case .completed: .success
         case .nothingHeard: .muted
@@ -198,11 +202,27 @@ public enum NotchCard {
         switch phase {
         case .hidden: ""
         case .recording: "mic.fill"
+        // The two preparation steps take DIFFERENT glyphs, where `transcribing` and `inserting`
+        // share one -- and the asymmetry is the argument, not an inconsistency. Those two share a
+        // glyph because sharing makes a two-frame transition invisible. These two are minutes
+        // apart: an arrow means bytes are arriving over a network, a processor means they are
+        // being compiled for this machine, and telling them apart is what tells "my Wi-Fi died"
+        // from "wait, it is nearly there".
+        case .preparingModel(let step): symbolName(for: step)
         case .transcribing, .inserting: "waveform"
         case .refining: "sparkles"
         case .completed: "checkmark.circle.fill"
         case .nothingHeard: "mic.slash.fill"
         case .failed, .alert: "exclamationmark.triangle.fill"
+        }
+    }
+
+    /// The glyph for one step of the model's preparation. Split out so the case above stays one
+    /// line, and written without a `default` for the same reason every switch here is.
+    private static func symbolName(for step: ModelPreparation) -> String {
+        switch step {
+        case .downloading: "arrow.down.circle"
+        case .loading: "cpu"
         }
     }
 

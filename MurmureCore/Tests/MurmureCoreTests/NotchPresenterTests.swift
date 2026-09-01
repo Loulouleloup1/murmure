@@ -114,7 +114,10 @@ final class NotchPresenterTests: XCTestCase {
     /// vanish; a recording already has the waveform saying the app is listening.
     func testOnlyARefinementEverShowsACounter() {
         let long = t0.addingTimeInterval(30)
-        for phase: NotchPhase in [.recording, .transcribing, .inserting, .hidden] {
+        for phase: NotchPhase in [
+            .recording, .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
+            .preparingModel(.loading), .transcribing, .inserting, .hidden,
+        ] {
             XCTAssertFalse(
                 NotchPresenter.showsElapsedCounter(in: phase, since: t0, now: long),
                 "\(phase) must not show a counter")
@@ -160,7 +163,10 @@ final class NotchPresenterTests: XCTestCase {
     /// timer over it would pull the notch out from under a refinement that was merely slow -- 57.5 s
     /// at the worst measured, against dwells of a second or two.
     func testARunningDictationIsNeverRetractedOnATimer() {
-        for phase: NotchPhase in [.hidden, .recording, .transcribing, .refining, .inserting] {
+        for phase: NotchPhase in [
+            .hidden, .recording, .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
+            .preparingModel(.loading), .transcribing, .refining, .inserting,
+        ] {
             XCTAssertNil(NotchPresenter.dwell(for: phase), "\(phase) would be cut off mid-dictation")
         }
     }
