@@ -210,14 +210,31 @@ final class WindowRestorationTests: XCTestCase {
     ///
     /// Measured: a mutant deleting `width > 0 && height > 0` survived the whole suite until this
     /// existed.
-    func testADegenerateFrameIsNotStoredInTheFirstPlace() {
-        restoration.storedFrame = CGRect(x: 100, y: 100, width: 0, height: 660)
-        XCTAssertNil(restoration.storedFrame)
-        XCTAssertNil(defaults.object(forKey: "windowFrame"))
+    /// **Seeded on purpose, and the seed is an assertion.** Each test gets a fresh suite, so a
+    /// domain that is empty at the end proves nothing on its own: it is equally the answer if the
+    /// setter refused the frame, and if the setter does nothing at all. Measured — the first
+    /// version of this test passed against a setter mutated to an empty body.
+    ///
+    /// Writing a good frame first makes the emptiness mean something: it can only be empty if the
+    /// second write actively *removed* what the first one put there, which is what a refusal does
+    /// here. `defaults.object(forKey:)` is the assertion that carries the test, because it reads
+    /// the raw entry and so cannot be satisfied by anything the getter does.
+    func testADegenerateFrameIsRefusedOnTheWayIn() {
+        for degenerate in [
+            CGRect(x: 100, y: 100, width: 0, height: 660),
+            CGRect(x: 100, y: 100, width: 980, height: 0),
+        ] {
+            let good = CGRect(x: 40, y: 60, width: 900, height: 620)
+            restoration.storedFrame = good
+            XCTAssertEqual(restoration.storedFrame, good, "the seed has to land, or this is vacuous")
 
-        restoration.storedFrame = CGRect(x: 100, y: 100, width: 980, height: 0)
-        XCTAssertNil(restoration.storedFrame)
-        XCTAssertNil(defaults.object(forKey: "windowFrame"))
+            restoration.storedFrame = degenerate
+
+            XCTAssertNil(
+                defaults.object(forKey: "windowFrame"),
+                "\(degenerate.size) reached the store as a raw entry")
+            XCTAssertNil(restoration.storedFrame)
+        }
     }
 
     /// The two halves composed, which is the call the window actually makes.
