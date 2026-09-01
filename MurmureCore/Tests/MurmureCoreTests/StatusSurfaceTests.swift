@@ -161,6 +161,34 @@ final class StatusSurfaceTests: XCTestCase {
         XCTAssertLessThanOrEqual(frame.maxY, withMenuBar.visibleFrame.maxY, "opened into the menu bar")
     }
 
+    /// The horizontal half of the same rule, and the one every other fixture here is blind to.
+    ///
+    /// A Dock on the left or right edge is the only thing that moves `visibleFrame.midX` away from
+    /// `frame.midX`. Without a side-docked screen the two are the same number, so "centred on the
+    /// usable area" and "centred on the display" are the same assertion and an implementation that
+    /// used `frame` would satisfy both.
+    ///
+    /// Found by mutation and not by reading: swapping `visibleFrame.midX` for `frame.midX` killed
+    /// no test. It is a hole rather than a bug Louis can see -- neither of his displays reserves
+    /// anything horizontally -- which is exactly the kind that waits for a new arrangement.
+    func testASideDockCentresThePanelOnTheUsableAreaAndNotOnTheDisplay() {
+        let dockWidth: CGFloat = 90
+        let sideDocked = ScreenGeometry(
+            frame: external.frame,
+            visibleFrame: CGRect(
+                x: external.frame.minX + dockWidth,
+                y: external.frame.minY,
+                width: external.frame.width - dockWidth,
+                height: external.frame.height
+            ),
+            hasNotch: false
+        )
+        let frame = StatusSurfaceChoice.frame(size: CGSize(width: 220, height: 34), on: sideDocked)
+        XCTAssertEqual(frame.midX, sideDocked.visibleFrame.midX)
+        XCTAssertNotEqual(
+            frame.midX, sideDocked.frame.midX, "centred on the display instead of the room left")
+    }
+
     /// A display whose usable width and the panel's width have different parities puts the centred
     /// origin on a half point, and a half-point origin smears the capsule's 1 pt border across two
     /// physical pixels on a non-Retina display.

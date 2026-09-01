@@ -56,10 +56,17 @@ struct DictationPhaseView: View {
     /// two ticks fall inside one frame and none inside the next -- which is a second uneven rhythm
     /// laid over the one this change exists to remove.
     ///
-    /// It is a *minimum interval* and not a promised rate, and the difference is visible on this
-    /// machine: measured 60.0 ticks a second, because the display link driving it runs at 120 Hz
-    /// and the schedule takes every second frame. A link that is not a multiple of 60 lands on the
-    /// next slower multiple instead -- 56.7 Hz on the 170 Hz panel Louis has on his desk.
+    /// It is a *minimum interval* and not a promised rate, so what it actually ticks at is worth
+    /// measuring rather than assuming. **Measured on this machine, in both placements: 60.0 ticks
+    /// a second**, the schedule taking every second frame of a 120 Hz link. That link is the
+    /// built-in display's, and it stayed the built-in display's with the window bound to the
+    /// external one -- `panel.screen` reporting the 170 Hz panel while uncapped `.animation` still
+    /// ticked at 120.0 and not 170.
+    ///
+    /// **Inferred from the documented semantics and never observed here:** a link that is not a
+    /// multiple of 60 would land on the next slower multiple, 56.7 Hz on a 170 Hz one. Nothing in
+    /// the harness ever drove the schedule from that link, so it is written down as arithmetic
+    /// over what `TimelineView` promises, not as a rate this Mac has been seen to produce.
     ///
     /// Measured cost, one surface's two halves rendered off-screen for 20 s with the levels fed on
     /// the real tap cadence, six interleaved runs each: **7.6-7.9 % of one core at 20 Hz against
