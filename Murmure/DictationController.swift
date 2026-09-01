@@ -18,6 +18,11 @@ final class DictationController {
     /// The notch surface. Owned here because the only thing allowed to drive it is the session's
     /// own state changes -- never the hotkey, which fires on presses the session then ignores.
     private let notch: NotchController
+    /// The surface for a display that has no notch to grow, which is every external one. Driven
+    /// from the same state changes as the notch; on any one display only one of the two can draw,
+    /// because each asks `StatusSurfaceChoice.surface(on:)` about the display it resolved. They
+    /// resolve that display by different signals, though -- see `StatusPanelController`.
+    private let statusPanel: StatusPanelController
     /// Nil when Application Support could not be reached at all; see `init`. Kept so the menu can
     /// re-read the folder without a restart.
     private let modesDirectory: URL?
@@ -37,6 +42,11 @@ final class DictationController {
         // observer, nothing on screen.
         let notch = NotchController(levels: levels)
         self.notch = notch
+
+        // A local for the same reason `notch` is one: the state-change closure below captures
+        // these directly, so it never has to reach back through `self`.
+        let statusPanel = StatusPanelController(levels: levels)
+        self.statusPanel = statusPanel
 
         // Task 6 made `onClipboardOutcome` a REQUIRED init parameter with no default, precisely so
         // this line cannot forget to decide. `PasteInserter()` no longer compiles.
@@ -144,6 +154,11 @@ final class DictationController {
                 // the machine used to collapse into one -- a dictation that inserted text and one
                 // that inserted nothing.
                 notch.apply(state)
+                // And the panel, which is what Louis sees when the display he is working on has
+                // no cutout for the line above to grow. It is not an alternative wired by a
+                // setting: both are driven, and each draws only on the kind of display it is for,
+                // so plugging a monitor in mid-session needs nothing switched.
+                statusPanel.apply(state)
             }
         }
 
