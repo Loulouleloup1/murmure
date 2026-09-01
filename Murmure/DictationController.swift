@@ -121,7 +121,7 @@ final class DictationController {
         // Louis can still dictate, and only the modes he edited are missing.
         let modesDirectory: URL?
         do {
-            modesDirectory = try Storage.appSupportDirectory(subfolder: "modes")
+            modesDirectory = try Storage.directory(subfolder: "modes")
         } catch {
             modesDirectory = nil
             log.error("modes folder unavailable: \(error.localizedDescription, privacy: .public)")

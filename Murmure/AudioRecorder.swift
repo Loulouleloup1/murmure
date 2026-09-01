@@ -74,7 +74,7 @@ final class AudioRecorder {
         // unplugged input device yields.
         guard format.channelCount > 0, format.sampleRate > 0 else { throw Failure.noInputDevice }
 
-        let directory = try Storage.appSupportDirectory(subfolder: "recordings")
+        let directory = try Storage.directory(subfolder: "recordings")
         let sink = TapSink(writer: try WavWriter(directory: directory, format: format))
         // Sized for this device's sample rate, and emptied, before a single buffer can arrive.
         levels.begin(sampleRate: format.sampleRate)

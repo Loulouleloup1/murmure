@@ -256,7 +256,7 @@ actor WhisperKitEngine {
     /// that the download has a progress callback for a later lot to route to the UI. WhisperKit
     /// would do both inside its initialiser and collapse them into one `modelsUnavailable`.
     private static func load() async throws -> LoadedModel {
-        let modelStore = try Storage.appSupportDirectory(subfolder: "models")
+        let modelStore = try Storage.directory(subfolder: "models")
 
         // Warm start: the model is already on disk, so skip WhisperKit.download entirely.
         // `WhisperKit.download` asks the Hub for the file list BEFORE it looks at local files

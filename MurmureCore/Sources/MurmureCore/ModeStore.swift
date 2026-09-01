@@ -28,7 +28,7 @@ public struct ModeStore {
 
     /// `directory` is injected rather than resolved here so tests never reach the real
     /// `Application Support/Murmure/modes`; the app passes
-    /// `Storage.appSupportDirectory(subfolder: "modes")`.
+    /// `Storage.directory(subfolder: "modes")`.
     ///
     /// `report` is not optional on purpose. `loadAll()` cannot throw -- one broken file may not
     /// stop the other modes from loading -- so the only way a skipped mode reaches anyone is this
