@@ -90,6 +90,38 @@ public enum NotchAppearance {
         newMark == previousMark ? previousStart : now
     }
 
+    /// Whether the phase's drawing is two mirrored pieces, or one.
+    ///
+    /// **The waveform is one; everything else is two.** Every phase used to be a mirrored pair,
+    /// inherited from the wings: two drawings on either side of the hardware cutout, each running
+    /// outward from it. Once a surface draws them side by side with no cutout between them, that
+    /// structure stops being a design and becomes a seam -- and for the waveform it is worse than
+    /// a seam. Louis, having watched it on both surfaces:
+    ///
+    ///     "Ça part du centre et c'est symétrique, ce qui rajoute cet effet d'onde comme dans
+    ///      l'eau. J'aimerais vraiment avoir une barre unique, parce que là je vois que c'est deux
+    ///      choses différentes qui sont symétriques."
+    ///
+    /// The rule the two cases divide on: **`waveform` is the only mark that is data over time.**
+    /// Each half drew the whole history, mirrored, so the newest level landed against the join on
+    /// both sides -- one instant drawn twice, side by side -- and a peak appeared in the middle and
+    /// travelled outward in both directions at once, which is what a ripple in water is. Mirroring
+    /// DATA duplicates it. Mirroring an ORNAMENT -- the travelling mark of a transcription leaving
+    /// the centre in both directions, the dim mark of a silence, the fill of a completion -- is
+    /// symmetry, and those keep their pair.
+    ///
+    /// It is here, on the mark rather than on either surface, because it is not a property of a
+    /// notch or a panel: it is a property of what is being drawn, and both surfaces have to reach
+    /// the same answer or the same dictation reads as two different things on two displays.
+    public static func isMirrored(_ mark: Mark) -> Bool {
+        mark != .waveform
+    }
+
+    /// The same question asked of a phase.
+    public static func isMirrored(for phase: NotchPhase) -> Bool {
+        isMirrored(mark(for: phase))
+    }
+
     // MARK: - transcribing: a mark travelling out of the notch
 
     /// How long one sweep takes.

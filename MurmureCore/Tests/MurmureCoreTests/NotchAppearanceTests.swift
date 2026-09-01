@@ -59,6 +59,32 @@ final class NotchAppearanceTests: XCTestCase {
             NotchAppearance.mark(for: .completed(insertedCharacters: 1)))
     }
 
+    // MARK: - Whether the drawing is mirrored
+
+    /// **The waveform is the only mark that is data over time, and the only one drawn once.**
+    /// Mirroring it drew the newest level twice, against the join, on both sides -- and made every
+    /// peak appear in the middle and travel outward in both directions, which is the ripple Louis
+    /// asked three times to be rid of. A mark that is not data -- a dot, a pulse, a tick -- has no
+    /// direction to read, so its symmetry is a shape rather than a claim about time.
+    func testOnlyTheWaveformIsDrawnAsASingleUnmirroredRun() {
+        XCTAssertFalse(NotchAppearance.isMirrored(.waveform))
+        for mark in [NotchAppearance.Mark.none, .travelling, .pulsing, .success, .quiet, .warning] {
+            XCTAssertTrue(NotchAppearance.isMirrored(mark), "\(mark) must stay mirrored")
+        }
+    }
+
+    /// Asked of a phase it goes through the mark, so two phases that share a family share the
+    /// answer and the two surfaces cannot disagree about a phase either.
+    func testAPhaseInheritsTheAnswerFromItsMark() {
+        XCTAssertFalse(NotchAppearance.isMirrored(for: .recording))
+        XCTAssertTrue(NotchAppearance.isMirrored(for: .transcribing))
+        XCTAssertEqual(
+            NotchAppearance.isMirrored(for: .inserting),
+            NotchAppearance.isMirrored(for: .transcribing))
+        XCTAssertTrue(NotchAppearance.isMirrored(for: .completed(insertedCharacters: 4)))
+        XCTAssertTrue(NotchAppearance.isMirrored(for: .nothingHeard))
+    }
+
     // MARK: - The clock a mark's animation counts from
 
     /// The point of the family split: the `transcribing` → `inserting` hand-off must not restart

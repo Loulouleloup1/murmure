@@ -352,22 +352,35 @@ final class StatusPanelModel: ObservableObject {
 private struct StatusPanelView: View {
     @ObservedObject var model: StatusPanelModel
 
-    /// One half of the drawing. The notch's wing exactly (`NotchWing`, 32 x 16): the halves are
-    /// the same view at the same size on both surfaces, so a dictation looks the same whichever
-    /// display Louis started it on.
-    static let half = CGSize(width: StatusPanelLayout.drawingWidth / 2, height: 16)
+    /// How tall the drawing is. Its WIDTH is `StatusPanelLayout.drawingWidth`, shared out between
+    /// however many pieces the phase draws.
+    static let drawingHeight: CGFloat = 16
 
     var body: some View {
-        HStack(spacing: StatusPanelLayout.spacing) {
-            // Zero spacing between the halves: on the notch they are separated by the hardware
-            // cutout, and here there is none to separate them -- they are one shape.
+        // **The recording is one waveform across the whole 64 pt; every other phase is two
+        // mirrored halves of 32.** Which it is belongs to `NotchAppearance.isMirrored(for:)`, on
+        // the mark, so this panel and the notch card cannot disagree about it.
+        //
+        // The panel drew two halves for everything until Louis saw what it cost here as well:
+        // "je vois que ça a même changé pour la modale de l'écran externe où maintenant les deux
+        // barres du milieu sont aussi collées". They were: each half puts the NEWEST level against
+        // the join, so the same instant was drawn twice, side by side -- and once the row filled
+        // its frame exactly there was no longer even a stray point of margin between the two
+        // copies. One waveform of twelve bars occupies the same 64 pt and carries twelve DISTINCT
+        // levels instead of six drawn twice, so nothing about the panel's size or its bars moves.
+        let pieces = NotchAppearance.isMirrored(for: model.phase) ? 2 : 1
+        let piece = CGSize(
+            width: StatusPanelLayout.drawingWidth / CGFloat(pieces), height: Self.drawingHeight)
+        return HStack(spacing: StatusPanelLayout.spacing) {
             HStack(spacing: 0) {
-                DictationPhaseView(
-                    phase: model.phase, markBegan: model.markBegan, levels: model.levels,
-                    mirrored: false, size: Self.half)
-                DictationPhaseView(
-                    phase: model.phase, markBegan: model.markBegan, levels: model.levels,
-                    mirrored: true, size: Self.half)
+                ForEach(Array(0..<pieces), id: \.self) { index in
+                    DictationPhaseView(
+                        phase: model.phase, markBegan: model.markBegan, levels: model.levels,
+                        // The second piece is the mirrored one, and it also carries the elapsed
+                        // counter on a refinement. A lone piece is never mirrored: one waveform
+                        // reads oldest to newest, left to right.
+                        mirrored: index == 1, size: piece)
+                }
             }
             Text(StatusPanelText.label(for: model.phase))
                 .font(.system(size: StatusPanelLayout.labelFontSize, weight: .medium, design: .rounded))

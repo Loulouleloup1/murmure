@@ -4,10 +4,10 @@ import XCTest
 /// The two frames the waveform is actually drawn in, so the assertions below are about the
 /// interface Louis looks at rather than about round numbers chosen to make arithmetic tidy.
 ///
-/// The panel's half is `StatusPanelLayout.drawingWidth / 2`; the card's is the whole row, because
-/// the card draws a recording as ONE waveform. Both are read from the production constants, so a
-/// change to either surface's size runs through these tests.
-private let panelHalf = Double(StatusPanelLayout.drawingWidth) / 2
+/// Both are whole rows: since a recording is no longer mirrored, each surface draws its waveform
+/// across its entire drawing area. Both are read from the production constants, so a change to
+/// either surface's size runs through these tests.
+private let panelRow = Double(StatusPanelLayout.drawingWidth)
 private let cardContentWidth = NotchCard.contentWidth(forCardWidth: NotchCard.width, notchWidth: 185)
 private let cardRow = NotchCard.drawingPieceWidth(for: .recording, contentWidth: cardContentWidth)
 
@@ -20,13 +20,20 @@ final class WaveformLayoutTests: XCTestCase {
     func testAWiderFrameDrawsMoreBars() {
         XCTAssertGreaterThan(
             WaveformLayout.barCount(inWidth: cardRow),
-            WaveformLayout.barCount(inWidth: panelHalf))
+            WaveformLayout.barCount(inWidth: panelRow))
     }
 
-    /// The floating panel is a surface Louis has already approved, and it must come through this
-    /// change untouched: 32 pt has always drawn six bars and still does.
-    func testThePanelStillDrawsItsSixBars() {
-        XCTAssertEqual(WaveformLayout.barCount(inWidth: panelHalf), 6)
+    /// The floating panel is a surface Louis has already approved, and its INK must come through
+    /// unchanged: it drew twelve 3 pt bars across 64 pt when they were two mirrored sixes, and it
+    /// draws twelve 3 pt bars across 64 pt now that they are one row. What changed there is that
+    /// the twelve are twelve distinct levels rather than six drawn twice.
+    func testThePanelDrawsTheSameTwelveThreePointBarsItAlwaysHas() {
+        let count = WaveformLayout.barCount(inWidth: panelRow)
+        XCTAssertEqual(count, 12)
+        XCTAssertEqual(
+            WaveformLayout.barWidth(inWidth: panelRow, barCount: count),
+            WaveformLayout.minimumBarWidth,
+            "the panel's bars must not have been widened under it")
     }
 
     /// The count is capped, and the cap is what makes a wide surface airier instead of merely
@@ -35,7 +42,7 @@ final class WaveformLayoutTests: XCTestCase {
     func testTheCountIsCappedSoAWideSurfaceGetsAirAndNotMoreBars() {
         let fittingUncapped = Int(
             (cardRow + WaveformLayout.minimumBarSpacing)
-                / (WaveformLayout.barWidth + WaveformLayout.minimumBarSpacing))
+                / (WaveformLayout.minimumBarWidth + WaveformLayout.minimumBarSpacing))
         XCTAssertGreaterThan(fittingUncapped, WaveformLayout.maximumBars)
         XCTAssertEqual(WaveformLayout.barCount(inWidth: cardRow), WaveformLayout.maximumBars)
     }
@@ -51,7 +58,7 @@ final class WaveformLayoutTests: XCTestCase {
     func testTheBarsItCountsActuallyFitAtTheMinimumPitch() {
         for width in stride(from: 6.0, through: 200.0, by: 0.5) {
             let count = WaveformLayout.barCount(inWidth: width)
-            let occupied = Double(count) * WaveformLayout.barWidth
+            let occupied = Double(count) * WaveformLayout.minimumBarWidth
                 + Double(count - 1) * WaveformLayout.minimumBarSpacing
             XCTAssertLessThanOrEqual(
                 occupied, width + 0.0001, "\(count) bars do not fit in \(width) pt")
@@ -63,10 +70,11 @@ final class WaveformLayoutTests: XCTestCase {
     /// **The line that removes the clump.** The leftover width goes into the gaps, so the row is
     /// as wide as the frame it was given instead of being a fixed-width block centred in it.
     func testTheRowFillsWhateverFrameItIsGiven() {
-        for width in [panelHalf, cardRow, 48.0, 96.0, 120.0] {
+        for width in [panelRow, cardRow, 48.0, 96.0, 120.0] {
             let count = WaveformLayout.barCount(inWidth: width)
             let spacing = WaveformLayout.barSpacing(inWidth: width, barCount: count)
-            let drawn = Double(count) * WaveformLayout.barWidth + Double(count - 1) * spacing
+            let drawn = Double(count) * WaveformLayout.barWidth(inWidth: width, barCount: count)
+                + Double(count - 1) * spacing
             XCTAssertEqual(drawn, width, accuracy: 0.0001, "a \(width) pt frame drew \(drawn) pt")
         }
     }
@@ -77,7 +85,7 @@ final class WaveformLayoutTests: XCTestCase {
         let card = WaveformLayout.barSpacing(
             inWidth: cardRow, barCount: WaveformLayout.barCount(inWidth: cardRow))
         let panel = WaveformLayout.barSpacing(
-            inWidth: panelHalf, barCount: WaveformLayout.barCount(inWidth: panelHalf))
+            inWidth: panelRow, barCount: WaveformLayout.barCount(inWidth: panelRow))
         XCTAssertGreaterThan(card, panel)
     }
 
@@ -107,6 +115,14 @@ final class WaveformLayoutTests: XCTestCase {
         XCTAssertEqual(WaveformLayout.barSpacing(inWidth: 100, barCount: 0), 0)
     }
 
+    /// **Both surfaces draw a recording as one waveform, and neither may drift.** The panel is a
+    /// wider window than a single wing was and a narrower one than the card; what must hold is
+    /// that they are the same signal at the same cadence, so the panel's window sits between.
+    func testEachSurfaceIsAWiderWindowThanTheOneBelowIt() {
+        XCTAssertGreaterThan(
+            WaveformLayout.barCount(inWidth: cardRow), WaveformLayout.barCount(inWidth: panelRow))
+    }
+
     // MARK: - How much time is on screen
 
     /// The cap is a duration, not a number of bars: it is how far back the waveform reaches, and
@@ -120,8 +136,8 @@ final class WaveformLayoutTests: XCTestCase {
             WaveformLayout.window)
     }
 
-    /// The window has to be long enough to hold the shape of a spoken clause. Below about half a
-    /// second the waveform is a level meter with steps, which is what the six-bar wing was.
+    /// And long enough to hold the shape of a spoken clause. Below about half a second the
+    /// waveform is a level meter with steps, which is what the six-bar wing was.
     func testTheWindowIsLongEnoughToShowAClauseRatherThanALevel() {
         XCTAssertGreaterThanOrEqual(WaveformLayout.window, 0.5)
     }
@@ -134,12 +150,41 @@ final class WaveformLayoutTests: XCTestCase {
     /// read as a row of separate sticks rather than as a waveform. Both bounds are taste, stated
     /// as taste; what is not taste is that four constants and the card's width have to agree for
     /// the result to land between them.
-    func testTheCardsWaveformIsNeitherACombNorAPicketFence() {
+    func testTheCardsBarsKeepTheirShareOfTheRowRatherThanThinningOut() {
         let count = WaveformLayout.barCount(inWidth: cardRow)
-        let pitch = WaveformLayout.barWidth
-            + WaveformLayout.barSpacing(inWidth: cardRow, barCount: count)
-        XCTAssertGreaterThanOrEqual(pitch, 6, "the card's bars have closed into a comb")
-        XCTAssertLessThanOrEqual(pitch, 10, "the card's bars have spread into sticks")
+        let bar = WaveformLayout.barWidth(inWidth: cardRow, barCount: count)
+        let gap = WaveformLayout.barSpacing(inWidth: cardRow, barCount: count)
+        XCTAssertGreaterThan(
+            bar, WaveformLayout.minimumBarWidth * 1.5,
+            "a card five times the panel's width drawing the panel's hairline is absurd")
+        XCTAssertGreaterThan(
+            gap, bar, "the row has to stay aéré: closing the gap below the bar makes a block")
+    }
+
+    /// **The floor that keeps the panel intact.** A bar is never thinner than it has always been;
+    /// `inkFraction` may only widen it.
+    func testABarIsNeverThinnerThanItHasAlwaysBeen() {
+        for width in stride(from: 1.0, through: 400.0, by: 0.5) {
+            let count = WaveformLayout.barCount(inWidth: width)
+            XCTAssertGreaterThanOrEqual(
+                WaveformLayout.barWidth(inWidth: width, barCount: count),
+                WaveformLayout.minimumBarWidth, "at \(width) pt")
+        }
+    }
+
+    /// **The floor under the window.** Below about twenty bars a scrolling row stops being a
+    /// waveform and becomes a handful of blocks: the shape of a word is no longer in it. This is
+    /// what stops the window being shortened indefinitely to chase dynamism.
+    func testTheCardKeepsEnoughBarsToStillReadAsAWaveform() {
+        XCTAssertGreaterThanOrEqual(WaveformLayout.barCount(inWidth: cardRow), 20)
+    }
+
+    /// **The dynamism Louis lost.** The whole picture turns over `1 / window` times a second, and
+    /// two seconds -- the value he rejected as "des grandes ondes qui se propagent très longuement"
+    /// -- turned it over once every two. Measured against the frame cost, which is 0.63 ms for the
+    /// widest row Murmure draws and therefore not what he was seeing.
+    func testThePictureTurnsOverAtLeastOncePerSecond() {
+        XCTAssertLessThanOrEqual(WaveformLayout.window, 1)
     }
 
     /// The card genuinely shows further back than the panel, and both draw the same bars at the
@@ -147,7 +192,7 @@ final class WaveformLayoutTests: XCTestCase {
     func testTheCardIsAWiderWindowOntoTheSameSignal() {
         XCTAssertGreaterThan(
             Double(WaveformLayout.barCount(inWidth: cardRow)) * WaveformLayout.blockDuration,
-            Double(WaveformLayout.barCount(inWidth: panelHalf)) * WaveformLayout.blockDuration)
+            Double(WaveformLayout.barCount(inWidth: panelRow)) * WaveformLayout.blockDuration)
     }
 
     // MARK: - The history behind it
@@ -159,7 +204,7 @@ final class WaveformLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(
             LevelHistory.defaultCapacity, WaveformLayout.barCount(inWidth: cardRow))
         XCTAssertGreaterThanOrEqual(
-            LevelHistory.defaultCapacity, WaveformLayout.barCount(inWidth: panelHalf))
+            LevelHistory.defaultCapacity, WaveformLayout.barCount(inWidth: panelRow))
     }
 
     /// And it holds no more than that: a ring longer than the widest surface can draw is history

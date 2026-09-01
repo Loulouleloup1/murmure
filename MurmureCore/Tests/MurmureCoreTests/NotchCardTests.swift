@@ -49,7 +49,6 @@ final class NotchCardTests: XCTestCase {
     /// only produced a collision -- both halves put the newest level against the join, so one
     /// instant was drawn twice side by side.
     func testTheRecordingIsASingleDrawingAcrossTheWholeCard() {
-        XCTAssertFalse(NotchCard.isMirroredPair(for: .recording))
         XCTAssertEqual(NotchCard.drawingPieces(for: .recording), 1)
         XCTAssertEqual(
             NotchCard.drawingPieceWidth(for: .recording, contentWidth: contentWidth),
@@ -62,7 +61,6 @@ final class NotchCardTests: XCTestCase {
     /// other phase keeps its pair.
     func testEveryOtherPhaseKeepsItsMirroredPair() {
         for phase in everyPhase where !isRecording(phase) {
-            XCTAssertTrue(NotchCard.isMirroredPair(for: phase), "\(phase) must stay a pair")
             XCTAssertEqual(NotchCard.drawingPieces(for: phase), 2, "\(phase) must be two pieces")
         }
     }

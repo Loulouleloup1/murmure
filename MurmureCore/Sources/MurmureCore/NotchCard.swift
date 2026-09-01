@@ -95,36 +95,14 @@ public enum NotchCard {
     /// the middle of a card that is otherwise empty, which is what the phase means.
     public static let silentHalfFraction: Double = 0.10
 
-    /// Whether the phase's drawing is two mirrored pieces, or one.
-    ///
-    /// **The recording is one, and it is the only one.** Every phase used to be a mirrored pair,
-    /// inherited wholesale from the wings that preceded the card: two drawings on either side of
-    /// the hardware cutout, each running outward from it. On the card's drawing row there is no
-    /// cutout to run outward from, so for the waveform that structure is not a design, it is a
-    /// leftover -- and gluing the two halves together is what produced the artefact Louis saw:
-    /// *"tu as voulu garder les deux parties qui étaient à droite et à gauche du notch, et là tu
-    /// as voulu les coller ensemble... les deux barres du milieu se chevauchent. Ce qui serait
-    /// intéressant, c'est d'enlever ces deux choses distinctes pour en avoir une seule unique."*
-    ///
-    /// He is right, and the reason generalises into the rule this function encodes. **The waveform
-    /// is the only phase whose drawing is data over time.** The two halves each drew the whole
-    /// history, mirrored, so the newest level landed against the join on both sides: one instant
-    /// drawn twice, side by side, with no gap between the copies -- a double-width bar down the
-    /// middle. Mirroring *data* is duplication. Mirroring an *ornament* -- the travelling mark of a
-    /// transcription leaving the centre in both directions, the dim mark of a silence, the bar of a
-    /// completion -- is symmetry, and those keep their pair.
-    ///
-    /// This reverses what `3f36117` said when it built the card: that two mirrored halves were
-    /// right because they were "exactly as the wings were". That was the correct instinct for
-    /// continuity and the wrong answer for this surface, and it is written down here so a future
-    /// reader does not re-derive the two-half waveform from the same reasoning.
-    public static func isMirroredPair(for phase: NotchPhase) -> Bool {
-        if case .recording = phase { false } else { true }
-    }
-
     /// How many pieces the drawing is laid out from.
+    ///
+    /// Whether a phase is mirrored is `NotchAppearance.isMirrored(for:)`, on the mark rather than
+    /// on this card, because the floating panel has to reach the same answer: a dictation that
+    /// drew one waveform on the built-in display and two mirrored halves on an external one would
+    /// be two different interfaces. What is card-specific is only how wide the pieces then are.
     public static func drawingPieces(for phase: NotchPhase) -> Int {
-        isMirroredPair(for: phase) ? 2 : 1
+        NotchAppearance.isMirrored(for: phase) ? 2 : 1
     }
 
     /// The width of ONE piece of the drawing -- the whole row when the phase draws a single one,

@@ -19,8 +19,11 @@ import SwiftUI
 ///   other, which is the opposite of the point. This is already what lot 3 T3's bars do
 ///   (`barWidth` is absolute, the bar's height is not), and it is kept rather than invented.
 /// - **The waveform answers a wider container with more bars and wider gaps, never thicker ones.**
-///   That is the same rule read the other way: `WaveformLayout` fits the count and the spacing to
-///   `size.width` so the row fills it, and `barWidth` is the one number it never touches.
+///   That is the same rule read the other way, and it is the reading that survived contact with a
+///   five-to-one width ratio: `WaveformLayout` fits the count, the gaps AND the bar to `size.width`,
+///   holding the *proportion* of ink constant rather than the number of points. Holding the number
+///   is what made a 3 pt bar half the pitch on the panel and a fifth of it on the card -- a
+///   hairline in one surface and a slab in the other, which is the outcome the rule forbids.
 ///
 /// Every decision above the pixels -- which family of drawing a phase belongs to, where the mark
 /// is at this instant, how bright the breath is, when the counter appears -- is `NotchAppearance`
@@ -29,18 +32,18 @@ import SwiftUI
 struct DictationPhaseView: View {
     /// The thickness of every mark that is not the waveform.
     ///
-    /// The same as `barWidth` on purpose: the travelling mark that replaces the bars is then the
-    /// same weight of line they were, so the crossfade at the end of a recording changes the shape
-    /// of what is drawn without changing how much ink is on the surface.
-    static let markHeight: CGFloat = 3
+    /// `WaveformLayout.minimumBarWidth`, which is the weight a bar has on the narrowest surface --
+    /// so on the panel the travelling mark that replaces the bars is exactly the line they were,
+    /// and the crossfade at the end of a recording changes the shape of what is drawn without
+    /// changing how much ink is on the surface. On the card the bars are wider than this and the
+    /// mark is not: the marks are progress reports, and a progress report drawn as heavy as a
+    /// voice would compete with the sentence above it.
+    static let markHeight = CGFloat(WaveformLayout.minimumBarWidth)
 
     /// The completion's fill, and the only thing in the sequence drawn heavier than a mark -- it
     /// is the only phase that is a result rather than a progress report.
     static let fillHeight: CGFloat = 7
 
-    /// A bar's width. `WaveformLayout`'s, because how many bars a frame draws and how far apart
-    /// they sit are now decided in the package, from this number and the frame's own width.
-    static let barWidth = CGFloat(WaveformLayout.barWidth)
 
     /// How often the waveform samples the level box. It is a PULL -- nothing about the audio
     /// thread's rate reaches this timeline, and a frame missed here is a bar not drawn, never a
@@ -215,16 +218,17 @@ struct DictationPhaseView: View {
     /// showing the *start* of the history would be a waveform running a second behind the voice.
     private func bars(_ levels: [Float]) -> some View {
         let shown = Array(levels.suffix(WaveformLayout.barCount(inWidth: size.width)))
+        let width = CGFloat(WaveformLayout.barWidth(inWidth: size.width, barCount: shown.count))
         let spacing = WaveformLayout.barSpacing(inWidth: size.width, barCount: shown.count)
         return HStack(spacing: spacing) {
             ForEach(Array((mirrored ? shown.reversed() : shown).enumerated()), id: \.offset) { _, level in
                 Capsule()
                     .fill(.white.opacity(0.9))
                     .frame(
-                        width: Self.barWidth,
+                        width: width,
                         // Never below its own width: a bar shorter than it is wide is a dot, and a
                         // row of dots is what silence looks like -- present, flat, and still.
-                        height: max(Self.barWidth, CGFloat(level) * size.height)
+                        height: max(width, CGFloat(level) * size.height)
                     )
             }
         }

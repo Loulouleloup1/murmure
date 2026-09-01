@@ -12,36 +12,49 @@ import Foundation
 ///
 /// So the count is now a function of the frame, and the pair of numbers below is the contract:
 ///
-/// - **A surface draws as many bars as fit, up to `maximumBars`.** The panel's 32 pt half fits six
-///   and gets six -- unchanged, and unchanged *by construction* rather than by exception. The
-///   card's 340 pt row would fit sixty-two and is capped at forty-six.
-/// - **The leftover width goes into the gaps.** The row therefore fills its frame exactly instead
-///   of centring a fixed-width block in it, which is what removes the clump; and above the cap the
-///   gaps keep growing, which is what makes a wide surface *airier* rather than merely busier.
+/// - **A surface draws as many bars as fit, up to `maximumBars`.** The panel's 64 pt row fits
+///   twelve and gets twelve. The card's 340 pt row would fit sixty-two and is capped at
+///   twenty-three, because the cap is a duration and the duration is the dynamism.
+/// - **The leftover width goes into the gaps, and the bars widen with them.** The row fills its
+///   frame exactly instead of centring a fixed-width block in it, which is what removes the clump;
+///   and the bar keeps `inkFraction` of its own slot, so a wide surface gets bigger bars rather
+///   than the same hairlines further apart.
 ///
-/// The cap is the interesting half. Without it a 340 pt row would take sixty-two bars at the
-/// minimum pitch and the card would be a dense hairline comb -- wider, but no more aéré than
-/// before. With it the card's gaps open to about 4.5 pt against the panel's 2.8, so the same
-/// waveform is drawn more loosely on the surface that has room for it.
+/// **The two surfaces differ, and the axis they differ on is time.** Both draw the same bars at the
+/// same 43 ms cadence -- nothing is stretched, compressed or resampled -- but the card is a wider
+/// window onto that signal: about a second of speech where the panel shows a quarter of one. That
+/// is the right way round. A 64 pt strip cannot show a second of anything, and forcing the card
+/// down to the panel's window would mean twelve bars at 28 pt apiece, which is a different design.
 ///
-/// **The two surfaces therefore differ, and the axis they differ on is time.** Both draw the same
-/// bars at the same 43 ms cadence -- nothing is stretched, compressed or resampled -- but the card
-/// is a wider window onto that signal, so it shows about two seconds of speech where the panel
-/// shows about a quarter of one. That is the right way round: a 32 pt strip cannot show two
-/// seconds of anything, and forcing the card down to the panel's window would mean six bars at
-/// 57 pt apiece, which is a different design and not this one.
 public enum WaveformLayout {
     // MARK: - The bar itself
 
-    /// A bar's width, in points, on every surface. **Absolute, and it stays absolute**, which is
-    /// `DictationPhaseView`'s stated contract: lengths and positions scale with the frame, line
-    /// weights do not, so the same design does not read as a hairline on one surface and a slab on
-    /// the other. It is the count and the gaps that answer a wider frame, never the stroke.
-    public static let barWidth: Double = 3
+    /// The thinnest a bar is ever drawn, in points, on any surface.
+    ///
+    /// It is the width every bar had when `barWidth` was a constant, so a surface narrow enough
+    /// for the floor to bind -- the floating panel, at 64 pt -- draws exactly the bars it always
+    /// did. Nothing gets thinner than it has been; only wider.
+    public static let minimumBarWidth: Double = 3
 
     /// The closest two bars may ever sit. The gap the panel has always drawn at, and the floor the
-    /// count is derived against; a wider frame opens the gaps past it and never below it.
+    /// count is derived against.
     public static let minimumBarSpacing: Double = 2.5
+
+    /// How much of the space one bar occupies should be the bar, on a surface wide enough to
+    /// choose.
+    ///
+    /// **This is what replaced an absolute bar width, and the reason is the contract's own.**
+    /// `DictationPhaseView` says line weights are absolute points "so the same design does not read
+    /// as a hairline in one surface and a slab in the other" -- and read literally, at a 5:1 ratio
+    /// between the panel's 64 pt and the card's 340 pt, it produced precisely that: a 3 pt bar is
+    /// half the pitch on the panel and a fifth of it on the card. Holding the *proportion* is what
+    /// the sentence was actually asking for; holding the *number* was how it got broken.
+    ///
+    /// 0.4 is **arbitrary in its digit** and is what the card already drew at 46 bars, which is
+    /// the density nobody objected to. The floor above means the panel never reaches it -- it sits
+    /// at about 0.54, where it has always been -- so this fraction only ever governs surfaces wide
+    /// enough that a 3 pt bar would be a hair.
+    public static let inkFraction: Double = 0.4
 
     // MARK: - How much time is on screen
 
@@ -65,22 +78,30 @@ public enum WaveformLayout {
 
     /// How far back the waveform shows, at most.
     ///
-    /// **Arbitrary in its digits, and fitted to one thing: the width of the card.** The cap has to
-    /// exist so a wide surface does not become a hairline comb, and it is expressed as a duration
-    /// because a bare bar count says nothing on its own -- but WHICH duration is decided by the
-    /// pitch it produces on the widest surface Murmure draws, and a test pins that pitch inside a
-    /// band rather than pinning this number.
+    /// **This is the dynamism knob, and getting it wrong is what Louis reported**: "ça fait
+    /// vraiment des grandes ondes qui se propagent très longuement -- ça n'a pas du tout le
+    /// dynamisme de ce qu'on avait juste avant". He read it as a frame-rate problem; it is not.
+    /// The tick rate is untouched at 60 Hz, and one frame of the widest waveform Murmure draws
+    /// measures 0.63 ms to lay out and rasterise -- 3.8 % of a 60 Hz budget, and 0.22 ms more than
+    /// the six-bar wing he called fluid. What changed is how long a level stays on screen, which is
+    /// exactly this number: **the whole picture turns over `1 / window` times a second**, and the
+    /// wing turned over 3.9 times a second where a 2 s window turns over 0.5.
     ///
-    /// Two seconds puts the card's 340 pt row at 46 bars and a 7.5 pt pitch: bars plainly separate,
-    /// neither a comb nor a picket fence. It was one second while the card drew the waveform as two
-    /// mirrored 165 pt halves, where 23 bars filled each of them at that same pitch; drawing the
-    /// row as ONE waveform doubled the width a single series has to cover, so the window doubled
-    /// with it. Nothing about the recording changed -- the bars still arrive every 43 ms -- only
-    /// how many of them are on screen at once.
+    /// One second. **Arbitrary in its digit**, bounded on both sides by things that are not:
     ///
-    /// It is also long enough to hold the shape of a spoken clause rather than an instantaneous
-    /// level, which the six-bar wing's 0.26 s was not. Tune by use.
-    public static let window: TimeInterval = 2
+    /// - Below it, the card stops reading as a waveform. The count a window buys is
+    ///   `window / blockDuration`, so a 0.85 s window puts 19 bars across 340 pt and a 0.5 s
+    ///   window puts 11: at that point the row is a handful of blocks and the shape of a word is
+    ///   no longer in it. A test holds the card above twenty bars.
+    /// - Above it, the ripple Louis saw. Two seconds was the previous value and it was chosen
+    ///   backwards -- to keep a *3 pt* bar from looking like a stick at a wide pitch, i.e. a line
+    ///   weight was allowed to set the dynamics. `inkFraction` is what removed that constraint:
+    ///   the bar widens with the pitch now, so the window is free to be chosen for the motion.
+    ///
+    /// It cannot go all the way back to the wing's 0.26 s and that is arithmetic, not taste: six
+    /// bars across 340 pt is a pitch of 57 pt. A row five times wider holds more of the past at any
+    /// scroll speed; what this buys back is the speed itself -- 353 pt/s against the wing's 128.
+    public static let window: TimeInterval = 1
 
     /// The most bars any surface draws, and therefore the number of levels `LevelHistory` must
     /// hold (`LevelHistory.defaultCapacity`).
@@ -99,8 +120,20 @@ public enum WaveformLayout {
     /// Never zero: a waveform with no bars is not a quiet waveform, it is a blank surface, and
     /// nothing in Murmure hands this a frame narrower than a single bar.
     public static func barCount(inWidth width: Double) -> Int {
-        let fitting = Int((width + minimumBarSpacing) / (barWidth + minimumBarSpacing))
+        let fitting = Int((width + minimumBarSpacing) / (minimumBarWidth + minimumBarSpacing))
         return min(maximumBars, max(1, fitting))
+    }
+
+    /// How wide each of those bars is drawn.
+    ///
+    /// `inkFraction` of the space one bar gets, floored at `minimumBarWidth`. Solving
+    /// `count × bar + (count - 1) × gap = width` under `bar = f × (bar + gap)` gives the closed
+    /// form below, so the fraction is exact against the pitch the row actually ends up with rather
+    /// than against an approximation of it.
+    public static func barWidth(inWidth width: Double, barCount: Int) -> Double {
+        guard barCount > 1 else { return max(minimumBarWidth, max(0, width)) }
+        let denominator = Double(barCount) * inkFraction + Double(barCount - 1) * (1 - inkFraction)
+        return max(minimumBarWidth, max(0, width) * inkFraction / denominator)
     }
 
     /// The gap between two bars, once `barCount` of them are laid in a frame this wide.
@@ -115,7 +148,7 @@ public enum WaveformLayout {
     /// bar, which is precisely the artefact at the centre of the card this change also fixes.
     public static func barSpacing(inWidth width: Double, barCount: Int) -> Double {
         guard barCount > 1 else { return 0 }
-        let leftover = width - Double(barCount) * barWidth
+        let leftover = width - Double(barCount) * barWidth(inWidth: width, barCount: barCount)
         return max(minimumBarSpacing, leftover / Double(barCount - 1))
     }
 }
