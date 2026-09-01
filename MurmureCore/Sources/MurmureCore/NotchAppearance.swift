@@ -1,15 +1,17 @@
 import Foundation
 
-/// What the notch draws for a phase, and how that drawing moves through time.
+/// What a dictation draws for a phase, and how that drawing moves through time.
 ///
 /// The companion of `NotchPresenter`, and split from it along the same seam: the presenter turns
 /// a state change into a phase, this turns a phase into a drawing. Both are here rather than in
 /// the app target for the reason the presenter's own note gives -- `Murmure` has no test bundle,
 /// so anything left in a view is a decision nothing can check.
 ///
-/// Nothing here is a pixel. There are no point sizes, no colours as such and no SwiftUI: a wing
-/// asks which family of mark it is drawing, where along itself the mark sits at this instant, and
-/// how bright it should be. Multiplying those by a point size is the view's whole remaining job.
+/// Nothing here is a pixel, and nothing here is a notch. There are no point sizes, no colours as
+/// such and no SwiftUI: a surface asks which family of mark it is drawing, where along itself the
+/// mark sits at this instant, and how bright it should be, and multiplying those by its own size
+/// is its whole remaining job. That is what lets the notch's wings and the floating surface a Mac
+/// without a cutout needs draw the same dictation from the same answers.
 ///
 /// **This is the one part of lot 3 with no reference anywhere.** Design notes §9 records that
 /// Superwhisper's window was never captured while recording, processing or completing, so every
@@ -32,7 +34,7 @@ public enum NotchAppearance {
 
     // MARK: - Which family of drawing a phase belongs to
 
-    /// The families of drawing the wings know how to make.
+    /// The families of drawing a surface knows how to make.
     ///
     /// A level of indirection over `NotchPhase` for one reason, and it is the acceptance criterion
     /// of this task: phases that must look identical have to *be* identical to the view, or the
@@ -43,16 +45,16 @@ public enum NotchAppearance {
         case none
         /// The bars of lot 3 T3, heights following the microphone.
         case waveform
-        /// A short mark travelling out of the cutout towards the outer edge of each wing.
+        /// A short mark travelling from the inner edge of each half towards its outer one.
         case travelling
-        /// A full-width bar breathing in the accent, and after five seconds a counter.
+        /// A bar breathing in the accent across the whole width, and after five seconds a counter.
         case pulsing
         /// The completion fill. Green, and the only green in the interface.
         case success
         /// A dim, still, short mark: the dictation ran and nothing reached the target.
         case quiet
-        /// Something went wrong. Lot 3 T6 owns what the expanded panel then says; the wing only
-        /// has to stop looking like a success.
+        /// Something went wrong. Lot 3 T6 owns what the expanded panel then says; the collapsed
+        /// drawing only has to stop looking like a success.
         case warning
     }
 
@@ -99,33 +101,33 @@ public enum NotchAppearance {
     /// animation says "something just happened", not "something is still happening". Tune by use.
     public static let travelPeriod: TimeInterval = 1
 
-    /// The mark's length, as a fraction of one wing's width.
+    /// The mark's length, as a fraction of the width of the half it travels across.
     public static let markWidth: Double = 0.45
 
-    /// How far past each end of a wing the mark's centre travels, as a fraction of that width.
+    /// How far past each end the mark's centre travels, as a fraction of the same width.
     ///
     /// Not decoration: it is what makes the wrap invisible. The mark is teleported from the far
     /// end back to the near one at the end of every cycle, and the only thing that keeps that from
-    /// being seen is that it is entirely outside the wing at both instants -- which needs the
-    /// overhang to be at least half the mark's own length. The margin above that half is what
-    /// gives a beat of empty wing between one sweep and the next, so the two read as separate
+    /// being seen is that it is entirely outside the drawn area at both instants -- which needs
+    /// the overhang to be at least half the mark's own length. The margin above that half is what
+    /// gives a beat of empty surface between one sweep and the next, so the two read as separate
     /// passes rather than as a loop with a seam.
     public static let markOverhang: Double = 0.35
 
-    /// Where the mark's centre sits at this instant, as a fraction of one wing's width measured
-    /// **from the cutout outwards**: 0 is the edge against the notch, 1 the outer edge.
+    /// Where the mark's centre sits at this instant, as a fraction of one half's width measured
+    /// **from its inner edge outwards**: 0 is the inner edge, 1 the outer one.
     ///
-    /// One number for both wings, which is what makes them each other's reflection: the mark
-    /// leaves the hardware cutout on both sides at once and runs outwards, the way lot 3 T3's
-    /// waveform is already mirrored across it. The alternative -- one mark travelling left to
-    /// right across both wings -- was tried on paper and fails on the geometry: the cutout is
-    /// 185 pt against a 32 pt wing (`NotchController`, `NotchView.swift:32-34` at tag 1.1.0), so
-    /// a mark crossing at constant speed would spend six wing-widths of every cycle invisible
-    /// behind the notch, and the notch would look stopped for most of a transcription.
+    /// One number for both halves, which is what makes them each other's reflection: the mark
+    /// leaves the middle on both sides at once and runs outwards, the way lot 3 T3's waveform is
+    /// already mirrored. In the notch the middle is the hardware cutout, and that is also why the
+    /// obvious alternative -- one mark travelling left to right across both wings -- was rejected:
+    /// the cutout is 185 pt against a 32 pt wing (`NotchController`, `NotchView.swift:32-34` at
+    /// tag 1.1.0), so a mark crossing at constant speed would spend six wing-widths of every cycle
+    /// invisible behind it, and the notch would look stopped for most of a transcription.
     ///
-    /// Negative values are the mark still behind the cutout, values past 1 are it beyond the outer
-    /// edge; the wing draws neither, and does not need to know that.
-    public static func markDistanceFromNotch(elapsed: TimeInterval) -> Double {
+    /// Negative values are the mark short of the inner edge, values past 1 are it beyond the outer
+    /// one; a surface draws neither, and does not need to know that.
+    public static func markDistanceOutward(elapsed: TimeInterval) -> Double {
         -markOverhang + cyclicProgress(elapsed: elapsed, period: travelPeriod) * (1 + 2 * markOverhang)
     }
 
@@ -176,9 +178,9 @@ public enum NotchAppearance {
 
     /// How dim the pulse gets at the bottom of its breath, as a fraction of full.
     ///
-    /// Not zero. A mark that vanished entirely would leave an empty wing every 1.3 s, and an empty
-    /// wing is what `hidden` looks like -- during the longest wait in the app, the one moment
-    /// Louis is actually asking whether it is still alive.
+    /// Not zero. A mark that vanished entirely would leave an empty surface every 1.3 s, and an
+    /// empty surface is what `hidden` looks like -- during the longest wait in the app, the one
+    /// moment Louis is actually asking whether it is still alive.
     public static let pulseFloor: Double = 0.3
 
     /// A phase's progress through a repeating cycle, 0…1.

@@ -87,9 +87,9 @@ final class NotchAppearanceTests: XCTestCase {
     /// It leaves the cutout and runs outwards, in that order. Reversed, the notch would look like
     /// it was swallowing something during the phase where it is producing one.
     func testTheMarkTravelsFromTheCutoutOutwards() {
-        let early = NotchAppearance.markDistanceFromNotch(
+        let early = NotchAppearance.markDistanceOutward(
             elapsed: NotchAppearance.travelPeriod * 0.25)
-        let late = NotchAppearance.markDistanceFromNotch(
+        let late = NotchAppearance.markDistanceOutward(
             elapsed: NotchAppearance.travelPeriod * 0.75)
         XCTAssertLessThan(early, late)
     }
@@ -100,9 +100,9 @@ final class NotchAppearanceTests: XCTestCase {
     /// not just its centre.
     func testTheMarkIsCompletelyOutOfTheWingAtBothEndsOfItsCycle() {
         let half = NotchAppearance.markWidth / 2
-        let atStart = NotchAppearance.markDistanceFromNotch(elapsed: 0)
+        let atStart = NotchAppearance.markDistanceOutward(elapsed: 0)
         XCTAssertLessThanOrEqual(atStart + half, 0, "the mark is still visible when it wraps back")
-        let atEnd = NotchAppearance.markDistanceFromNotch(
+        let atEnd = NotchAppearance.markDistanceOutward(
             elapsed: NotchAppearance.travelPeriod * 0.9999)
         XCTAssertGreaterThanOrEqual(
             atEnd - half, 1, "the mark is still visible when it is teleported away")
@@ -112,8 +112,8 @@ final class NotchAppearanceTests: XCTestCase {
     /// whole message of this phase is "something is still happening".
     func testTheSweepRepeatsEveryPeriod() {
         XCTAssertEqual(
-            NotchAppearance.markDistanceFromNotch(elapsed: 0.2),
-            NotchAppearance.markDistanceFromNotch(
+            NotchAppearance.markDistanceOutward(elapsed: 0.2),
+            NotchAppearance.markDistanceOutward(
                 elapsed: 0.2 + NotchAppearance.travelPeriod * 3),
             accuracy: 1e-9)
     }
@@ -125,8 +125,8 @@ final class NotchAppearanceTests: XCTestCase {
         // -3.5 rather than a whole number of periods on purpose: a negative elapsed that happens to
         // be a whole cycle wraps to the start anyway, and would pass with no clamp at all.
         XCTAssertEqual(
-            NotchAppearance.markDistanceFromNotch(elapsed: -3.5),
-            NotchAppearance.markDistanceFromNotch(elapsed: 0),
+            NotchAppearance.markDistanceOutward(elapsed: -3.5),
+            NotchAppearance.markDistanceOutward(elapsed: 0),
             accuracy: 1e-12)
     }
 
