@@ -16,11 +16,14 @@ private let logger = Logger(subsystem: "com.louiscourcier.Murmure", category: "r
 /// the model resident on its side for its own `keep_alive` window, which is why the first
 /// refinement after a pause pays a load and the next ones do not.
 final class OllamaClient: Sendable {
-    /// Where the failure goes. Required, no default value, no way to construct a client without
-    /// deciding — the same shape task 6 gave `PasteInserter.onClipboardOutcome`, and for the same
-    /// reason (ruling L7): a failure mechanism with no consumer does not exist. `refine` returns
-    /// `String?` and a `nil` says only "there is no refined text"; the six things that can mean,
-    /// and the six different remedies, arrive here.
+    /// Where the failure goes, for the record the session leaves behind. Required, no default
+    /// value, no way to construct a client without deciding — the same shape task 6 gave
+    /// `PasteInserter.onClipboardOutcome`, and for the same reason (ruling L7).
+    ///
+    /// It is no longer the only way out: since `refine` answers `OllamaOutcome`, the failure also
+    /// travels **in the return value**, and that is the copy `TranscriptRefiner` turns into the
+    /// notice Louis reads — because only the caller knows whether the raw transcript was inserted
+    /// in its place. This closure is the log's copy, not a second user-facing one.
     private let onFailure: @Sendable (OllamaFailure) -> Void
 
     private let session: URLSession
@@ -44,18 +47,20 @@ final class OllamaClient: Sendable {
         session = URLSession(configuration: configuration)
     }
 
-    /// Refines one transcript, or reports why it could not.
+    /// Refines one transcript, or says why it could not.
     ///
-    /// Returns `nil` when there is no refined text — and by then `onFailure` has already been
-    /// called with the reason. `nil` is not "nothing happened": spec §9 says a dictation is never
-    /// lost, so the caller's answer to `nil` is to use the raw transcript it already has.
+    /// Answers `OllamaOutcome` rather than `String?` because a `nil` says only "there is no
+    /// refined text", and the six reasons that can be true have six different remedies. Spec §9
+    /// says a dictation is never lost, so `.failed` is not the end of the pipeline: the caller
+    /// falls back to the raw transcript it already holds, and the failure is what lets it tell
+    /// Louis *why* the text he got is the raw one.
     ///
     /// Not marked `@discardableResult`, on purpose. Calling this and throwing the result away
     /// spends up to two minutes of the user's time to produce nothing, and the compiler should
     /// say so.
     func refine(
         transcript: String, instructions: String, model: String, endpoint base: URL
-    ) async -> String? {
+    ) async -> OllamaOutcome {
         let url = OllamaChat.endpoint(base: base)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -89,25 +94,31 @@ final class OllamaClient: Sendable {
                 characters with \(model, privacy: .public) in \
                 \(Date().timeIntervalSince(start), format: .fixed(precision: 1), privacy: .public)s
                 """)
-            return text
+            return .refined(text)
         case .failed(let failure):
             return report(failure, model: model, url: url)
         }
     }
 
-    /// Logs the failure, hands it to the consumer, and answers `nil` so the call site above reads
-    /// as one line. The log is what survives the session; `onFailure` is what reaches a human.
+    /// Logs the failure, hands it to the consumer, and gives it back so the call site above reads
+    /// as one line. The log is what survives the session; the returned `.failed` is what reaches
+    /// the code that decides what to insert.
     ///
     /// The URL is in the log line because the client no longer repairs a wrong `llm.endpoint`
     /// (see `OllamaChat.endpoint(base:)`): a mode edited by hand into the `/v1` compatibility
     /// API produces a 404 whose remedy reads "this is a bug", and the requested URL is the only
     /// thing in the record that shows it was a typo rather than a defect.
-    private func report(_ failure: OllamaFailure, model: String, url: URL) -> String? {
+    private func report(_ failure: OllamaFailure, model: String, url: URL) -> OllamaOutcome {
         logger.error("""
             refinement with \(model, privacy: .public) at \(url.absoluteString, privacy: .public) \
             failed -- \(failure.description, privacy: .public)
             """)
         onFailure(failure)
-        return nil
+        return .failed(failure)
     }
 }
+
+/// Type-checks to nothing: the labels already matched, and the return type now does too. Written
+/// out rather than declared on the type so the conformance reads as what it is -- the app's one
+/// implementation of a seam that `MurmureCore` owns and tests against stubs.
+extension OllamaClient: RefinementClient {}

@@ -47,6 +47,17 @@ struct MurmureApp: App {
             if let message = appState.lastFailureMessage {
                 Button(message) {}.disabled(true)
             }
+            // The refinement produced something other than what the mode asked for, and the text
+            // was inserted anyway. Held here rather than dropped: a raw transcript where a
+            // rewrite was expected looks exactly like a model that did a poor job.
+            if let notice = appState.refinementNotice {
+                Button(notice) {}.disabled(true)
+            }
+            // One line per mode file to fix. `ModeStore` and `ModeSelection` report them one by
+            // one so each names its own file, and collapsing them into a count would undo that.
+            ForEach(appState.modeProblems, id: \.self) { problem in
+                Button(problem) {}.disabled(true)
+            }
             Button("Recoller la dernière transcription") { controller.repasteLast() }
             Divider()
             Button("Quit") { NSApplication.shared.terminate(nil) }

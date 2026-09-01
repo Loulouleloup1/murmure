@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MurmureCore
 import os
@@ -26,10 +27,47 @@ final class DictationController {
         }
         self.inserter = inserter
 
+        // `modes/`, never the `Murmure/` folder above it: `recordings/` and the Whisper models
+        // are its siblings. Nil when Application Support cannot be reached at all -- dictation
+        // then runs on the built-in `Voice`, which is the right answer rather than a failure:
+        // Louis can still dictate, and only the modes he edited are missing.
+        let modesDirectory: URL?
+        do {
+            modesDirectory = try Storage.appSupportDirectory(subfolder: "modes")
+        } catch {
+            modesDirectory = nil
+            log.error("modes folder unavailable: \(error.localizedDescription, privacy: .public)")
+            appState.modeProblems = [
+                "Modes folder unavailable (\(error.localizedDescription)). "
+                    + "Dictation runs on the built-in Voice mode.",
+            ]
+        }
+        if let modesDirectory {
+            // Every launch, not only the first: a built-in deleted by hand comes back, which is
+            // how `voice.json` repairs itself. It writes only files that are ABSENT, so a mode
+            // Louis has edited is never overwritten.
+            let store = ModeStore(directory: modesDirectory) { [log] problem in
+                log.error("mode file problem: \(problem.description, privacy: .public)")
+            }
+            do {
+                try store.createBuiltInsIfMissing()
+            } catch {
+                // Only the missing built-ins are lost; the modes already on disk still load.
+                log.error("""
+                    could not write the built-in modes: \
+                    \(error.localizedDescription, privacy: .public)
+                    """)
+                appState.modeProblems = [
+                    "Could not write the built-in modes (\(error.localizedDescription)).",
+                ]
+            }
+        }
+
         session = DictationSession(
             recorder: AudioRecorder(),
             transcriber: WhisperKitEngine(),
-            inserter: inserter
+            inserter: inserter,
+            refiner: ModeAwareRefinement(modesDirectory: modesDirectory, appState: appState)
         ) { state in
             Task { @MainActor in
                 if case .recording = state {
@@ -39,6 +77,10 @@ final class DictationController {
                     // leave the last warning on screen indefinitely.
                     appState.clipboardWarning = nil
                     appState.lastFailureMessage = nil
+                    // Same reason: a refinement notice is about the dictation that just ended,
+                    // and nothing else would ever take it off the screen. `modeProblems` is
+                    // deliberately NOT cleared here -- a broken mode file survives the press.
+                    appState.refinementNotice = nil
                 }
                 // The message is not just an icon (ruling L7): `.failed`'s payload says whether the
                 // microphone is denied, the model failed to download or the paste was refused, and
@@ -50,6 +92,7 @@ final class DictationController {
                 case .idle: .idle
                 case .recording: .recording
                 case .transcribing: .transcribing
+                case .refining: .refining
                 case .inserting: .inserting
                 case .failed: .failed
                 }
@@ -88,5 +131,78 @@ final class DictationController {
                 appState.status = .failed
             }
         }
+    }
+}
+
+/// The app's `DictationRefining`: the modes folder on one side, `AppState` on the other.
+///
+/// Everything it decides is decided in `MurmureCore` -- `ModeSelection.resolve` picks the mode,
+/// `TranscriptRefiner.refine` decides what to insert, `OllamaChat` reads the answer. What is left
+/// here is the three things the package cannot test: the frontmost application, the real modes
+/// folder, and the hop to `AppState`. That is why this type is verified by reading and by
+/// compiling, and why none of the logic above lives in it.
+///
+/// `ModeStore` and `TranscriptRefiner` are built per call rather than stored, because each is a
+/// value carrying a non-`Sendable` `report` closure. Building them costs nothing, and it is what
+/// lets each resolution collect its own problems instead of appending to a list that only grows.
+private struct ModeAwareRefinement: DictationRefining {
+    /// Nil when Application Support could not be reached; see `DictationController.init`.
+    let modesDirectory: URL?
+    let appState: AppState
+    private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "modes")
+
+    init(modesDirectory: URL?, appState: AppState) {
+        self.modesDirectory = modesDirectory
+        self.appState = appState
+    }
+
+    func modeForNewDictation() async -> Mode {
+        guard let modesDirectory else { return .voice }
+
+        var problems: [String] = []
+        let modes = ModeStore(directory: modesDirectory) { problems.append($0.description) }
+            .loadAll()
+
+        // Sampled here, on the main actor, because this runs on the toggle that STARTS the
+        // recording (`DictationSession`, R-T5-2): the frontmost application is the one Louis was
+        // looking at when he pressed. Murmure is `LSUIElement` and the hotkey is a Carbon one, so
+        // pressing it does not bring Murmure forward -- what this reads is still his editor.
+        let frontmost = await MainActor.run {
+            NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        }
+
+        // `manualKey` is nil because there is no way to make a manual choice yet: lot 2 shipped
+        // no mode picker, and the menu has no selection to read. Passed explicitly rather than
+        // defaulted so the UI lot has one line to fill in, not a rule to rediscover.
+        let mode = ModeSelection.resolve(
+            among: modes, manualKey: nil, frontmostBundleID: frontmost
+        ) { problems.append($0.description) }
+
+        log.info("""
+            mode \(mode.key, privacy: .public) for \
+            \(frontmost ?? "no frontmost app", privacy: .public)
+            """)
+        for problem in problems {
+            log.error("mode problem: \(problem, privacy: .public)")
+        }
+        // Replaced, not appended: the list is what is wrong *now*, so a file Louis has fixed
+        // stops being listed on the next dictation.
+        let resolved = problems
+        await MainActor.run { appState.modeProblems = resolved }
+        return mode
+    }
+
+    func refine(_ transcript: String, with mode: Mode) async -> String {
+        // The failure is carried by `refine`'s return value and turned into a `RefinementNotice`
+        // below, so `onFailure` is the log's copy only -- reporting it to `AppState` here as well
+        // would put the same failure on screen twice, once of the two without saying what was
+        // inserted in its place.
+        let client = OllamaClient { [log] failure in
+            log.error("refinement failed: \(failure.description, privacy: .public)")
+        }
+        let refiner = TranscriptRefiner(client: client) { [appState] notice in
+            Task { @MainActor in appState.noteRefinement(notice) }
+        }
+        return await refiner.refine(transcript, with: mode)
     }
 }

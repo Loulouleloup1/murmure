@@ -18,14 +18,36 @@ public protocol TextInserter {
     func insert(_ text: String) async throws
 }
 
-/// One dictation end-to-end: idle → recording → transcribing → inserting → idle/failed.
+/// Which mode a dictation runs under, and what its transcript becomes (spec §5).
+///
+/// Two calls rather than one because they happen at opposite ends of one dictation: the mode is
+/// resolved when the recording STARTS -- the application Louis was looking at while he spoke is
+/// what decides, not the one he may have switched to since -- while a refinement can only run
+/// once there is a transcript to refine.
+///
+/// Neither the requirement nor `init`'s parameter has a default. A "refine nothing" default would
+/// compile at every call site, Louis would never get a refinement, and no test would fail: the
+/// silent failure ruling L7 keeps catching. `Murmure` builds the real one from `ModeStore`,
+/// `ModeSelection` and `TranscriptRefiner`.
+public protocol DictationRefining: Sendable {
+    /// Called on the toggle that starts a recording, never later.
+    func modeForNewDictation() async -> Mode
+
+    /// The text to insert. Total, and never `nil`: Louis has just spoken and that text exists
+    /// nowhere else, so a refinement that cannot happen answers with the raw transcript.
+    func refine(_ transcript: String, with mode: Mode) async -> String
+}
+
+/// One dictation end-to-end: idle → recording → transcribing → [refining] → inserting →
+/// idle/failed. `refining` only when the resolved mode has an LLM; `Voice` runs lot 1's sequence
+/// unchanged.
 ///
 /// The seams above are protocols so the whole state machine is testable in `MurmureCore`: the app
-/// target has no test bundle, and the three real implementations each touch hardware, the network
+/// target has no test bundle, and the four real implementations each touch hardware, the network
 /// or the pasteboard.
 public actor DictationSession {
     public enum State: Equatable {
-        case idle, recording, transcribing, inserting
+        case idle, recording, transcribing, refining, inserting
         case failed(message: String, recoveredText: String?)
     }
 
@@ -39,15 +61,22 @@ public actor DictationSession {
     private let recorder: Recorder
     private let transcriber: Transcriber
     private let inserter: TextInserter
+    private let refiner: any DictationRefining
     private let onStateChange: @Sendable (State) -> Void
+
+    /// The mode the recording in progress runs under, fixed when it started. `Voice` until the
+    /// first dictation resolves one -- the same default `ModeSelection` falls back to.
+    private var activeMode: Mode = .voice
 
     public init(
         recorder: Recorder, transcriber: Transcriber, inserter: TextInserter,
+        refiner: any DictationRefining,
         onStateChange: @escaping @Sendable (State) -> Void
     ) {
         self.recorder = recorder
         self.transcriber = transcriber
         self.inserter = inserter
+        self.refiner = refiner
         self.onStateChange = onStateChange
     }
 
@@ -59,11 +88,23 @@ public actor DictationSession {
         switch state {
         case .recording:
             await finishRecording()
-        case .transcribing, .inserting:
+        case .transcribing, .refining, .inserting:
             break // pipeline already running; ignore extra presses
         case .idle, .failed:
             do {
                 try recorder.start()
+                // Resolved here rather than in `finishRecording()`: what decides is the
+                // application Louis was looking at while he pressed, not the one he may have
+                // switched to by the time he stops. Resolved AFTER a successful start, so a
+                // refused microphone never pays for a read of the modes folder.
+                //
+                // This `await` is the one suspension point in a branch lot 1 kept atomic, so a
+                // second press landing inside it is read as another start rather than as a stop.
+                // Not reachable from the hotkey -- Carbon delivers one `kEventHotKeyPressed` per
+                // press, and what is awaited is a read of four small files -- and bounded if it
+                // ever were: `AudioRecorder.start()` refuses a second recording, so the worst
+                // outcome is a reported failure, never two taps on one device.
+                activeMode = await refiner.modeForNewDictation()
                 transition(to: .recording)
             } catch {
                 transition(to: .failed(
@@ -111,15 +152,19 @@ public actor DictationSession {
         }
 
         transition(to: .transcribing)
-        let text: String
+        let transcript: String
         do {
-            text = try await transcriber.transcribe(wav: wav)
+            transcript = try await transcriber.transcribe(wav: wav)
         } catch {
             transition(to: .failed(
                 message: "transcription failed: \(error.localizedDescription)",
                 recoveredText: nil))
             return
         }
+
+        // The refined text, not the raw one, is what gets inserted -- so it is also what a
+        // "paste the last transcript again" has to offer.
+        let text = await refined(transcript)
         lastTranscript = text
 
         transition(to: .inserting)
@@ -131,6 +176,32 @@ public actor DictationSession {
             transition(to: .failed(
                 message: "insert failed: \(error.localizedDescription)", recoveredText: text))
         }
+    }
+
+    /// The transcript as it will be inserted.
+    ///
+    /// `Voice` -- and any other mode with `llm.enabled == false` -- returns from the first line:
+    /// no `.refining` state, and no call to the refiner at all. Lot 1's behaviour has to survive
+    /// this lot byte for byte, and the only way to guarantee that is for the step not to happen,
+    /// rather than to happen and be expected to change nothing.
+    ///
+    /// The empty check is about what gets PASTED, not about a wasted call. Whisper answers
+    /// silence with "" or a lone newline, and the refiner's anti-refusal rule is a fraction of the
+    /// transcript's length: against a length of zero, every answer clears it -- "Bien sûr ! Voici
+    /// le texte corrigé :" included -- and it would land in whatever Louis has focused as if he
+    /// had dictated it. `PasteInserter` already refuses an empty string, which stops the paste of
+    /// nothing; it cannot stop the paste of something. Trimmed rather than `isEmpty`, because a
+    /// transcript of one newline is the same nothing and would defeat the guard unseen.
+    private func refined(_ transcript: String) async -> String {
+        guard activeMode.llm.enabled,
+              !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return transcript }
+
+        // Its own state, because the wait is long enough to look like a hang: 19 s at the p-high
+        // of the measured refinements and 57.5 s on the worst real case, during which a frozen
+        // hourglass says nothing about whether the model is working or the app is stuck.
+        transition(to: .refining)
+        return await refiner.refine(transcript, with: activeMode)
     }
 
     private func transition(to newState: State) {

@@ -9,6 +9,8 @@ private final class FakeRecorder: Recorder {
     var stopReturnsNil = false
     /// Writes bytes that are not audio at all, standing in for a truncated or corrupt recording.
     var stopReturnsUnreadableFile = false
+    /// Thrown by `start()`, standing in for a denied microphone or a busy device.
+    var startError: Error?
     var lastFailure: Error?
     let frames: AVAudioFrameCount
     private let url: URL
@@ -19,7 +21,10 @@ private final class FakeRecorder: Recorder {
             .appendingPathComponent("\(UUID().uuidString).wav")
     }
 
-    func start() throws { started = true }
+    func start() throws {
+        if let startError { throw startError }
+        started = true
+    }
 
     func stop() -> URL? {
         if stopReturnsNil { return nil }
@@ -52,6 +57,49 @@ private final class SpyInserter: TextInserter, @unchecked Sendable {
     }
 }
 
+/// The refinement seam, recording what it was asked and when.
+///
+/// Defaults to `Voice`, the mode that refines nothing, so the lot 1 tests above keep running the
+/// pipeline lot 1 shipped -- only their `init` call changed, never what they assert.
+private final class SpyRefiner: DictationRefining, @unchecked Sendable {
+    struct Calls: Equatable {
+        var modeResolutions = 0
+        /// Every transcript actually handed to the model. Empty is the assertion that matters:
+        /// it is how a test proves a call never left.
+        var refined: [String] = []
+    }
+
+    private let lock = NSLock()
+    private var storage = Calls()
+    private let mode: Mode
+    private let answer: @Sendable (String) -> String
+
+    init(mode: Mode = .voice, answer: @escaping @Sendable (String) -> String = { $0 }) {
+        self.mode = mode
+        self.answer = answer
+    }
+
+    var calls: Calls {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func modeForNewDictation() async -> Mode {
+        lock.lock()
+        storage.modeResolutions += 1
+        lock.unlock()
+        return mode
+    }
+
+    func refine(_ transcript: String, with mode: Mode) async -> String {
+        lock.lock()
+        storage.refined.append(transcript)
+        lock.unlock()
+        return answer(transcript)
+    }
+}
+
 private struct TestError: Error {}
 
 final class DictationSessionTests: XCTestCase {
@@ -61,7 +109,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("bonjour murmure")),
-            inserter: inserter, onStateChange: { _ in }
+            inserter: inserter, refiner: SpyRefiner(),
+            onStateChange: { _ in }
         )
         await session.toggle() // start
         let recordingState = await session.state
@@ -78,7 +127,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .failure(TestError())),
-            inserter: inserter, onStateChange: { _ in }
+            inserter: inserter, refiner: SpyRefiner(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -95,7 +145,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("texte précieux")),
-            inserter: inserter, onStateChange: { _ in }
+            inserter: inserter, refiner: SpyRefiner(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -114,7 +165,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
-            inserter: SpyInserter(), onStateChange: { _ in }
+            inserter: SpyInserter(), refiner: SpyRefiner(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -130,7 +182,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(frames: 0),
             transcriber: FakeTranscriber(result: .success("hallucination sur du silence")),
-            inserter: inserter, onStateChange: { _ in }
+            inserter: inserter, refiner: SpyRefiner(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -149,7 +202,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
-            inserter: inserter, onStateChange: { _ in }
+            inserter: inserter, refiner: SpyRefiner(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -167,7 +221,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("première dictée")),
-            inserter: inserter, onStateChange: { _ in }
+            inserter: inserter, refiner: SpyRefiner(),
+            onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -177,7 +232,8 @@ final class DictationSessionTests: XCTestCase {
         let failing = DictationSession(
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .failure(TestError())),
-            inserter: inserter, onStateChange: { _ in }
+            inserter: inserter, refiner: SpyRefiner(),
+            onStateChange: { _ in }
         )
         await failing.toggle()
         await failing.toggle()
@@ -192,7 +248,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("bonjour")),
-            inserter: SpyInserter(), onStateChange: { states.append($0) }
+            inserter: SpyInserter(), refiner: SpyRefiner(),
+            onStateChange: { states.append($0) }
         )
         await session.toggle()
         await session.toggle()
@@ -206,7 +263,7 @@ final class DictationSessionTests: XCTestCase {
         let transcriber = GatedTranscriber()
         let session = DictationSession(
             recorder: FakeRecorder(), transcriber: transcriber,
-            inserter: SpyInserter(), onStateChange: { _ in }
+            inserter: SpyInserter(), refiner: SpyRefiner(), onStateChange: { _ in }
         )
         await session.toggle() // start
         async let pipeline: Void = session.toggle() // stop; blocks inside the transcriber
@@ -220,6 +277,127 @@ final class DictationSessionTests: XCTestCase {
         await pipeline
         let finalState = await session.state
         XCTAssertEqual(finalState, .idle)
+    }
+
+    // MARK: - Lot 2: the refinement seam
+
+    /// The constraint the whole lot is measured against. `Voice` is the default mode and the
+    /// daily driver, so its transcript reaches the inserter as it left the transcriber -- padding
+    /// and interior spacing included -- and the model is never called at all. Not "called and
+    /// expected to change nothing": never called.
+    func testVoiceInsertsTheTranscriptByteForByteAndNeverReachesTheModel() async {
+        let raw = "  bonjour   Murmure\n"
+        let inserter = SpyInserter()
+        let refiner = SpyRefiner(mode: .voice, answer: { _ in "reformulé" })
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success(raw)),
+            inserter: inserter, refiner: refiner, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        XCTAssertEqual(inserter.inserted, [raw])
+        XCTAssertEqual(refiner.calls.refined, [], "Voice must not reach the model")
+    }
+
+    /// R-T5-2: the application Louis was looking at when he pressed is what picks the mode, so
+    /// the resolution happens on the toggle that STARTS -- and once, not again on the one that
+    /// stops.
+    func testTheModeIsResolvedWhenTheRecordingStartsNotWhenItStops() async {
+        let refiner = SpyRefiner()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("bonjour")),
+            inserter: SpyInserter(), refiner: refiner, onStateChange: { _ in }
+        )
+        await session.toggle() // start
+        XCTAssertEqual(refiner.calls.modeResolutions, 1, "the mode is resolved at the start")
+        await session.toggle() // stop + pipeline
+        XCTAssertEqual(refiner.calls.modeResolutions, 1, "and not resolved a second time")
+    }
+
+    /// The corollary of the same ruling: there is no dictation to pick a mode for, so a refused
+    /// microphone does not pay for a read of the modes folder.
+    func testAMicrophoneThatRefusesToStartResolvesNoMode() async {
+        let recorder = FakeRecorder()
+        recorder.startError = TestError()
+        let refiner = SpyRefiner()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("jamais atteint")),
+            inserter: SpyInserter(), refiner: refiner, onStateChange: { _ in }
+        )
+        await session.toggle()
+        guard case .failed = await session.state else { return XCTFail("expected failed state") }
+        XCTAssertEqual(refiner.calls.modeResolutions, 0)
+    }
+
+    /// A mode with an LLM: what the model answered is what gets pasted, and what a re-paste will
+    /// offer -- the raw transcript is not the dictation any more once it has been refined.
+    func testAModeWithAnLLMInsertsTheRefinedTextRatherThanTheRawOne() async {
+        let inserter = SpyInserter()
+        let refiner = SpyRefiner(mode: .prompt, answer: { "reformulé : \($0)" })
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("euh bonjour")),
+            inserter: inserter, refiner: refiner, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        XCTAssertEqual(refiner.calls.refined, ["euh bonjour"])
+        XCTAssertEqual(inserter.inserted, ["reformulé : euh bonjour"])
+        let last = await session.lastTranscript
+        XCTAssertEqual(last, "reformulé : euh bonjour")
+    }
+
+    /// R-T5-3. The refinement is its own state and not a longer hourglass: on the worst real case
+    /// measured it lasts 57.5 s, and an icon that cannot tell "the model is working" from "the app
+    /// is stuck" is the same as no icon.
+    func testARefinementIsItsOwnStateInTheSequence() async {
+        let states = StateLog()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("euh bonjour")),
+            inserter: SpyInserter(), refiner: SpyRefiner(mode: .prompt),
+            onStateChange: { states.append($0) }
+        )
+        await session.toggle()
+        await session.toggle()
+        XCTAssertEqual(states.values, [.recording, .transcribing, .refining, .inserting, .idle])
+    }
+
+    /// Whisper answers silence with an empty transcript, and the refiner's anti-refusal rule is a
+    /// fraction of the transcript's LENGTH -- so against zero, every answer clears it. Whatever
+    /// the model says to an empty prompt would be pasted into whatever Louis has focused as if he
+    /// had dictated it. The call never leaves.
+    func testAnEmptyTranscriptIsNeverSentToTheModel() async {
+        let inserter = SpyInserter()
+        let refiner = SpyRefiner(mode: .prompt, answer: { _ in "Bien sûr ! Voici le texte corrigé :" })
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("")),
+            inserter: inserter, refiner: refiner, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        XCTAssertEqual(refiner.calls.refined, [])
+        XCTAssertEqual(inserter.inserted, [""], "a fabricated sentence must never reach the paste")
+    }
+
+    /// The same nothing, spelled with characters. `isEmpty` alone would let a transcript of one
+    /// newline through, and nobody can see the difference on screen.
+    func testATranscriptOfNothingButWhitespaceIsNeverSentToTheModelEither() async {
+        let inserter = SpyInserter()
+        let refiner = SpyRefiner(mode: .prompt, answer: { _ in "Voici le texte corrigé :" })
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success(" \n \t ")),
+            inserter: inserter, refiner: refiner, onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        XCTAssertEqual(refiner.calls.refined, [])
+        XCTAssertEqual(inserter.inserted, [" \n \t "])
     }
 }
 

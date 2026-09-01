@@ -4,7 +4,7 @@ import SwiftUI
 @MainActor
 final class AppState: ObservableObject {
     enum Status: Equatable {
-        case idle, recording, transcribing, inserting, failed
+        case idle, recording, transcribing, refining, inserting, failed
     }
 
     @Published var status: Status = .idle
@@ -20,14 +20,42 @@ final class AppState: ObservableObject {
     /// Why the last dictation failed, in the user's words. Cleared when the next one starts.
     @Published var lastFailureMessage: String?
 
+    /// The mode files that could not be used, and the selections that could not be honoured --
+    /// one line per file to fix, because `ModeStore` reports them one by one for exactly that.
+    ///
+    /// Not cleared when a dictation starts, unlike the two above: a mode file stays broken until
+    /// Louis edits it, and a warning that disappears on the next press is a warning he never
+    /// finishes reading. Replaced wholesale at each resolution instead, so a fixed file stops
+    /// being listed.
+    @Published var modeProblems: [String] = []
+
+    /// What happened to the refinement of the last dictation, when the text he got is not the
+    /// text he expected. The dictation still produced text -- that is what makes this a notice
+    /// and not a failure. Cleared when the next dictation starts.
+    @Published var refinementNotice: String?
+
     var menuBarSymbol: String {
         switch status {
         case .idle: "waveform"
         case .recording: "waveform.circle.fill"
         case .transcribing: "hourglass"
+        // Distinct from the hourglass on purpose: a refinement runs 19 s at the p-high of the
+        // measured calls and 57.5 s on the worst real one, and for all that time the only
+        // question is whether the model is working or the app is stuck.
+        case .refining: "wand.and.sparkles"
         case .inserting: "arrow.down.doc"
         case .failed: "exclamationmark.triangle"
         }
+    }
+
+    /// The refinement did not produce what the mode asked for, and the text was inserted anyway.
+    ///
+    /// `RefinementNotice.message` is used as it stands rather than re-said in French: it is the
+    /// sentence lot 2 wrote for a reader, it names the model and carries `OllamaFailure.remedy`,
+    /// and paraphrasing it here would mean maintaining the six remedies in two places. The menu
+    /// already shows `DictationSession`'s English failure messages the same way.
+    func noteRefinement(_ notice: RefinementNotice) {
+        refinementNotice = notice.message
     }
 
     /// Task 6's `RestoreOutcome` reaches a human here. A dictation that pasted correctly can still
