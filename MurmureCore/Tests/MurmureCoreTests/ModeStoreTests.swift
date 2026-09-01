@@ -44,6 +44,12 @@ final class ModeStoreTests: XCTestCase {
         var edited = Mode.prompt
         edited.instructions = "Ne corrige que la ponctuation."
         edited.llm.model = "gemma4:e2b-it-qat"
+        // Written instructions and a chat model are one decision, not two: `Prompt` ships on the
+        // `s1` protocol, where prose is not an instruction but text the model copies into its
+        // answer. Sending this mode back to a general model means saying so on the same edit --
+        // which is the whole reason `api` is a field of the file rather than a guess about the
+        // model's name.
+        edited.llm.api = .chat
         try store.save(edited)
 
         try store.createBuiltInsIfMissing()

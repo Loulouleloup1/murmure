@@ -4,7 +4,7 @@ import Foundation
 ///
 /// The whole point of this type is that these are **not** one failure. "The refinement failed"
 /// is unusable: launching Ollama, pulling a model, waiting for a slower model, dictating a
-/// shorter passage, reporting a bug and rewriting a prompt are six different actions, and the
+/// shorter passage, reporting a bug and rewriting a prompt are different actions, and the
 /// message is the only thing that tells him which one he is in. `testEveryFailureCarriesItsOwnRemedy`
 /// is the regression that keeps them from being merged back into one.
 ///
@@ -37,8 +37,8 @@ public enum OllamaFailure: Equatable {
     case timedOut(after: TimeInterval)
 
     /// Ollama answered something this client cannot read: a non-JSON body, a JSON body with no
-    /// message content, an empty answer, or any status other than 200 and a recognised 404.
-    /// Nothing the user can fix — this one is a bug report.
+    /// message content, an empty answer, or any status other than 200 and the two errors that are
+    /// recognised by name. Nothing the user can fix — this one is a bug report.
     case malformedResponse(detail: String)
 
     /// The model hit `num_predict` and stopped mid-sentence.
@@ -50,6 +50,27 @@ public enum OllamaFailure: Equatable {
     /// fragment** — it looks like a finished refinement, so pasting it silently is the same
     /// class of invisible corruption the pinned options exist to prevent.
     case truncated(kept: String)
+
+    /// What was dictated does not fit in the model's context window, so the model was never
+    /// shown all of it.
+    ///
+    /// This case exists because the default behaviour is **silent**, and measured rather than
+    /// assumed: `s1-mini`, `num_ctx` 512, a real 531-word dictation -- HTTP 200,
+    /// `done_reason: "stop"`, `prompt_eval_count` quietly down from 804 to 258, and an answer
+    /// that reads like a finished refinement while starting a third of the way into what Louis
+    /// said. Nothing in the response says anything is missing.
+    ///
+    /// It is reportable only because the request asks Ollama not to do that
+    /// (``OllamaS1/truncate``), which turns the same call into a 400 naming the two numbers. So
+    /// this failure is not "detected": it is the silent one, made to speak.
+    ///
+    /// The one place this type's rule bends, said plainly rather than left to be noticed: the
+    /// action it asks for is `truncated`'s -- dictate in shorter pieces. It is still a case of
+    /// its own because the *description* is not interchangeable. Truncation hands back a fragment
+    /// that reads as finished; this hands back nothing at all, and telling Louis his refinement
+    /// was "cut off before the end" when the model never read the beginning would send him
+    /// looking at the wrong end of what he said.
+    case tooLongForTheContext(window: Int)
 
     /// The model answered, but its answer is not a refinement of the transcript.
     ///
@@ -83,6 +104,11 @@ public enum OllamaFailure: Equatable {
             "Ollama answered something Murmure could not read. This is a bug -- the details are in the log."
         case .truncated:
             "The refinement was cut off before the end. Dictate this passage in shorter pieces."
+        case .tooLongForTheContext(let window):
+            """
+            This dictation is longer than the \(window) tokens this model reads at once, so none \
+            of it was refined. Dictate it in shorter pieces.
+            """
         case .refused:
             "The model answered instead of refining. Adjust this mode's instructions, or pick another model."
         }
@@ -96,6 +122,7 @@ public enum OllamaFailure: Equatable {
         case .timedOut(let after): "gave up after \(Int(after))s"
         case .malformedResponse(let detail): "malformed response: \(detail)"
         case .truncated(let kept): "answer truncated after \(kept.count) characters"
+        case .tooLongForTheContext(let window): "input exceeds the \(window)-token context window"
         case .refused(let reply): "model refused: \(reply.prefix(200))"
         }
     }
@@ -113,7 +140,7 @@ public enum OllamaOutcome: Equatable {
 ///
 /// This lives in `MurmureCore` and not next to the HTTP call for one structural reason: the app
 /// target has no test bundle, so anything put there is unverifiable except by reading it. What
-/// is here — the request the model receives, and the six ways an answer can fail — is exactly
+/// is here — the request the model receives, and the seven ways an answer can fail — is exactly
 /// the part worth testing, and none of it needs a network.
 public enum OllamaChat {
     // MARK: - Pinned options
@@ -256,35 +283,49 @@ public enum OllamaChat {
 
     /// Reads one HTTP response into the outcome it means.
     ///
-    /// The transcript is a parameter because two of the six verdicts are about the *relationship*
+    /// The transcript is a parameter because two of the verdicts are about the *relationship*
     /// between the answer and what was dictated, not about the answer alone. The model is a
     /// parameter for a smaller reason, learned the hard way -- see ``isMissingModel(_:)``.
     public static func outcome(
         status: Int, body: Data, transcript: String, model: String
     ) -> OllamaOutcome {
-        guard status == 200 else {
-            // A 404 is two very different things. Ollama answers a request for a model it does
-            // not have with a JSON `error` body; it answers a request for a route it does not
-            // have with a bare `404 page not found`. Telling Louis to pull a model he already
-            // has, because the endpoint was misconfigured, is worse than saying nothing.
-            if status == 404, isMissingModel(body) {
-                return .failed(.modelNotPulled(model: model))
-            }
-            let text = String(decoding: body, as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return .failed(.malformedResponse(detail: "HTTP \(status): \(text.prefix(300))"))
+        if let failure = statusFailure(status: status, body: body, model: model) {
+            return .failed(failure)
         }
 
         let answer: Answer
         do {
             answer = try JSONDecoder().decode(Answer.self, from: body)
         } catch {
-            let text = String(decoding: body, as: UTF8.self)
-            return .failed(.malformedResponse(
-                detail: "could not read the answer (\(error.localizedDescription)) -- body: \(text.prefix(300))"))
+            return .failed(unreadableBody(error, body))
         }
+        return verdict(
+            on: answer.message.content, doneReason: answer.doneReason, transcript: transcript)
+    }
 
-        let text = answer.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// What a non-200 status means, or nil at 200. Shared with ``OllamaS1``: both dialects are
+    /// the same server, so a missing model and a mistyped route look the same on either route.
+    static func statusFailure(status: Int, body: Data, model: String) -> OllamaFailure? {
+        guard status != 200 else { return nil }
+        // A 404 is two very different things. Ollama answers a request for a model it does
+        // not have with a JSON `error` body; it answers a request for a route it does not
+        // have with a bare `404 page not found`. Telling Louis to pull a model he already
+        // has, because the endpoint was misconfigured, is worse than saying nothing.
+        if status == 404, isMissingModel(body) {
+            return .modelNotPulled(model: model)
+        }
+        let text = String(decoding: body, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return .malformedResponse(detail: "HTTP \(status): \(text.prefix(300))")
+    }
+
+    /// The three verdicts that are about the answer's *text* rather than its transport, in the
+    /// order they have to be taken. Shared with ``OllamaS1``: what makes an answer unusable is a
+    /// property of the answer, not of the route it came back on.
+    static func verdict(
+        on content: String, doneReason: String?, transcript: String
+    ) -> OllamaOutcome {
+        let text = content.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 0 of the 263 measured refinements returned empty text, so an empty answer is a defect
         // and never a legitimate "there was nothing to clean up".
@@ -294,13 +335,20 @@ public enum OllamaChat {
         // Checked before the collapse rule: a truncated answer is long, so the two cannot both
         // fire, but the token cap is a fact reported by Ollama while the collapse is our
         // inference — the fact wins.
-        guard answer.doneReason != "length" else {
+        guard doneReason != "length" else {
             return .failed(.truncated(kept: text))
         }
         guard Double(text.count) >= refusalRatio * Double(transcript.count) else {
             return .failed(.refused(reply: text))
         }
         return .refined(text)
+    }
+
+    /// A 200 whose body is not the JSON this client knows how to read.
+    static func unreadableBody(_ error: any Error, _ body: Data) -> OllamaFailure {
+        let text = String(decoding: body, as: UTF8.self)
+        return .malformedResponse(
+            detail: "could not read the answer (\(error.localizedDescription)) -- body: \(text.prefix(300))")
     }
 
     /// Whether this 404 body is Ollama saying it does not have the model.
@@ -313,10 +361,13 @@ public enum OllamaChat {
     /// a one-command remedy was reported as "this is a bug". The caller already knows which model
     /// it asked for, so nothing needs to be parsed at all.
     private static func isMissingModel(_ body: Data) -> Bool {
-        guard let error = try? JSONDecoder().decode(ErrorAnswer.self, from: body) else {
-            return false
-        }
-        return error.error.contains("not found")
+        errorMessage(body)?.contains("not found") ?? false
+    }
+
+    /// The `error` string of an Ollama error body, or nil when the body is not one. Shared with
+    /// ``OllamaS1``, which has a second kind of error body to recognise.
+    static func errorMessage(_ body: Data) -> String? {
+        (try? JSONDecoder().decode(ErrorAnswer.self, from: body))?.error
     }
 
     private struct Answer: Decodable {

@@ -5,13 +5,17 @@ import Foundation
 /// a server running.
 ///
 /// The return type is ``OllamaOutcome`` and not `String?` on purpose. A `nil` says only "there is
-/// no refined text", and the six reasons that can be true have six different remedies for Louis;
+/// no refined text", and the seven reasons that can be true have seven different remedies for Louis;
 /// carrying the failure **in the return value** is what lets this layer say *why* he got raw text.
 /// A failure delivered out of band -- through a callback the client was built with -- reaches the
 /// log but not the code that has to decide what to insert.
 public protocol RefinementClient {
+    /// `api` travels with the call rather than being decided by the client, because it is the
+    /// mode's field: two modes pointing at the same server speak different protocols, and the
+    /// client is one object shared by all of them. See ``Mode/LLM/api``.
     func refine(
-        transcript: String, instructions: String, model: String, endpoint: URL
+        transcript: String, instructions: String, model: String, endpoint: URL,
+        api: Mode.LLM.API
     ) async -> OllamaOutcome
 }
 
@@ -22,10 +26,10 @@ public protocol RefinementClient {
 public enum RefinementNotice: Equatable, CustomStringConvertible {
     /// The refinement did not happen; the raw transcript was used instead.
     ///
-    /// The failure travels whole rather than as a message, because the six of them are six
+    /// The failure travels whole rather than as a message, because the seven of them are
     /// different actions -- start Ollama, pull a model, pick a faster model, dictate in shorter
     /// pieces, file a bug, change the instructions -- and flattening them here would undo the
-    /// only reason ``OllamaFailure`` has six cases.
+    /// only reason ``OllamaFailure`` has seven cases.
     case fellBackToTranscript(OllamaFailure)
 
     /// The model returned its input. Nothing is wrong with the text; the refiner did nothing.
@@ -111,7 +115,7 @@ public struct TranscriptRefiner {
 
         switch await client.refine(
             transcript: transcript, instructions: mode.instructions, model: mode.llm.model,
-            endpoint: endpoint
+            endpoint: endpoint, api: mode.llm.api
         ) {
         case .refined(let text):
             if Self.isUnchanged(text, from: transcript) {

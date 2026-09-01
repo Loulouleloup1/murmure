@@ -136,6 +136,89 @@ final class ModeTests: XCTestCase {
         }
     }
 
+    // MARK: - Which protocol a model speaks
+
+    /// Louis's four mode files were written before `api` existed and every one of them names a
+    /// model that speaks `/api/chat`. They have to keep working untouched, which is why the
+    /// absent field means `.chat` -- the value that changes nothing -- and never the new one.
+    func testAModeFileWrittenBeforeTheFieldExistedStillDecodesAndStillSpeaksChat() throws {
+        let mode = try JSONDecoder().decode(Mode.self, from: Data(specExampleJSON.utf8))
+
+        XCTAssertEqual(mode.llm.api, .chat)
+    }
+
+    /// The other half of the same claim: a file Murmure writes always carries the field, spelt
+    /// the way it is written by hand. A default that stayed invisible would leave Louis guessing
+    /// what a mode is doing.
+    func testAWrittenModeSaysWhichProtocolItSpeaks() throws {
+        let json = String(decoding: try ModeStore.encoder.encode(Mode.prompt), as: UTF8.self)
+
+        XCTAssertTrue(json.contains("\"api\" : \"s1\""), json)
+        XCTAssertTrue(
+            String(decoding: try ModeStore.encoder.encode(Mode.message), as: UTF8.self)
+                .contains("\"api\" : \"chat\""))
+    }
+
+    /// The switch this lot is for, stated where a reader can see all three parts of it at once:
+    /// the model, the protocol it is talked to in, and the control line that replaces prose.
+    func testTheCleanupModeShipsOnTheModelTheBenchmarkPicked() {
+        XCTAssertEqual(Mode.prompt.llm.model, "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M")
+        XCTAssertEqual(Mode.prompt.llm.api, .s1)
+        // `[Context: general]` alone. `[Styling: ...]` drops capitalisation from 96 % to 29 %.
+        XCTAssertEqual(Mode.prompt.instructions, "[Context: general]")
+
+        // The two rewriting modes stay where their evidence is: nothing measured them on a
+        // cleanup model, and a cleanup model does not follow the instructions they are made of.
+        for mode in [Mode.message, Mode.email] {
+            XCTAssertEqual(mode.llm.api, .chat, mode.key)
+            XCTAssertEqual(mode.llm.model, "gemma4:12b-it-qat", mode.key)
+        }
+    }
+
+    /// Prose on an `s1` mode is not ignored, it is *copied into the answer*: measured on the v3
+    /// probe, an instruction appended to the control line came back verbatim at the top of the
+    /// cleaned text on 1 fixture in 4. That is Louis's dictation with someone else's sentence
+    /// pasted in, and nothing downstream can tell it apart from a refinement -- so it is refused
+    /// here, and the raw transcript is inserted instead.
+    func testWrittenInstructionsOnAnS1ModeAreRefusedBecauseTheModelCopiesThemIntoTheText() {
+        let prose = "Capitalise every sentence and keep the text in French."
+        let mode = Mode.prompt.with { $0.instructions = prose }
+
+        XCTAssertThrowsError(try mode.validate()) { error in
+            XCTAssertEqual(error as? ModeValidationError, .instructionsAreNotControlFields(prose))
+        }
+        XCTAssertTrue("\(ModeValidationError.instructionsAreNotControlFields(prose))"
+            .contains("[Context: general]"), "the message does not show what to write instead")
+
+        // The same sentence on a chat mode is exactly what that dialect is for.
+        XCTAssertNoThrow(
+            try Mode.prompt.with { $0.instructions = prose; $0.llm.api = .chat }.validate())
+    }
+
+    /// The rule is "bracketed fields and whitespace, nothing else", which is the whole interface
+    /// the model has. Several fields are fine; a field with prose hanging off it is not, because
+    /// that is the exact shape the probe measured coming back inside the text.
+    func testAControlLineMayCarrySeveralFieldsButNothingOutsideTheBrackets() {
+        let accepted = ["[Context: general]", "  [Structure: prose] [Context: email]  ",
+                        "[Context: general]\n[Structure: lists]"]
+        let refused = ["[Context: general] and keep it in French", "Context: general",
+                       "[Context: general", "[]", "[Context: [general]]",
+                       // A closing bracket alone does not open a field...
+                       "Context: general]",
+                       // ...and neither does one nested inside another, even when what follows
+                       // it would parse on its own.
+                       "[a[b] [Context: general]"]
+
+        for instructions in accepted {
+            XCTAssertNoThrow(
+                try Mode.prompt.with { $0.instructions = instructions }.validate(), instructions)
+        }
+        for instructions in refused {
+            XCTAssertThrowsError(
+                try Mode.prompt.with { $0.instructions = instructions }.validate(), instructions)
+        }
+    }
+
     /// Measured on the whole 1 449-dictation corpus (lot 2 plan): `detectLanguage` re-evaluates per
     /// window and produced non-Latin transcripts. The default must not reintroduce it.
     func testEveryBuiltInPinsTheDecoderToFrench() {

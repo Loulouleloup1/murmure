@@ -7,10 +7,11 @@ private let logger = Logger(subsystem: "com.louiscourcier.Murmure", category: "r
 /// Sends one transcript to a local Ollama and returns the refined text.
 ///
 /// This type is deliberately thin. Everything worth testing — the request the model receives,
-/// the reading of what comes back, and which of the six failures an answer is — lives in
-/// `MurmureCore.OllamaChat`, because the app target has no test bundle and anything put here is
-/// unverifiable except by reading it. What is left here is the HTTP call itself and the
-/// `URLSession` configuration that carries the deadline.
+/// the reading of what comes back, which of the seven failures an answer is, and which of the two
+/// Ollama APIs a mode speaks — lives in `MurmureCore` (`OllamaCall` and the two dialects behind
+/// it), because the app target has no test bundle and anything put here is unverifiable except by
+/// reading it. What is left here is the HTTP call itself and the `URLSession` configuration that
+/// carries the deadline.
 ///
 /// Nothing about this client is stateful: no connection is kept, no model is held. Ollama keeps
 /// the model resident on its side for its own `keep_alive` window, which is why the first
@@ -50,7 +51,7 @@ final class OllamaClient: Sendable {
     /// Refines one transcript, or says why it could not.
     ///
     /// Answers `OllamaOutcome` rather than `String?` because a `nil` says only "there is no
-    /// refined text", and the six reasons that can be true have six different remedies. Spec §9
+    /// refined text", and the seven reasons that can be true have seven different remedies. Spec §9
     /// says a dictation is never lost, so `.failed` is not the end of the pipeline: the caller
     /// falls back to the raw transcript it already holds, and the failure is what lets it tell
     /// Louis *why* the text he got is the raw one.
@@ -59,14 +60,19 @@ final class OllamaClient: Sendable {
     /// spends up to two minutes of the user's time to produce nothing, and the compiler should
     /// say so.
     func refine(
-        transcript: String, instructions: String, model: String, endpoint base: URL
+        transcript: String, instructions: String, model: String, endpoint base: URL,
+        api: Mode.LLM.API
     ) async -> OllamaOutcome {
-        let url = OllamaChat.endpoint(base: base)
+        // Which URL, which body and which reading of the answer are one decision, taken in
+        // `MurmureCore` where it is tested. Nothing here knows the two dialects apart.
+        let call = OllamaCall(
+            api: api, model: model, instructions: instructions, transcript: transcript,
+            endpoint: base)
+        let url = call.url
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = OllamaChat.requestBody(
-            model: model, instructions: instructions, transcript: transcript)
+        request.httpBody = call.body
 
         let start = Date()
         let data: Data
@@ -85,9 +91,7 @@ final class OllamaClient: Sendable {
             return report(.malformedResponse(detail: "not an HTTP response"), model: model, url: url)
         }
 
-        switch OllamaChat.outcome(
-            status: http.statusCode, body: data, transcript: transcript, model: model
-        ) {
+        switch call.outcome(status: http.statusCode, body: data) {
         case .refined(let text):
             logger.info("""
                 refined \(transcript.count, privacy: .public) -> \(text.count, privacy: .public) \

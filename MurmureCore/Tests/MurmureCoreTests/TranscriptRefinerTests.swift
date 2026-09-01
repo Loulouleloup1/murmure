@@ -13,16 +13,21 @@ private final class StubClient: RefinementClient {
 
     var outcome: OllamaOutcome
     private(set) var calls: [Call] = []
+    /// Recorded beside `calls` rather than inside it, so the claims already pinned on `Call`
+    /// keep saying exactly what they said before `api` existed.
+    private(set) var apis: [Mode.LLM.API] = []
 
     init(_ outcome: OllamaOutcome) {
         self.outcome = outcome
     }
 
     func refine(
-        transcript: String, instructions: String, model: String, endpoint: URL
+        transcript: String, instructions: String, model: String, endpoint: URL,
+        api: Mode.LLM.API
     ) async -> OllamaOutcome {
         calls.append(Call(
             transcript: transcript, instructions: instructions, model: model, endpoint: endpoint))
+        apis.append(api)
         return outcome
     }
 }
@@ -31,7 +36,8 @@ private final class StubClient: RefinementClient {
 /// behaviour under test is that no call happens at all.
 private final class UnreachableClient: RefinementClient {
     func refine(
-        transcript: String, instructions: String, model: String, endpoint: URL
+        transcript: String, instructions: String, model: String, endpoint: URL,
+        api: Mode.LLM.API
     ) async -> OllamaOutcome {
         XCTFail("a mode with llm.enabled == false must not reach the client")
         return .refined("this must never be inserted")
@@ -40,12 +46,13 @@ private final class UnreachableClient: RefinementClient {
 
 private func mode(
     llm enabled: Bool, model: String = "gemma4:12b-it-qat",
-    instructions: String = "Clean this up.", endpoint: String = "http://localhost:11434"
+    instructions: String = "Clean this up.", endpoint: String = "http://localhost:11434",
+    api: Mode.LLM.API = .chat
 ) -> Mode {
     Mode(
         key: "test", name: "Test",
         stt: .init(model: "large-v3-turbo", language: "fr"),
-        llm: .init(enabled: enabled, endpoint: endpoint, model: model),
+        llm: .init(enabled: enabled, endpoint: endpoint, model: model, api: api),
         instructions: instructions,
         context: .init(selectedText: false, clipboard: false, appContext: false),
         autoActivate: [], simulateKeypresses: false)
@@ -87,6 +94,20 @@ final class TranscriptRefinerTests: XCTestCase {
         XCTAssertEqual(client.calls, [StubClient.Call(
             transcript: "euh donc voilà", instructions: "Be terse.", model: "gemma3:4b",
             endpoint: URL(string: "http://127.0.0.1:11434")!)])
+    }
+
+    /// The fifth thing the mode supplies, and the one that decides which of Ollama's two APIs the
+    /// call goes to. It travels per call and not per client: one client serves every mode, and
+    /// two modes on the same server speak different protocols.
+    func testTheModeAlsoSuppliesTheProtocolTheModelSpeaks() async {
+        let client = StubClient(.refined("Donc voilà."))
+        let refiner = TranscriptRefiner(client: client) { _ in }
+
+        _ = await refiner.refine("euh donc voilà",
+                                 with: mode(llm: true, instructions: "[Context: general]", api: .s1))
+        _ = await refiner.refine("euh donc voilà", with: mode(llm: true, api: .chat))
+
+        XCTAssertEqual(client.apis, [.s1, .chat])
     }
 
     func testASuccessfulRefinementIsSilent() async {

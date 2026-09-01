@@ -18,14 +18,56 @@ public struct Mode: Codable, Equatable {
     }
 
     public struct LLM: Codable, Equatable {
+        /// Which of Ollama's two request shapes this model is talked to in.
+        ///
+        /// A **declared** field and not a look at `model`, deliberately. `s1-mini` returns empty
+        /// content on `/api/chat` — Ollama parses its open `<think>` block — so it has to be
+        /// driven through `/api/generate` with the conversation written by hand. Deciding that
+        /// with `if model.contains("s1-mini")` would put one vendor's model id in the routing
+        /// code, and the next model that needs the same treatment would silently get the wrong
+        /// one. Here the mode file says which protocol it speaks, and the code never reads the
+        /// model name.
+        ///
+        /// The value names a **wire protocol**, not a model: a sibling release that keeps the
+        /// same conversation format is `"s1"` too, and a model that speaks neither needs a third
+        /// case rather than a special case.
+        public enum API: String, Codable {
+            /// `/api/chat`: `instructions` is the system turn, the transcript is the user turn,
+            /// and Ollama applies the model's own chat template. See ``OllamaChat``.
+            case chat
+
+            /// `/api/generate` with `raw: true`: the whole conversation is written by hand, the
+            /// system prompt is fixed by the model card, and `instructions` carries only the
+            /// control line (`[Context: general]`). See ``OllamaS1``.
+            case s1
+        }
+
         public var enabled: Bool
         public var endpoint: String
         public var model: String
+        public var api: API
 
-        public init(enabled: Bool, endpoint: String, model: String) {
+        public init(enabled: Bool, endpoint: String, model: String, api: API = .chat) {
             self.enabled = enabled
             self.endpoint = endpoint
             self.model = model
+            self.api = api
+        }
+
+        /// Decoded by hand for one field. `api` is absent from every mode file written before
+        /// `s1-mini` shipped, and every one of those files names a model that speaks `/api/chat`
+        /// — so an absent `api` means `.chat`, the value that keeps an existing file doing
+        /// exactly what it did yesterday. The synthesised decoder would refuse them outright and
+        /// Louis would lose his hand-edited modes to a field he never wrote.
+        ///
+        /// Encoding stays synthesised, so a mode Murmure writes always carries the field
+        /// explicitly: the default exists for files from before it, not as a value to leave out.
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            enabled = try container.decode(Bool.self, forKey: .enabled)
+            endpoint = try container.decode(String.self, forKey: .endpoint)
+            model = try container.decode(String.self, forKey: .model)
+            api = try container.decodeIfPresent(API.self, forKey: .api) ?? .chat
         }
     }
 
@@ -99,6 +141,7 @@ public enum ModeValidationError: Error, Equatable, CustomStringConvertible {
     case llmEndpointIsNotARoot(endpoint: String, root: String)
     case emptyLLMModel
     case emptyInstructions
+    case instructionsAreNotControlFields(String)
 
     public var description: String {
         switch self {
@@ -117,6 +160,13 @@ public enum ModeValidationError: Error, Equatable, CustomStringConvertible {
             """
         case .emptyLLMModel: "\"llm.model\" is empty while \"llm.enabled\" is true"
         case .emptyInstructions: "\"instructions\" is empty while \"llm.enabled\" is true"
+        case .instructionsAreNotControlFields(let instructions):
+            """
+            "instructions" \(instructions.prefix(60).debugDescription) is not a control line. \
+            With "api": "s1" the whole interface is bracketed fields such as "[Context: general]" \
+            — the model does not follow written instructions, it copies them into the text it \
+            gives back.
+            """
         }
     }
 }
@@ -166,7 +216,39 @@ extension Mode {
         if instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return .emptyInstructions
         }
+
+        // Prose in an `s1` mode is not merely ignored: measured on the v3 probe, a sentence
+        // appended to the control line came back **verbatim at the top of the cleaned text** on
+        // 1 of 4 fixtures. That is Louis's dictation with someone else's words pasted into it,
+        // and nothing downstream can tell it apart from a refinement. Caught here, the mode is
+        // reported as unusable and the raw transcript is inserted instead.
+        if llm.api == .s1, !Self.containsOnlyControlFields(instructions) {
+            return .instructionsAreNotControlFields(instructions)
+        }
         return nil
+    }
+
+    /// Whether `text` holds nothing but bracketed control fields — `[Context: general]`, or
+    /// several of them separated by whitespace.
+    ///
+    /// Written as a scan rather than a regex so the rule is readable in one pass: a field opens
+    /// with `[`, is not empty, holds no second `[`, closes on the first `]`, and nothing but
+    /// whitespace separates two of them. It says nothing about *which* fields exist; the model
+    /// owns that vocabulary, and a mode naming a field it does not know gets a worse refinement,
+    /// not corrupted text.
+    ///
+    /// Empty text is vacuously true, as the name says — "only control fields" and "no fields at
+    /// all" are the same claim here. The caller has already refused an empty `instructions` with
+    /// its own error, which is the one a reader needs to see.
+    private static func containsOnlyControlFields(_ text: String) -> Bool {
+        var rest = Substring(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        while !rest.isEmpty {
+            guard rest.first == "[", let close = rest.firstIndex(of: "]") else { return false }
+            let body = rest[rest.index(after: rest.startIndex)..<close]
+            guard !body.isEmpty, !body.contains("[") else { return false }
+            rest = rest[rest.index(after: close)...].drop(while: \.isWhitespace)
+        }
+        return true
     }
 
     /// Throws on the first invalid field, naming it. Called by `ModeStore.save`, so a mode that
@@ -187,36 +269,47 @@ extension Mode {
     public static let voice = Mode(
         key: "voice", name: "Voice",
         stt: .init(model: defaultSTTModel, language: defaultLanguage),
-        llm: .init(enabled: false, endpoint: defaultEndpoint, model: defaultLLMModel),
+        llm: .init(enabled: false, endpoint: defaultEndpoint, model: rewriteModel),
         instructions: "",
         context: .init(selectedText: false, clipboard: false, appContext: false),
         autoActivate: [], simulateKeypresses: false
     )
 
-    /// Light cleanup for dictating to AI harnesses. Instructions are `prompt_cleanup_A.txt`
-    /// verbatim: they are what 45 blind scores were produced against, and the plan is explicit
-    /// that editing them invalidates that evidence. `A` is the best non-few-shot variant on the
-    /// shipped model -- 3 judges out of 3 rank it above the baseline on `gemma4-12b-qat`.
+    /// Light cleanup for dictating to AI harnesses -- the mode the refiner exists for.
+    ///
+    /// Runs `s1-mini`, a 1 GB model trained for exactly this task, rather than the 8.6 GB
+    /// general-purpose model the other two use. Measured over 784 generations on 48 of Louis's
+    /// own dictations: 1.08 GB resident against 8.63, a 0.38 s median against 3.82, and the
+    /// transcript returned untouched 4 times out of 48 against 17 -- the failure that makes a
+    /// refiner pointless. The instructions are the whole difference in interface: they are the
+    /// model's control line, not prose (see ``Mode/LLM/API/s1``).
+    ///
+    /// **What the switch costs**, not hidden here because whoever edits this file is the person
+    /// who will notice it: **sentences get merged**. 9 of the 48 real dictations come back with
+    /// fewer sentences than they went in (counted on `.`/`!`/`?`), the widest a 416-word passage
+    /// going from 27 down to 22. No control field and no option moves it -- it is the one
+    /// fidelity cost of this model that has no setting behind it.
+    ///
+    /// What it does **not** cost, checked rather than assumed. This model does not turn a spoken
+    /// "slash" into `/`, where the 12 B one does; that is not a limitation here, because Louis
+    /// does not dictate paths -- the ones in the corpus arrived through his clipboard. What has
+    /// to survive is a path or identifier **already written** in the transcript, and that is
+    /// measured: `IndicatorList`, `true/false`, `~/Library/Application Support/Murmure/modes`,
+    /// `tests/unit`, `files_used` and `p90` all come back through this mode character for
+    /// character.
+    ///
+    /// A mode that needs the third of those to be right is a mode to point back at
+    /// `gemma4:12b-it-qat` with `"api": "chat"`; both are still installed and both still work.
     public static let prompt = Mode(
         key: "prompt", name: "Prompt",
         stt: .init(model: defaultSTTModel, language: defaultLanguage),
-        llm: .init(enabled: true, endpoint: defaultEndpoint, model: defaultLLMModel),
-        instructions: """
-You edit a raw speech-to-text transcript. The input is French dictation, often containing English technical terms.
-
-Your output must be reachable from the input by these three operations only:
-1. DELETE hesitations (euh, hum), meaningless fillers (alors, donc, du coup, genre, tu vois, quoi), stuttered repetitions, and abandoned false starts — keep the wording the speaker landed on.
-2. ADD punctuation, capitalisation and paragraph breaks.
-3. RENDER dictated symbols: "slash" as /, "point" as . inside a path, filename or URL.
-
-Every word you do not delete under operation 1 stays exactly as spoken: same word, same spelling, same order, same language. This covers technical terms, product names, file paths, commands, English words, numbers and proper nouns. If a better word comes to mind, keep the original one. If in doubt, do not change it.
-
-Two things go wrong on this task. Avoid both:
-- Returning the transcript unchanged. A raw dictation almost always carries at least one filler or one missing full stop; apply operations 1-3 wherever they apply.
-- Rewriting. Substituting a synonym, reordering a clause, merging two sentences or translating a term is out of scope even when it would read better.
-
-Return the edited transcript and nothing else.
-""",
+        llm: .init(enabled: true, endpoint: defaultEndpoint, model: cleanupModel, api: .s1),
+        // `[Context: general]` ALONE, and the omissions are the measured part. Adding
+        // `[Styling: ...]` -- which the model card presents as the normal way to use the model --
+        // drops sentence capitalisation from 96 % to 29 % on these same 48 dictations, and
+        // `[Styling: casual]` is the arm where the runaway repetitions of `OllamaS1.repeatPenalty`
+        // were found. Every field added here is a field to re-measure.
+        instructions: "[Context: general]",
         context: .init(selectedText: false, clipboard: false, appContext: false),
         autoActivate: [], simulateKeypresses: false
     )
@@ -225,7 +318,7 @@ Return the edited transcript and nothing else.
     public static let message = Mode(
         key: "message", name: "Message",
         stt: .init(model: defaultSTTModel, language: defaultLanguage),
-        llm: .init(enabled: true, endpoint: defaultEndpoint, model: defaultLLMModel),
+        llm: .init(enabled: true, endpoint: defaultEndpoint, model: rewriteModel),
         instructions: """
 You turn dictated text into a short Slack message. The input is a raw speech-to-text transcript in French, often mixed with English technical terms.
 
@@ -246,7 +339,7 @@ Rules:
     public static let email = Mode(
         key: "email", name: "Email",
         stt: .init(model: defaultSTTModel, language: defaultLanguage),
-        llm: .init(enabled: true, endpoint: defaultEndpoint, model: defaultLLMModel),
+        llm: .init(enabled: true, endpoint: defaultEndpoint, model: rewriteModel),
         instructions: """
 You turn dictated text into an email. The input is a raw speech-to-text transcript in French, often mixed with English technical terms.
 
@@ -275,8 +368,20 @@ Rules:
     /// which exist under `/v1`. Storing the root keeps the client from having to strip a suffix.
     private static let defaultEndpoint = "http://localhost:11434"
 
-    /// v2 benchmark winner, unanimous across 3 judges: fidelity mean 1.98 / min 1 and 0 auto-fails
-    /// against 1.52 / min 0 and 3 auto-fails for the 4.3 GB model. The tag is the Ollama model id,
-    /// not the benchmark's `gemma4-12b-qat` alias.
-    private static let defaultLLMModel = "gemma4:12b-it-qat"
+    /// The cleanup model: purpose-built for normalising speech-to-text, 1.08 GB resident, 0.38 s
+    /// median. Speaks ``LLM/API/s1`` and nothing else. The tag is the Ollama model id, not the
+    /// benchmark's `s1-mini` alias.
+    private static let cleanupModel = "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M"
+
+    /// The rewriting model, for the two modes that ask for something a cleanup model cannot do.
+    ///
+    /// `Message` and `Email` do not clean a transcript, they rewrite it from written instructions
+    /// -- and s1-mini follows no instructions at all, it copies them into its answer (v3 probe,
+    /// 1 fixture in 4). Nothing in the 784-generation benchmark measured those two tasks on it,
+    /// so they stay where their evidence is: v2 winner, unanimous across 3 judges, fidelity mean
+    /// 1.98 / min 1 and 0 auto-fails against 1.52 / min 0 and 3 auto-fails for the 4.3 GB model.
+    ///
+    /// Also the placeholder in `Voice`, whose refiner is off -- unchanged so that turning it on
+    /// by hand does what it did before.
+    private static let rewriteModel = "gemma4:12b-it-qat"
 }
