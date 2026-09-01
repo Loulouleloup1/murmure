@@ -365,13 +365,13 @@ struct NotchCardView: View {
     var body: some View {
         // The phase the card DRAWS, which is not the phase the controller is in while it retracts.
         let phase = model.displayPhase
-        let half = CGSize(
-            width: NotchCard.drawingHalfWidth(for: phase, contentWidth: model.contentWidth),
+        let piece = CGSize(
+            width: NotchCard.drawingPieceWidth(for: phase, contentWidth: model.contentWidth),
             height: Self.drawingHeight
         )
         VStack(spacing: Self.rowSpacing) {
             headline(phase)
-            drawing(phase, half: half)
+            drawing(phase, piece: piece)
         }
         .frame(width: model.contentWidth)
         // One timing for the glyph, the sentence, the tint and the width of the drawing, so a
@@ -417,38 +417,42 @@ struct NotchCardView: View {
         .frame(height: Self.headlineHeight)
     }
 
-    /// The dictation's own drawing -- the notch's, unchanged, at four times the width -- over a
-    /// glow in the phase's colour.
+    /// The dictation's own drawing -- the notch's, unchanged -- over a glow in the phase's colour.
     ///
-    /// Two `DictationPhaseView`s, mirrored across the middle, exactly as the wings were and as the
-    /// floating panel already draws them: the waveform's newest bar is the one nearest the centre
-    /// on both sides, the travelling mark leaves the middle in both directions, and past five
-    /// seconds of a refinement the mirrored half carries the elapsed counter.
-    private func drawing(_ phase: NotchPhase, half: CGSize) -> some View {
-        ZStack {
+    /// **The recording is ONE waveform across the whole row; every other phase is two mirrored
+    /// pieces.** Which it is belongs to `NotchCard.isMirroredPair(for:)`, where the reason is
+    /// written out: the waveform is the only phase whose drawing is data over time, and two
+    /// mirrored copies of a time series draw the same instant twice, against the join, with no gap
+    /// between the copies. The others mirror an ornament rather than data -- a transcription's mark
+    /// leaves the centre in both directions, a completion's fill spans the row -- and keep the pair.
+    ///
+    /// `id: \.self` on the index, so the piece that is already on screen keeps its identity when a
+    /// recording ends: piece 0 animates from the full row to a half while piece 1 fades in beside
+    /// it, rather than both being torn down and rebuilt. That transition is the one place in the
+    /// sequence where the drawing changes structure and not merely content.
+    private func drawing(_ phase: NotchPhase, piece: CGSize) -> some View {
+        let pieces = NotchCard.drawingPieces(for: phase)
+        return ZStack {
             Capsule()
                 .fill(Self.color(for: phase))
                 .frame(
-                    width: 2 * half.width + NotchCard.centreGap(for: phase) + Self.glowSpill,
+                    width: Double(pieces) * piece.width + Self.glowSpill,
                     height: Self.glowHeight)
                 .blur(radius: Self.glowBlur)
                 .opacity(Self.glowOpacity(for: phase))
-            // The seam. Both halves put the NEWEST level against the join -- that is what makes
-            // them a mirror -- so with them abutting, one level was drawn twice side by side with
-            // no gap between the copies while every other pair of bars had one, and it read as a
-            // double-width bar down the middle. `NotchCard.centreGap(for:)` opens the recording's
-            // join and leaves every other phase joined, where the two halves are one object.
-            HStack(spacing: NotchCard.centreGap(for: phase)) {
-                DictationPhaseView(
-                    phase: phase, markBegan: model.markBegan, levels: model.levels,
-                    mirrored: false, size: half)
-                DictationPhaseView(
-                    phase: phase, markBegan: model.markBegan, levels: model.levels,
-                    mirrored: true, size: half)
+            HStack(spacing: 0) {
+                ForEach(Array(0..<pieces), id: \.self) { index in
+                    DictationPhaseView(
+                        phase: phase, markBegan: model.markBegan, levels: model.levels,
+                        // The second piece is the mirrored one. A lone piece is never mirrored:
+                        // one waveform reads oldest to newest, left to right, the way every other
+                        // meter and every reading eye does.
+                        mirrored: index == 1, size: piece)
+                }
             }
         }
         // The row is the card's full width whatever the drawing inside it is doing, so a recording
-        // becoming a transcription widens the mark and never the shape.
+        // becoming a transcription changes the drawing and never the shape.
         .frame(width: model.contentWidth, height: Self.drawingHeight)
     }
 

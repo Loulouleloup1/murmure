@@ -95,61 +95,65 @@ public enum NotchCard {
     /// the middle of a card that is otherwise empty, which is what the phase means.
     public static let silentHalfFraction: Double = 0.10
 
-    /// The gap between the two mirrored halves of the recording's waveform.
+    /// Whether the phase's drawing is two mirrored pieces, or one.
     ///
-    /// **This is a bug fix wearing a constant's clothes.** The two halves each put the *newest*
-    /// sample against the join -- that is what makes them a mirror -- so with the halves abutting,
-    /// one level was drawn twice, side by side, with no gap between the two copies while every
-    /// other pair of bars had one. It read as a single double-width bar down the middle. Louis saw
-    /// it before anyone described it to him: *"j'ai l'impression que ça se chevauche un peu au
-    /// milieu."*
+    /// **The recording is one, and it is the only one.** Every phase used to be a mirrored pair,
+    /// inherited wholesale from the wings that preceded the card: two drawings on either side of
+    /// the hardware cutout, each running outward from it. On the card's drawing row there is no
+    /// cutout to run outward from, so for the waveform that structure is not a design, it is a
+    /// leftover -- and gluing the two halves together is what produced the artefact Louis saw:
+    /// *"tu as voulu garder les deux parties qui étaient à droite et à gauche du notch, et là tu
+    /// as voulu les coller ensemble... les deux barres du milieu se chevauchent. Ce qui serait
+    /// intéressant, c'est d'enlever ces deux choses distinctes pour en avoir une seule unique."*
     ///
-    /// 9 pt is **arbitrary** in its digits; what it has to be is comfortably wider than the gaps
-    /// inside the row, or it is not a seam but merely one more gap. At the card's own width the
-    /// bars sit about 4.4 pt apart, so this is a little over twice that, and a test refuses the
-    /// two ever converging.
-    public static let waveformCentreGap: Double = 9
-
-    /// The gap between the two halves, for this phase.
+    /// He is right, and the reason generalises into the rule this function encodes. **The waveform
+    /// is the only phase whose drawing is data over time.** The two halves each drew the whole
+    /// history, mirrored, so the newest level landed against the join on both sides: one instant
+    /// drawn twice, side by side, with no gap between the copies -- a double-width bar down the
+    /// middle. Mirroring *data* is duplication. Mirroring an *ornament* -- the travelling mark of a
+    /// transcription leaving the centre in both directions, the dim mark of a silence, the bar of a
+    /// completion -- is symmetry, and those keep their pair.
     ///
-    /// Only the recording has one. The travelling mark of a transcription *emerges* from the
-    /// middle and a gap there would be a place it comes from rather than a seam; the completion's
-    /// green fill and the failure's bar are single objects spanning the card, and a notch cut out
-    /// of the middle of them would read as damage.
-    public static func centreGap(for phase: NotchPhase) -> Double {
-        if case .recording = phase { waveformCentreGap } else { 0 }
+    /// This reverses what `3f36117` said when it built the card: that two mirrored halves were
+    /// right because they were "exactly as the wings were". That was the correct instinct for
+    /// continuity and the wrong answer for this surface, and it is written down here so a future
+    /// reader does not re-derive the two-half waveform from the same reasoning.
+    public static func isMirroredPair(for phase: NotchPhase) -> Bool {
+        if case .recording = phase { false } else { true }
     }
 
-    /// The width of ONE of the two mirrored halves of the dictation's drawing, in a card whose
-    /// content area is `contentWidth` wide.
+    /// How many pieces the drawing is laid out from.
+    public static func drawingPieces(for phase: NotchPhase) -> Int {
+        isMirroredPair(for: phase) ? 2 : 1
+    }
+
+    /// The width of ONE piece of the drawing -- the whole row when the phase draws a single one,
+    /// one of the two mirrored halves otherwise.
     ///
-    /// Three answers, and the ordering between them is the decision:
+    /// Four answers:
     ///
-    /// - **The recording fills the card**, minus the seam down the middle. It used to be given the
-    ///   waveform's own intrinsic width, because the bars were a fixed-width block that would
-    ///   otherwise float in the middle of whatever frame it was handed. `WaveformLayout` removed
-    ///   that constraint -- the row now fits itself to its frame -- so the frame can finally be
-    ///   the whole card, which is what Louis asked for.
-    /// - **The silence and the refinement take a fraction**, for the two reasons their own
+    /// - **The recording takes the whole row**, as one waveform. Nothing is split and nothing is
+    ///   mirrored, so there is no join to collide at.
+    /// - **The silence and the refinement take a fraction each**, for the two reasons their own
     ///   constants give.
-    /// - **Everything else takes half the card.** The sweep of a transcription, the fill of a
-    ///   completion and the bar of a failure are all drawn at the same full width, which is what
-    ///   lets the crossfade between them change what is drawn without changing where it is -- the
-    ///   same argument `NotchAppearance.mark(for:)` makes for `transcribing` and `inserting`
-    ///   sharing a family.
+    /// - **Everything else takes half the row.** The sweep of a transcription, the fill of a
+    ///   completion and the bar of a failure are all drawn at the same width, which is what lets
+    ///   the crossfade between them change what is drawn without changing where it is -- the same
+    ///   argument `NotchAppearance.mark(for:)` makes for `transcribing` and `inserting` sharing a
+    ///   family.
     ///
-    /// Together with `centreGap(for:)` this exactly accounts for the content width: two halves
-    /// plus the seam are the card, never more.
-    public static func drawingHalfWidth(for phase: NotchPhase, contentWidth: Double) -> Double {
+    /// Together with `drawingPieces(for:)` this never exceeds the content width.
+    public static func drawingPieceWidth(for phase: NotchPhase, contentWidth: Double) -> Double {
         let content = max(0, contentWidth)
-        let room = max(0, content - centreGap(for: phase))
         switch phase {
+        case .recording:
+            return content
         case .nothingHeard:
             return content * silentHalfFraction
         case .refining:
             return content * refiningHalfFraction
-        case .hidden, .recording, .transcribing, .inserting, .completed, .failed, .alert:
-            return room / 2
+        case .hidden, .transcribing, .inserting, .completed, .failed, .alert:
+            return content / 2
         }
     }
 

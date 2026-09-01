@@ -14,22 +14,22 @@ import Foundation
 ///
 /// - **A surface draws as many bars as fit, up to `maximumBars`.** The panel's 32 pt half fits six
 ///   and gets six -- unchanged, and unchanged *by construction* rather than by exception. The
-///   card's 165 pt half would fit thirty and is capped at twenty-three.
+///   card's 340 pt row would fit sixty-two and is capped at forty-six.
 /// - **The leftover width goes into the gaps.** The row therefore fills its frame exactly instead
 ///   of centring a fixed-width block in it, which is what removes the clump; and above the cap the
 ///   gaps keep growing, which is what makes a wide surface *airier* rather than merely busier.
 ///
-/// The cap is the interesting half. Without it a 165 pt frame would take thirty bars at the
+/// The cap is the interesting half. Without it a 340 pt row would take sixty-two bars at the
 /// minimum pitch and the card would be a dense hairline comb -- wider, but no more aéré than
-/// before. With it the card's gaps open to about 4.4 pt against the panel's 2.8, so the same
+/// before. With it the card's gaps open to about 4.5 pt against the panel's 2.8, so the same
 /// waveform is drawn more loosely on the surface that has room for it.
 ///
 /// **The two surfaces therefore differ, and the axis they differ on is time.** Both draw the same
 /// bars at the same 43 ms cadence -- nothing is stretched, compressed or resampled -- but the card
-/// is a wider window onto that signal, so it shows about a second of speech where the panel shows
-/// about a quarter of one. That is the right way round: a 32 pt strip cannot show a second of
-/// anything, and forcing the card down to the panel's window would mean six bars at 27 pt apiece,
-/// which is a different design and not this one.
+/// is a wider window onto that signal, so it shows about two seconds of speech where the panel
+/// shows about a quarter of one. That is the right way round: a 32 pt strip cannot show two
+/// seconds of anything, and forcing the card down to the panel's window would mean six bars at
+/// 57 pt apiece, which is a different design and not this one.
 public enum WaveformLayout {
     // MARK: - The bar itself
 
@@ -65,12 +65,22 @@ public enum WaveformLayout {
 
     /// How far back the waveform shows, at most.
     ///
-    /// **Arbitrary, and recorded as arbitrary.** Nothing measured says one second. What it has to
-    /// buy is stated: long enough that the shape of the clause just spoken is on screen rather
-    /// than an instantaneous level meter -- the six-bar wing showed 0.26 s, which is a VU needle
-    /// with steps -- and short enough that the bars still visibly march rather than crawl. It is
-    /// also what stops a very wide surface from turning into a dense comb. Tune by use.
-    public static let window: TimeInterval = 1
+    /// **Arbitrary in its digits, and fitted to one thing: the width of the card.** The cap has to
+    /// exist so a wide surface does not become a hairline comb, and it is expressed as a duration
+    /// because a bare bar count says nothing on its own -- but WHICH duration is decided by the
+    /// pitch it produces on the widest surface Murmure draws, and a test pins that pitch inside a
+    /// band rather than pinning this number.
+    ///
+    /// Two seconds puts the card's 340 pt row at 46 bars and a 7.5 pt pitch: bars plainly separate,
+    /// neither a comb nor a picket fence. It was one second while the card drew the waveform as two
+    /// mirrored 165 pt halves, where 23 bars filled each of them at that same pitch; drawing the
+    /// row as ONE waveform doubled the width a single series has to cover, so the window doubled
+    /// with it. Nothing about the recording changed -- the bars still arrive every 43 ms -- only
+    /// how many of them are on screen at once.
+    ///
+    /// It is also long enough to hold the shape of a spoken clause rather than an instantaneous
+    /// level, which the six-bar wing's 0.26 s was not. Tune by use.
+    public static let window: TimeInterval = 2
 
     /// The most bars any surface draws, and therefore the number of levels `LevelHistory` must
     /// hold (`LevelHistory.defaultCapacity`).

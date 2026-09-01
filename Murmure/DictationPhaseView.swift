@@ -135,13 +135,18 @@ struct DictationPhaseView: View {
 
     /// This half runs outward to the **right**; `false` runs outward to the left.
     ///
-    /// In the notch that is the trailing wing against the leading one, so the two are each other's
-    /// reflection across the cutout and everything moves away from the hardware. A surface that is
-    /// one piece rather than two draws the same pair side by side, and the two halves then run
-    /// outward from its centre.
+    /// It exists because the drawing used to live on either side of a hardware cutout: two wings,
+    /// each other's reflection, everything moving away from the notch. The floating panel draws
+    /// the same pair side by side, running outward from its own centre.
+    ///
+    /// **A container drawing ONE piece passes `false`**, and the notch card does exactly that for
+    /// a recording. Mirroring a waveform means drawing the same instant twice, once on each side
+    /// of the join, which is a duplication rather than a symmetry -- see
+    /// `NotchCard.isMirroredPair(for:)`. Unmirrored, the bars read oldest to newest, left to
+    /// right, the way every other meter and every reading eye does.
     ///
     /// It also carries the elapsed counter (see `breath(at:)`), so a container drawing a single
-    /// half rather than a pair wants this one.
+    /// half of a REFINEMENT rather than a pair wants `true` instead.
     let mirrored: Bool
 
     /// The container's decision, never this view's.

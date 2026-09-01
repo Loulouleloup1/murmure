@@ -4,12 +4,12 @@ import XCTest
 /// The two frames the waveform is actually drawn in, so the assertions below are about the
 /// interface Louis looks at rather than about round numbers chosen to make arithmetic tidy.
 ///
-/// The panel's half is `StatusPanelLayout.drawingWidth / 2`; the card's is what
-/// `NotchCard.drawingHalfWidth` gives a recording on the shipped card. Both are read from the
-/// production constants, so a change to either surface's size runs through these tests.
+/// The panel's half is `StatusPanelLayout.drawingWidth / 2`; the card's is the whole row, because
+/// the card draws a recording as ONE waveform. Both are read from the production constants, so a
+/// change to either surface's size runs through these tests.
 private let panelHalf = Double(StatusPanelLayout.drawingWidth) / 2
 private let cardContentWidth = NotchCard.contentWidth(forCardWidth: NotchCard.width, notchWidth: 185)
-private let cardHalf = NotchCard.drawingHalfWidth(for: .recording, contentWidth: cardContentWidth)
+private let cardRow = NotchCard.drawingPieceWidth(for: .recording, contentWidth: cardContentWidth)
 
 final class WaveformLayoutTests: XCTestCase {
     // MARK: - How many bars a frame draws
@@ -19,7 +19,7 @@ final class WaveformLayoutTests: XCTestCase {
     /// middle: "je trouve ça très resserré vers le centre, ça ne prend pas tout l'espace".
     func testAWiderFrameDrawsMoreBars() {
         XCTAssertGreaterThan(
-            WaveformLayout.barCount(inWidth: cardHalf),
+            WaveformLayout.barCount(inWidth: cardRow),
             WaveformLayout.barCount(inWidth: panelHalf))
     }
 
@@ -34,10 +34,10 @@ final class WaveformLayoutTests: XCTestCase {
     /// a dense comb.
     func testTheCountIsCappedSoAWideSurfaceGetsAirAndNotMoreBars() {
         let fittingUncapped = Int(
-            (cardHalf + WaveformLayout.minimumBarSpacing)
+            (cardRow + WaveformLayout.minimumBarSpacing)
                 / (WaveformLayout.barWidth + WaveformLayout.minimumBarSpacing))
         XCTAssertGreaterThan(fittingUncapped, WaveformLayout.maximumBars)
-        XCTAssertEqual(WaveformLayout.barCount(inWidth: cardHalf), WaveformLayout.maximumBars)
+        XCTAssertEqual(WaveformLayout.barCount(inWidth: cardRow), WaveformLayout.maximumBars)
     }
 
     /// A frame narrower than one bar is not a frame with no waveform in it, it is a blank surface.
@@ -63,7 +63,7 @@ final class WaveformLayoutTests: XCTestCase {
     /// **The line that removes the clump.** The leftover width goes into the gaps, so the row is
     /// as wide as the frame it was given instead of being a fixed-width block centred in it.
     func testTheRowFillsWhateverFrameItIsGiven() {
-        for width in [panelHalf, cardHalf, 48.0, 96.0, 120.0] {
+        for width in [panelHalf, cardRow, 48.0, 96.0, 120.0] {
             let count = WaveformLayout.barCount(inWidth: width)
             let spacing = WaveformLayout.barSpacing(inWidth: width, barCount: count)
             let drawn = Double(count) * WaveformLayout.barWidth + Double(count - 1) * spacing
@@ -75,7 +75,7 @@ final class WaveformLayoutTests: XCTestCase {
     /// plus aéré", not merely wider.
     func testTheCardsBarsSitFurtherApartThanThePanels() {
         let card = WaveformLayout.barSpacing(
-            inWidth: cardHalf, barCount: WaveformLayout.barCount(inWidth: cardHalf))
+            inWidth: cardRow, barCount: WaveformLayout.barCount(inWidth: cardRow))
         let panel = WaveformLayout.barSpacing(
             inWidth: panelHalf, barCount: WaveformLayout.barCount(inWidth: panelHalf))
         XCTAssertGreaterThan(card, panel)
@@ -126,11 +126,27 @@ final class WaveformLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(WaveformLayout.window, 0.5)
     }
 
+    /// **The number the window is really fitted to.** The cap is written as a duration, but which
+    /// duration is decided by the pitch it produces across the card's own row -- so this is the
+    /// assertion that holds, and `window` is free to move as long as it keeps holding.
+    ///
+    /// Below about 6 pt the bars close up into a comb on a row this wide; above about 10 pt they
+    /// read as a row of separate sticks rather than as a waveform. Both bounds are taste, stated
+    /// as taste; what is not taste is that four constants and the card's width have to agree for
+    /// the result to land between them.
+    func testTheCardsWaveformIsNeitherACombNorAPicketFence() {
+        let count = WaveformLayout.barCount(inWidth: cardRow)
+        let pitch = WaveformLayout.barWidth
+            + WaveformLayout.barSpacing(inWidth: cardRow, barCount: count)
+        XCTAssertGreaterThanOrEqual(pitch, 6, "the card's bars have closed into a comb")
+        XCTAssertLessThanOrEqual(pitch, 10, "the card's bars have spread into sticks")
+    }
+
     /// The card genuinely shows further back than the panel, and both draw the same bars at the
     /// same cadence -- the surfaces differ in how wide a window they open, never in scale.
     func testTheCardIsAWiderWindowOntoTheSameSignal() {
         XCTAssertGreaterThan(
-            Double(WaveformLayout.barCount(inWidth: cardHalf)) * WaveformLayout.blockDuration,
+            Double(WaveformLayout.barCount(inWidth: cardRow)) * WaveformLayout.blockDuration,
             Double(WaveformLayout.barCount(inWidth: panelHalf)) * WaveformLayout.blockDuration)
     }
 
@@ -141,7 +157,7 @@ final class WaveformLayoutTests: XCTestCase {
     /// keeps, it would draw a short row and no test of either type on its own would notice.
     func testTheHistoryHoldsEveryBarTheWidestSurfaceDraws() {
         XCTAssertGreaterThanOrEqual(
-            LevelHistory.defaultCapacity, WaveformLayout.barCount(inWidth: cardHalf))
+            LevelHistory.defaultCapacity, WaveformLayout.barCount(inWidth: cardRow))
         XCTAssertGreaterThanOrEqual(
             LevelHistory.defaultCapacity, WaveformLayout.barCount(inWidth: panelHalf))
     }
