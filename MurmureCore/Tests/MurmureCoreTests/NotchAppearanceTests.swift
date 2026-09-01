@@ -230,6 +230,96 @@ final class NotchAppearanceTests: XCTestCase {
         }
     }
 
+    /// **The degradation guarantee, and it is exact rather than close.** Half of Louis's dictations
+    /// never produce a fraction, so the no-fraction case is not a fallback -- it is the common
+    /// drawing, and it has to be the one he has been looking at all along: the mark at full
+    /// strength, travelling the whole row.
+    func testWithNoFractionTheSweepOwnsTheWholeRowAtFullStrength() {
+        let runway = NotchAppearance.sweepRunway(fill: nil)
+        XCTAssertEqual(runway.start, 0)
+        XCTAssertEqual(runway.width, 1)
+        XCTAssertEqual(NotchAppearance.sweepEmphasis(hasFill: false), 1)
+    }
+
+    /// **The complaint, as a property.** The mark used to cross the bar and run out past it, which
+    /// is why it drowned it. The two now partition the row: everything the sweep can reach starts
+    /// where the fill stops, so they cannot share a pixel at any fraction.
+    func testTheSweepAndTheFillNeverShareAPixel() {
+        for fill in stride(from: 0.0, through: 1.0, by: 0.01) {
+            let runway = NotchAppearance.sweepRunway(fill: fill)
+            XCTAssertGreaterThanOrEqual(runway.start, fill, "the sweep reaches back over the bar")
+            XCTAssertEqual(runway.start + runway.width, 1, accuracy: 1e-12, "at \(fill)")
+        }
+    }
+
+    /// The runway shrinking IS the second reading of the number, so it has to be monotonic in it:
+    /// a transcription that got further must leave less room, never the same or more.
+    func testGettingFurtherAlwaysLeavesTheSweepLessRoom() {
+        var previous = NotchAppearance.sweepRunway(fill: 0).width
+        for fill in stride(from: 0.05, through: 1.0, by: 0.05) {
+            let width = NotchAppearance.sweepRunway(fill: fill).width
+            XCTAssertLessThan(width, previous, "at \(fill)")
+            previous = width
+        }
+    }
+
+    /// Nothing left to decode is nowhere left to sweep. The view stops drawing the mark before
+    /// this, when the runway gets thinner than the mark itself, but the geometry has to reach zero
+    /// honestly rather than leave a sliver for a mark to sit in after the work is done.
+    func testAFinishedTranscriptionLeavesTheSweepNoRoomAtAll() {
+        XCTAssertEqual(NotchAppearance.sweepRunway(fill: 1).width, 0)
+    }
+
+    /// `progressFill` cannot hand it anything outside 0…1, but this is public geometry and a
+    /// runway that started off the end of the row would put the mark outside the surface.
+    func testTheRunwayStaysInsideTheRowWhateverItIsHanded() {
+        for fill in [-5.0, -0.01, 1.01, 5.0] {
+            let runway = NotchAppearance.sweepRunway(fill: fill)
+            XCTAssertGreaterThanOrEqual(runway.start, 0, "at \(fill)")
+            XCTAssertLessThanOrEqual(runway.start + runway.width, 1, "at \(fill)")
+            XCTAssertGreaterThanOrEqual(runway.width, 0, "at \(fill)")
+        }
+    }
+
+    /// **A mark thinner than it is thick is a dot, so it is not drawn.** The guard is on the mark
+    /// and not on the runway it lives in, which is the distinction that bites: at 94 % decoded the
+    /// panel's runway is 3.8 pt -- roomy against a 3 pt line -- while the mark inside it is 1.2 pt.
+    func testTheSweepIsDroppedWhenTheMarkItselfWouldCollapseToADot() {
+        let thickness = WaveformLayout.minimumBarWidth
+        // The panel at 94 %: a runway wider than the line, holding a mark narrower than it.
+        XCTAssertGreaterThan(3.8, thickness, "the runway alone would have allowed it")
+        XCTAssertFalse(NotchAppearance.drawsSweep(runwayWidth: 3.8, markThickness: thickness))
+        // The card at the same fraction has room for a real one.
+        XCTAssertTrue(NotchAppearance.drawsSweep(runwayWidth: 20.4, markThickness: thickness))
+    }
+
+    /// It draws exactly while the mark clears the line weight, at any width either surface can
+    /// hand it -- the boundary is the mark's own thickness and nothing else.
+    func testTheSweepIsDrawnExactlyWhileItsMarkClearsTheLineWeight() {
+        let thickness = WaveformLayout.minimumBarWidth
+        for runway in stride(from: 0.0, through: 400.0, by: 0.1) {
+            XCTAssertEqual(
+                NotchAppearance.drawsSweep(runwayWidth: runway, markThickness: thickness),
+                runway * NotchAppearance.markWidth >= thickness,
+                "at \(runway) pt")
+        }
+    }
+
+    /// **The emphasis inverts, and the order is the decision.** Once a number exists it is the
+    /// answer, and the thing that answers "is it alive" has to stop being the brightest object in
+    /// the row -- that was the whole of Louis's complaint. The digits are arbitrary; that the fill
+    /// wins and the sweep survives is not.
+    func testTheFillIsTheLouderElementButNeverSilencesTheSweep() {
+        let beside = NotchAppearance.sweepEmphasis(hasFill: true)
+        XCTAssertLessThan(beside, NotchAppearance.fillEmphasis, "the sweep must not out-shout it")
+        XCTAssertGreaterThan(
+            beside, 0,
+            "a still bar with nothing moving anywhere is indistinguishable from a stalled one")
+        XCTAssertLessThan(
+            beside, NotchAppearance.sweepEmphasis(hasFill: false),
+            "the sweep has to step back when it stops being the message")
+    }
+
     /// The settle has to finish before the next measurement can land, or the bar lags the truth by
     /// a growing amount. 0.66 s is the shortest gap between two real updates, measured.
     func testTheFillSettlesFasterThanMeasurementsArrive() {

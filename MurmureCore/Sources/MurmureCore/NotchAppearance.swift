@@ -228,6 +228,85 @@ public enum NotchAppearance {
         return progress.fraction
     }
 
+    /// The stretch of the row the sweep is allowed to run in, as fractions of the row.
+    ///
+    /// **The fix to the complaint the additive drawing earned.** The fill and the sweep shared the
+    /// whole row: the mark crossed the filled part, carried on past it and ran out the far end,
+    /// brighter than the bar and the only thing moving. Louis: *"l'animation qu'on voit beaucoup
+    /// mieux passe par-dessus, donc on a un peu du mal à voir comment ça se fait."* Two things in
+    /// one row, and the louder one won.
+    ///
+    /// So they stop sharing it. The fill owns `[0, f]` and the sweep is confined to `[f, 1]` --
+    /// the part that has NOT been decoded yet, which is the only part where anything is still
+    /// happening. They never overlap a pixel, so neither can drown the other, and the boundary
+    /// between them is a single edge the eye can follow.
+    ///
+    /// **The confinement is itself a second reading of the same number**, which is what makes this
+    /// one object rather than two placed apart: as the fraction rises the sweep's runway shrinks
+    /// and its mark shortens with it, so a nearly-finished transcription is a long bright bar with
+    /// a small quick thing working at its end. Nothing needs to be read off; the geometry says it.
+    ///
+    /// **It degrades exactly, not approximately.** With no fraction the runway is the whole row and
+    /// the mark is `markWidth` of it, which is the drawing to the point of the pixel that a short
+    /// dictation has always shown. Half of Louis's dictations never leave that case.
+    ///
+    /// Rejected, in order of how close they came:
+    ///
+    /// - **The sweep inside the FILLED part.** The mirror of this, and it fails the short case: with
+    ///   no fraction there is no filled part, so there would be nowhere to sweep and the common
+    ///   dictation would draw nothing at all. Its motion would also grow as the work finished,
+    ///   which is the wrong way round.
+    /// - **Dropping the sweep entirely once a fraction exists**, leaving a pulsing leading edge. It
+    ///   reads well, but it makes the first measurement a change of drawing rather than an addition
+    ///   to one -- and the additive structure is the thing that keeps the boundary between the two
+    ///   regimes from being a glitch.
+    /// - **Just making the fill brighter.** It was the previous answer's mistake in a louder voice:
+    ///   two things still overlapping in one row, one of them still the only one moving.
+    public static func sweepRunway(fill: Double?) -> (start: Double, width: Double) {
+        guard let fill else { return (0, 1) }
+        let done = min(max(fill, 0), 1)
+        return (done, 1 - done)
+    }
+
+    /// Whether there is still room to draw the sweep at all, given the runway and how thick the
+    /// surface draws its marks.
+    ///
+    /// **The mark, not the runway, is what has to fit.** A capsule narrower than it is tall is not
+    /// a short mark, it is a dot -- and a dot parked against the end of the bar reads as a defect
+    /// rather than as the last of the work. Since the mark is `markWidth` of the runway, the runway
+    /// can still look roomy while the mark inside it has already collapsed: measured on the
+    /// shipped surfaces at 94 % decoded, the card's mark is 6.1 pt and the panel's is 1.2 pt in a
+    /// 3.8 pt runway. Guarding the runway would have let the panel draw that dot.
+    ///
+    /// It is here rather than in either view because it is the panel that hits it first, and a
+    /// rule that fires on one surface and not the other has to be one rule.
+    public static func drawsSweep(runwayWidth: Double, markThickness: Double) -> Bool {
+        runwayWidth * markWidth >= markThickness
+    }
+
+    /// How loud the sweep is, against `fillEmphasis`, 0…1 of whatever ink the surface draws with.
+    ///
+    /// **The emphasis inverts the moment there is a number.** Alone, the sweep is the whole message
+    /// -- *something is still happening* -- and it is drawn at full strength. Beside a fill it is
+    /// answering a question the fill has already answered better, so it steps back and lets the bar
+    /// carry the row. It does not step back to nothing: between two measurements the bar is still,
+    /// and a still bar with nothing moving anywhere is indistinguishable from a stalled one.
+    ///
+    /// **Arbitrary in its digits**, ordered on purpose, and the order is what the tests pin: full
+    /// when alone, below the fill when beside it, never zero.
+    public static func sweepEmphasis(hasFill: Bool) -> Double {
+        hasFill ? sweepEmphasisBesideFill : sweepEmphasisAlone
+    }
+
+    /// The sweep alone, with no fraction to defer to. Full strength: it is the entire message.
+    public static let sweepEmphasisAlone: Double = 1
+
+    /// The sweep beside a fill. Quiet enough to be background, bright enough to be seen moving.
+    public static let sweepEmphasisBesideFill: Double = 0.45
+
+    /// The decoded bar. The loud element whenever it exists, because it is the answer.
+    public static let fillEmphasis: Double = 1
+
     /// How long the fill takes to travel from one measurement to the next.
     ///
     /// **Arbitrary in its digit, bounded by a measured one.** The bar advances in visible jumps --

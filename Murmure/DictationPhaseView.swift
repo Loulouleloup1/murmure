@@ -44,14 +44,10 @@ struct DictationPhaseView: View {
     /// is the only phase that is a result rather than a progress report.
     static let fillHeight: CGFloat = 7
 
-    /// How bright the decoded-so-far bar is, against the 0.9 of the mark sweeping over it.
-    ///
-    /// **Arbitrary in its digit, ordered on purpose.** It has to stay below the sweep's, or the
-    /// mark vanishes into the region it has already crossed and the drawing stops saying that
-    /// anything is still happening -- which is the one thing it has to say on the dictations where
-    /// the fill barely moves. Dimmer, the two read as what they are: a quiet record of ground
-    /// covered, and a bright thing still moving over it.
-    static let progressFillOpacity: Double = 0.5
+    /// The ink every mark is drawn in. `NotchAppearance`'s emphases are fractions of this, so the
+    /// relative weight of the sweep and the fill is one decision in one place and this is only how
+    /// white the surface's white is.
+    static let markInk: Double = 0.9
 
 
     /// How often the waveform samples the level box. It is a PULL -- nothing about the audio
@@ -258,12 +254,20 @@ struct DictationPhaseView: View {
     /// The transcription -- and the insertion behind it: a mark crossing the row from left to
     /// right, over and over, with the audio already decoded filling in behind it.
     ///
-    /// **Two layers, and only the lower one is ever absent.** The sweep runs from the first frame
-    /// of the phase to the last whatever the decoder reports, so it is what a short dictation
-    /// draws, unchanged, for the half-second it lasts. The fill appears underneath it only once
-    /// something has genuinely been measured -- `NotchAppearance.progressFill(for:progress:)` owns
-    /// that rule and the reasoning behind it. There is no moment where one drawing is swapped for
-    /// another, which is what stops the boundary between the two regimes being a glitch.
+    /// **The row is divided at the fraction, and the two halves do different jobs.** Left of it is
+    /// what has been decoded, drawn as a bar. Right of it is what has not, and that is the only
+    /// stretch the sweep is allowed into -- so the mark never crosses the bar, never runs out past
+    /// it, and the two cannot compete for a pixel. `NotchAppearance.sweepRunway(fill:)` owns that
+    /// division and `sweepEmphasis(hasFill:)` owns which of the two is the loud one.
+    ///
+    /// **With no fraction the runway is the whole row and the sweep is at full strength**, which is
+    /// the drawing a short dictation has always shown, unchanged to the point. Everything below is
+    /// therefore one drawing with a boundary that may or may not be at zero, not two designs with a
+    /// switch between them.
+    ///
+    /// The sweep is laid out in the runway's own coordinates -- its length is `markWidth` of the
+    /// RUNWAY, not of the row -- so as the fraction rises the mark shortens and quickens inside a
+    /// shrinking stretch. That is the geometry doing a second, wordless reading of the same number.
     ///
     /// `mirrored` is deliberately not read here. A travelling mark is never a mirrored pair any
     /// more (`NotchAppearance.isMirrored(_:)`), so there is no second half whose reflection this
@@ -272,24 +276,37 @@ struct DictationPhaseView: View {
     private func travellingMark(at date: Date) -> some View {
         let distance = NotchAppearance.markDistanceAlong(elapsed: date.timeIntervalSince(markBegan))
         let fill = NotchAppearance.progressFill(for: .travelling, progress: progress.current())
+        let runway = NotchAppearance.sweepRunway(fill: fill)
+        let runwayWidth = size.width * runway.width
         return ZStack(alignment: .leading) {
             if let fill {
                 Capsule()
-                    .fill(.white.opacity(Self.progressFillOpacity))
+                    .fill(.white.opacity(Self.markInk * NotchAppearance.fillEmphasis))
                     // Never narrower than it is tall, for the reason a bar is never shorter than
                     // it is wide: below that a capsule stops being a short bar and becomes a dot.
                     .frame(
                         width: max(Self.markHeight, size.width * fill), height: Self.markHeight)
-                    .animation(.easeOut(duration: NotchAppearance.progressSettle), value: fill)
             }
-            Capsule()
-                .fill(.white.opacity(0.9))
-                .frame(width: size.width * NotchAppearance.markWidth, height: Self.markHeight)
-                .offset(x: size.width * (distance - 0.5))
-                .frame(width: size.width, height: size.height)
-                .mask(Self.edgeFade)
+            // Dropped rather than drawn in a sliver, once the MARK -- not the runway it is a
+            // fraction of -- would be narrower than it is thick. See `drawsSweep`: the panel
+            // reaches that point while its runway still looks roomy.
+            if NotchAppearance.drawsSweep(
+                runwayWidth: runwayWidth, markThickness: Double(Self.markHeight)) {
+                Capsule()
+                    .fill(.white.opacity(
+                        Self.markInk * NotchAppearance.sweepEmphasis(hasFill: fill != nil)))
+                    .frame(
+                        width: runwayWidth * NotchAppearance.markWidth, height: Self.markHeight)
+                    .offset(x: runwayWidth * (distance - 0.5))
+                    .frame(width: runwayWidth, height: size.height)
+                    .mask(Self.edgeFade)
+                    .offset(x: size.width * runway.start)
+            }
         }
         .frame(width: size.width, height: size.height)
+        // One animation over both, so the bar growing and the runway retreating are a single
+        // coordinated move at each measurement rather than two things happening near each other.
+        .animation(.easeOut(duration: NotchAppearance.progressSettle), value: fill)
     }
 
     /// The refinement: a bar breathing in the accent, and past the fifth second a counter in its
