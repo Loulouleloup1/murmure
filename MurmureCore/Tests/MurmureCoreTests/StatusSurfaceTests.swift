@@ -41,6 +41,153 @@ final class StatusSurfaceTests: XCTestCase {
         XCTAssertEqual(StatusSurfaceChoice.surface(on: chosen), .panel)
     }
 
+    // MARK: - The one decision both surfaces are given
+
+    /// **Defect 1, stated as a test.** Louis dictates into a window on the external display while
+    /// the app window is up on the laptop, and both surfaces light up: the notch card grows on the
+    /// built-in display and the floating strip opens on the external one, saying the same thing.
+    ///
+    /// The mechanism is that the choice was made twice. `NotchController` resolved its display
+    /// from `NSScreen.main`, which -- measured on this machine, for a process with no key window,
+    /// while the frontmost application and the pointer were both on the external display --
+    /// returns the built-in notched display, i.e. `screens[0]`. `StatusPanelController` resolved
+    /// its own from the ranked signals and got the external one. Each then asked "does MY display
+    /// suit MY surface", and both answers were yes.
+    ///
+    /// One route cannot say that. The display Louis is dictating into is the external one, so the
+    /// surface is the strip, and the notch is refused by the same value.
+    func testTheStatusFollowsTheWindowBeingDictatedIntoAndNotTheDisplayHoldingTheMenuBar() {
+        let route = StatusSurfaceChoice.route(
+            among: [laptop, external],
+            focusedWindow: window(on: external),
+            mouseLocation: CGPoint(x: 2000, y: 700)
+        )
+        XCTAssertEqual(route, StatusRoute(screenIndex: 1, surface: .panel))
+    }
+
+    /// The same decision on the other display, so the test above cannot be passed by a function
+    /// that has simply stopped believing in the notch.
+    func testADictationIntoAWindowOnTheLaptopStillGrowsTheNotch() {
+        let route = StatusSurfaceChoice.route(
+            among: [laptop, external],
+            focusedWindow: window(on: laptop),
+            mouseLocation: CGPoint(x: 2000, y: 700)
+        )
+        XCTAssertEqual(route, StatusRoute(screenIndex: 0, surface: .notch))
+    }
+
+    /// **The structural claim, over every signal this arrangement can produce.** Whatever is
+    /// focused and wherever the pointer is, the route names one display and the surface that
+    /// display can actually show -- so exactly one of the two surfaces is ever told to draw, and
+    /// the "both at once" of defect 1 and the "neither at all" of defect 2 are the same
+    /// impossibility.
+    func testTheRoutesSurfaceIsAlwaysTheOneItsOwnDisplayCanShow() {
+        let screens = [laptop, external]
+        let windows: [CGRect?] = [
+            nil, window(on: laptop), window(on: external),
+            CGRect(x: -5000, y: -5000, width: 100, height: 100),
+        ]
+        let mice: [CGPoint?] = [
+            nil, CGPoint(x: 400, y: 400), CGPoint(x: 2000, y: 700),
+            CGPoint(x: -5000, y: -5000),
+        ]
+        for focused in windows {
+            for mouse in mice {
+                let route = StatusSurfaceChoice.route(
+                    among: screens, focusedWindow: focused, mouseLocation: mouse)
+                guard let route else {
+                    return XCTFail("two displays are attached; there is always a route")
+                }
+                XCTAssertTrue(screens.indices.contains(route.screenIndex))
+                XCTAssertEqual(
+                    route.surface, StatusSurfaceChoice.surface(on: screens[route.screenIndex]),
+                    "focused \(String(describing: focused)), mouse \(String(describing: mouse))")
+            }
+        }
+    }
+
+    func testNoScreensAtAllHasNoRoute() {
+        XCTAssertNil(StatusSurfaceChoice.route(
+            among: [], focusedWindow: nil, mouseLocation: CGPoint(x: 0, y: 0)))
+    }
+
+    // MARK: - How long a route is held
+
+    /// A dictation resolves its display once, at the press, and nothing moves it afterwards: the
+    /// pointer travelling to the other screen mid-sentence must not take the strip with it.
+    func testEveryPhaseOfADictationKeepsTheDisplayThePressResolved() {
+        let held = StatusRoute(screenIndex: 1, surface: .panel)
+        let elsewhere = StatusRoute(screenIndex: 0, surface: .notch)
+        for phase in [
+            NotchPhase.transcribing, .refining, .inserting,
+            .completed(insertedCharacters: 12), .nothingHeard,
+            .failed(message: "no", recoveredText: nil), .alert(message: "no"),
+        ] {
+            XCTAssertEqual(
+                StatusSurfaceChoice.route(for: phase, held: held, resolved: elsewhere), held,
+                "\(phase) moved the surface mid-dictation")
+        }
+    }
+
+    /// The next press re-resolves, so plugging a display in between two dictations needs nothing
+    /// switched.
+    func testAFreshRecordingResolvesItsOwnDisplay() {
+        let stale = StatusRoute(screenIndex: 0, surface: .notch)
+        let fresh = StatusRoute(screenIndex: 1, surface: .panel)
+        XCTAssertEqual(
+            StatusSurfaceChoice.route(for: .recording, held: stale, resolved: fresh), fresh)
+    }
+
+    /// **Defect 2's half of the mechanism.** A held display must not outlive the dictation that
+    /// resolved it. It did in the shipped panel -- `hide()` had already put the model in `.hidden`,
+    /// so the `.hidden` phase that clears the hold was swallowed by the guard above it -- and the
+    /// consequence is precise: the next thing to reach a surface WITHOUT a `.recording` in front
+    /// of it, which is exactly the ⌥Space refused because Murmure is in front, was pinned to the
+    /// display of a dictation that had already ended.
+    func testAHeldDisplayDoesNotOutliveTheDictationThatResolvedIt() {
+        XCTAssertNil(StatusSurfaceChoice.route(
+            for: .hidden,
+            held: StatusRoute(screenIndex: 0, surface: .notch),
+            resolved: StatusRoute(screenIndex: 1, surface: .panel)))
+    }
+
+    /// A phase arriving with no dictation behind it -- the refusal above, an alert at launch --
+    /// resolves a display of its own rather than saying nothing.
+    func testAPhaseWithNoDictationBehindItResolvesItsOwnDisplay() {
+        let fresh = StatusRoute(screenIndex: 1, surface: .panel)
+        XCTAssertEqual(
+            StatusSurfaceChoice.route(
+                for: .failed(message: "Murmure is in front", recoveredText: nil),
+                held: nil, resolved: fresh),
+            fresh)
+    }
+
+    /// A dictation that succeeds emits `.completed` and `.idle` together, and both draw the
+    /// `.completed` phase -- so the hold must survive the first and die on the second, or the
+    /// flash Louis is looking at is re-placed halfway through and handed to the other surface.
+    func testACompletionKeepsItsDisplayAndTheIdleBehindItReleasesIt() {
+        XCTAssertTrue(StatusSurfaceChoice.routeOutlives(.completed(insertedCharacters: 12)))
+        XCTAssertFalse(StatusSurfaceChoice.routeOutlives(.idle))
+    }
+
+    /// Every phase of a running dictation keeps it, so nothing re-resolves under a shape that is
+    /// on screen.
+    func testARunningDictationKeepsItsDisplay() {
+        XCTAssertTrue(StatusSurfaceChoice.routeOutlives(.recording))
+        XCTAssertTrue(StatusSurfaceChoice.routeOutlives(.transcribing))
+        XCTAssertTrue(StatusSurfaceChoice.routeOutlives(.refining))
+        XCTAssertTrue(StatusSurfaceChoice.routeOutlives(.inserting))
+    }
+
+    /// **Defect 2, at the state level.** A ⌥Space refused because Murmure is in front produces a
+    /// `.failed` with no `.recording` before it and nothing after it. A hold kept there would
+    /// place every later refusal on the display of the first one -- which is how the shipped panel
+    /// came to hide a message on a screen Louis was not looking at.
+    func testAFailureReleasesTheDisplayItWasShownOn() {
+        XCTAssertFalse(
+            StatusSurfaceChoice.routeOutlives(.failed(message: "in front", recoveredText: nil)))
+    }
+
     // MARK: - Which display
 
     /// The ranking, at the one place it can be seen: the two best signals disagree.

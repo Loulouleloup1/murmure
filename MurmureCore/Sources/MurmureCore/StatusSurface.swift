@@ -40,6 +40,34 @@ public enum StatusSurface: Equatable, Sendable {
     case panel
 }
 
+/// The whole of a dictation's status placement: one display, and therefore one surface.
+///
+/// **A single value rather than two answers, and that is the fix rather than a tidying.** Murmure
+/// used to ask the question twice -- `NotchController` resolved a display from `NSScreen.main` and
+/// drew if it had a cutout, `StatusPanelController` resolved one from the ranked signals below and
+/// drew if it had none -- and the two agreeing was a coincidence, not a guarantee. When they
+/// disagreed both drew (a notch on the laptop *and* a strip on the external display, saying the
+/// same thing) or neither did (a refusal nobody ever saw). Both are unrepresentable here: a route
+/// names exactly one display and its `surface` is the one that display can show, so the other
+/// surface is told not to draw by the same value that tells the first one to.
+///
+/// The display is an INDEX into the array the caller handed in, not a `ScreenGeometry`. The app
+/// needs the `NSScreen` back -- DynamicNotchKit expands on one, and the cutout's width is read off
+/// it -- and an index is the one way to return it without `MurmureCore` knowing what an `NSScreen`
+/// is.
+public struct StatusRoute: Equatable, Sendable {
+    /// Which of the screens handed in. Always a valid index into that array.
+    public let screenIndex: Int
+
+    /// The surface that display can show, i.e. `StatusSurfaceChoice.surface(on:)` of it.
+    public let surface: StatusSurface
+
+    public init(screenIndex: Int, surface: StatusSurface) {
+        self.screenIndex = screenIndex
+        self.surface = surface
+    }
+}
+
 /// Which display the status is shown on, which surface it uses there, and where on it.
 ///
 /// The three decisions the floating panel needs and the app target cannot prove. Everything here
@@ -57,6 +85,87 @@ public enum StatusSurfaceChoice {
     /// this task exists to fix. A cutout can only be grown on the display that has the cutout.
     public static func surface(on screen: ScreenGeometry) -> StatusSurface {
         screen.hasNotch ? .notch : .panel
+    }
+
+    // MARK: - The one decision both surfaces are given
+
+    /// Which display the status goes on, and therefore which surface draws it.
+    ///
+    /// **The whole fix is that this is ONE function.** Murmure asked the question twice and got
+    /// two answers: `NotchController` resolved a display from `NSScreen.main` and grew the cutout
+    /// if it had one, `StatusPanelController` resolved its own from the signals below and opened
+    /// the strip if it had none. Nothing made those agree. On Louis's machine they systematically
+    /// do not: `NSScreen.main`, measured for a process with no key window while the frontmost
+    /// application and the pointer are both on the external display, is the built-in NOTCHED
+    /// display -- so the notch grew on the laptop for every dictation he ran on the external one,
+    /// where the strip was already open. Two surfaces saying the same thing, which is one of them
+    /// being wrong.
+    ///
+    /// `NSScreen.main` is not among the signals here and never was among `screen(among:)`'s, for
+    /// the reason written there: its documented meaning is "the screen containing the window with
+    /// the keyboard focus", which for an app that spends its life without one is a sentence about
+    /// somebody else's window -- and what it answers instead, measured, is the display holding the
+    /// menu bar. That is a fact about the Mac's arrangement, not about where Louis is looking.
+    ///
+    /// Nil only when there are no screens at all.
+    public static func route(
+        among screens: [ScreenGeometry], focusedWindow: CGRect?, mouseLocation: CGPoint?
+    ) -> StatusRoute? {
+        guard let chosen = screen(
+            among: screens, focusedWindow: focusedWindow, mouseLocation: mouseLocation),
+            let index = screens.firstIndex(of: chosen)
+        else { return nil }
+        return StatusRoute(screenIndex: index, surface: surface(on: chosen))
+    }
+
+    /// The route to use for this phase, given the one the dictation in progress is holding.
+    ///
+    /// Three rules, and each of them was a line of `NotchController` and a line of
+    /// `StatusPanelController` that had to stay in step by hand:
+    ///
+    /// 1. **A phase with no shape releases the hold.** The dictation is over; the next thing to
+    ///    arrive resolves a display of its own. The shipped panel could not do this -- `hide()`
+    ///    had already put its model in `.hidden`, so the `.hidden` phase that clears the hold was
+    ///    swallowed by the `phase != model.phase` guard above it, and the display of a dictation
+    ///    that had ended stayed pinned. The consequence was exact: the next phase to arrive with
+    ///    no `.recording` in front of it -- which is precisely the ⌥Space refused because Murmure
+    ///    is in front -- was placed on that stale display and the strip hid itself there.
+    /// 2. **A recording resolves afresh.** So a monitor plugged in between two dictations needs
+    ///    nothing switched.
+    /// 3. **Everything else keeps what the press resolved.** Nothing moves the surface
+    ///    mid-dictation: the pointer travelling to the other screen while Louis speaks must not
+    ///    take the strip with it. A phase arriving with nothing held -- a refusal, an alert at
+    ///    launch -- takes the freshly resolved one rather than saying nothing at all.
+    ///
+    /// The caller stores the result as the new hold, so those three rules are the hold's whole
+    /// life and there is exactly one of it.
+    public static func route(
+        for phase: NotchPhase, held: StatusRoute?, resolved: StatusRoute?
+    ) -> StatusRoute? {
+        guard NotchAppearance.showsShape(in: phase) else { return nil }
+        if case .recording = phase { return resolved }
+        return held ?? resolved
+    }
+
+    /// Whether the display a dictation resolved outlives this state.
+    ///
+    /// **The hold has to be released by something, and the phase alone cannot do it.** A dictation
+    /// that succeeds emits `.completed` and then `.idle` in the same breath, and both map to the
+    /// `.completed` PHASE -- so a release keyed on the phase would either never fire (the notch's
+    /// `.hidden` arrives only from a cancel) or fire between those two, re-resolving a display
+    /// under a flash that is already on screen and handing it to the other surface. Keyed on the
+    /// state, `.completed` still carries the hold and the `.idle` behind it drops it.
+    ///
+    /// `.failed` drops it too, and it is the reason this exists: a ⌥Space refused because Murmure
+    /// is in front produces a `.failed` with no `.recording` in front of it and no state after it,
+    /// so a hold kept there would place the NEXT refusal on the display of the last one.
+    ///
+    /// Written without a `default`, so a state added later has to say which it is.
+    public static func routeOutlives(_ state: DictationSession.State) -> Bool {
+        switch state {
+        case .recording, .transcribing, .refining, .inserting, .completed: true
+        case .idle, .failed: false
+        }
     }
 
     // MARK: - Which display

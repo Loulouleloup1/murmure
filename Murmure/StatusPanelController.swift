@@ -1,8 +1,6 @@
 import AppKit
-import ApplicationServices
 import MurmureCore
 import SwiftUI
-import os
 
 /// The dictation status on a display that has no notch to grow.
 ///
@@ -39,20 +37,6 @@ final class StatusPanelController {
 
     private let model: StatusPanelModel
     private var panel: MurmureStatusPanel?
-    private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "status-panel")
-
-    /// The state the session was in before the one being handled. `NotchPresenter.phase` needs it
-    /// because `DictationSession` emits `.completed` and `.idle` in the same breath: without it
-    /// the panel would close in the instant it was told the dictation succeeded.
-    private var previousState: DictationSession.State = .idle
-
-    /// The display the dictation in progress is drawn on, resolved once when its recording starts.
-    ///
-    /// Resolved once and then read, never re-derived: the signals below are a moving pointer and a
-    /// focused window, and both change during a dictation. A panel that re-asked would hop to
-    /// another display mid-sentence, which is worse than being on the wrong one -- Louis would be
-    /// watching the place it just left.
-    private var dictationScreen: ScreenGeometry?
 
     /// Closes the panel once a completion or a failure has been on screen long enough. Cancelled
     /// by the next phase, so a dictation started during a flash never has its panel closed by the
@@ -67,52 +51,22 @@ final class StatusPanelController {
         model = StatusPanelModel(levels: levels, progress: progress)
     }
 
-    /// The session changed state. The only entry point.
-    func apply(_ state: DictationSession.State) {
-        let phase = NotchPresenter.phase(previous: previousState, current: state)
-        previousState = state
-        show(phase)
+    /// The only entry point. `StatusRouter` has already decided which display the status goes on
+    /// and therefore which of the two surfaces shows it; a nil `panelScreen` is it saying the
+    /// notch has this one. See `NotchController.apply(_:)`.
+    func apply(_ placement: StatusPlacement) {
+        show(placement.phase, on: placement.panelScreen)
     }
 
-    /// A problem with Murmure itself, on the surface a dictation would otherwise be using. The
-    /// notch's twin -- see `NotchController.raise(_:)` for why a dictation always outranks it and
-    /// why this notice still leaves on a timer.
-    func raise(_ alert: AppAlert) {
-        show(FailureSurface.transient(dictation: model.phase, alert: alert))
-    }
-
-    private func show(_ phase: NotchPhase) {
+    private func show(_ phase: NotchPhase, on screen: ScreenGeometry?) {
         guard phase != model.phase else { return }
         retraction?.cancel()
         retraction = nil
 
-        guard NotchAppearance.showsShape(in: phase) else {
-            dictationScreen = nil
-            hide()
-            return
-        }
-
-        // A phase with no dictation behind it -- a microphone that refused to start, so there was
-        // never a `.recording` -- resolves a display of its own rather than saying nothing.
-        let screen: ScreenGeometry
-        if case .recording = phase {
-            guard let resolved = resolveScreen() else {
-                log.error("no screen available -- the dictation runs, the panel does not appear")
-                return
-            }
-            screen = resolved
-            dictationScreen = resolved
-        } else if let held = dictationScreen {
-            screen = held
-        } else {
-            guard let resolved = resolveScreen() else { return }
-            screen = resolved
-            dictationScreen = resolved
-        }
-
-        // The display has a cutout, so the notch is the surface there and this panel is not. Not a
-        // preference: two surfaces saying the same thing at once is one of them being wrong.
-        guard StatusSurfaceChoice.surface(on: screen) == .panel else {
+        // Nothing to draw, or the display the router chose has a cutout and the notch is the
+        // surface there. Not a preference: two surfaces saying the same thing at once is one of
+        // them being wrong, and one route is what makes that impossible rather than unintended.
+        guard NotchAppearance.showsShape(in: phase), let screen else {
             hide()
             return
         }
@@ -127,7 +81,7 @@ final class StatusPanelController {
         retraction = Task { [weak self] in
             try? await Task.sleep(for: .seconds(dwell))
             guard !Task.isCancelled else { return }
-            self?.show(.hidden)
+            self?.show(.hidden, on: nil)
         }
     }
 
@@ -160,92 +114,6 @@ final class StatusPanelController {
         let panel = MurmureStatusPanel(contentRect: CGRect(origin: .zero, size: Self.size))
         panel.contentView = NSHostingView(rootView: StatusPanelView(model: model))
         return panel
-    }
-
-    // MARK: - Which display
-
-    /// The display to draw on, from the signals `StatusSurfaceChoice.screen` ranks.
-    ///
-    /// The AppKit half of the decision, and deliberately nothing but reading: which of the values
-    /// wins is in the package, where a two-display arrangement can be described without either
-    /// display being plugged in.
-    private func resolveScreen() -> ScreenGeometry? {
-        StatusSurfaceChoice.screen(
-            among: NSScreen.screens.map(ScreenGeometry.init(_:)),
-            focusedWindow: focusedWindowFrame(),
-            mouseLocation: NSEvent.mouseLocation
-        )
-    }
-
-    /// The frame of the window Louis is typing into, or nil if it cannot be had.
-    ///
-    /// The frontmost application is the same object `PasteInserter` sends its keystroke to, so
-    /// this is not a guess about where Louis is looking: it is the window the dictation is about
-    /// to land in. Nil is a normal answer -- Accessibility not granted yet, an application that
-    /// does not implement the API, a Finder desktop with no window at all -- and the caller falls
-    /// through to the pointer.
-    ///
-    /// Bounded at 150 ms because it is a synchronous message into another process, made on the
-    /// main actor, on the path that opens the panel at the start of a dictation. The API's own
-    /// default is not stated in `AXUIElement.h`; what is certain is that it is not instant and
-    /// that a wedged front application would hold the interface for all of it.
-    private func focusedWindowFrame() -> CGRect? {
-        guard AXIsProcessTrusted(),
-              let frontmost = NSWorkspace.shared.frontmostApplication,
-              let primary = NSScreen.screens.first
-        else { return nil }
-
-        let application = AXUIElementCreateApplication(frontmost.processIdentifier)
-        AXUIElementSetMessagingTimeout(application, 0.15)
-
-        var windowValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            application, kAXFocusedWindowAttribute as CFString, &windowValue) == .success,
-            let windowValue, CFGetTypeID(windowValue) == AXUIElementGetTypeID()
-        else { return nil }
-        // Checked against `AXUIElementGetTypeID()` on the line above, which is the only way this
-        // cast can be made safe -- the attribute is typed `CFTypeRef` and an application is free
-        // to return anything at all for it.
-        let window = windowValue as! AXUIElement
-
-        var positionValue: CFTypeRef?
-        var sizeValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            window, kAXPositionAttribute as CFString, &positionValue) == .success,
-            AXUIElementCopyAttributeValue(
-                window, kAXSizeAttribute as CFString, &sizeValue) == .success,
-            let positionValue, let sizeValue,
-            CFGetTypeID(positionValue) == AXValueGetTypeID(),
-            CFGetTypeID(sizeValue) == AXValueGetTypeID()
-        else { return nil }
-
-        var origin = CGPoint.zero
-        var size = CGSize.zero
-        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &origin),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
-        else { return nil }
-
-        // The conversion between the two coordinate spaces is in the package, because getting it
-        // wrong does not fail loudly: it returns a plausible rectangle mirrored about the middle
-        // of the primary display, which on a two-display arrangement opens the panel on the other
-        // screen and looks exactly like a bad screen choice.
-        return StatusSurfaceChoice.screenFrame(
-            accessibilityPosition: origin, size: size, primaryScreenFrame: primary.frame)
-    }
-}
-
-extension ScreenGeometry {
-    /// The three things the surface choice reads off a display.
-    ///
-    /// `hasNotch` is computed here rather than taken from DynamicNotchKit's own `NSScreen.hasNotch`
-    /// because that extension is internal to the library. The test is the same one it makes: both
-    /// auxiliary top areas exist, i.e. the menu bar is split by something.
-    init(_ screen: NSScreen) {
-        self.init(
-            frame: screen.frame,
-            visibleFrame: screen.visibleFrame,
-            hasNotch: screen.auxiliaryTopLeftArea != nil && screen.auxiliaryTopRightArea != nil
-        )
     }
 }
 
