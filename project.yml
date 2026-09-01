@@ -16,6 +16,14 @@ packages:
   DynamicNotchKit:
     url: https://github.com/MrKai77/DynamicNotchKit
     exactVersion: "1.1.0"
+  # Pinned EXACTLY for the same reason, one layer down (lot 4 D5). GRDB carries the schema
+  # migrator and the FTS5 external-content triggers behind `HistoryStore`; a minor bump that
+  # changed either would move Louis's archive with no code change to point at. The version is
+  # kept identical to the one MurmureCore/Package.swift pins -- two pins of one library that
+  # disagreed would resolve to whichever SwiftPM read second. MIT.
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    exactVersion: "7.11.1"
 targets:
   Murmure:
     type: application
@@ -25,6 +33,12 @@ targets:
       - package: MurmureCore
       - package: WhisperKit
       - package: DynamicNotchKit
+      # Named here so the pin above is a pin and not a comment: XcodeGen only emits a package
+      # reference that a target depends on. The app does not `import GRDB` -- it reaches the
+      # database through `HistoryStore` -- but MurmureCore links it, so it is in the binary
+      # either way, and declaring it is what makes the version visible in the generated project.
+      - package: GRDB
+        product: GRDB
     settings:
       base:
         ENABLE_APP_SANDBOX: NO
