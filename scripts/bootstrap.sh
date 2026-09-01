@@ -53,14 +53,29 @@ command -v brew >/dev/null || {
     exit 1
 }
 
-for tool in xcodegen huggingface-cli; do
-    if command -v "$tool" >/dev/null; then
-        echo "    $tool: already installed"
-    else
-        echo "    $tool: installing"
-        brew install "$tool"
-    fi
-done
+if command -v xcodegen >/dev/null; then
+    echo "    xcodegen: already installed"
+else
+    echo "    xcodegen: installing"
+    brew install xcodegen
+fi
+
+# The Hugging Face CLI was RENAMED: the `huggingface-cli` binary is gone from huggingface_hub 1.x
+# and the Homebrew formula is now `hf` (with `huggingface-cli` kept only as an old name). A first
+# install on a clean machine therefore used to fail here in the worst way -- `brew install
+# huggingface-cli` succeeded, installed `hf`, and the next line died on `command not found`.
+# Machines set up before the rename still carry the old binary, which is exactly why this was
+# invisible on the machine the script was written on. Both names are accepted, new one first.
+if command -v hf >/dev/null; then
+    HF=hf
+elif command -v huggingface-cli >/dev/null; then
+    HF=huggingface-cli
+else
+    echo "    hf: installing"
+    brew install hf
+    command -v hf >/dev/null && HF=hf || HF=huggingface-cli
+fi
+echo "    $HF: ready"
 
 # ---------------------------------------------------------------------------
 # 2. The transcription model -- the one that was missing on the second machine
@@ -75,7 +90,7 @@ else
     # Downloaded HERE rather than left to the app's first dictation, which is exactly the moment
     # that looked like a hang: a long download behind a screen that said "transcribing".
     echo "    downloading -- several minutes on a first run"
-    huggingface-cli download "$WHISPER_REPO" \
+    "$HF" download "$WHISPER_REPO" \
         --include "$WHISPER_VARIANT/*" \
         --local-dir "$MODEL_BASE"
 fi
@@ -119,10 +134,15 @@ cat <<'EOF'
     2. Press ⌥Space and speak. macOS will ask for the microphone once, and Murmure
        will ask for Accessibility once (pasting into another app means sending it a
        keystroke). Both are one-time, and both stick -- provided install.sh found a
-       codesigning identity. If it warned that it did not, open Xcode, sign in under
-       Settings -> Accounts, and run this script again: without an identity macOS
-       treats every rebuild as a different app and revokes Accessibility silently.
+       codesigning identity. If it warned that it did not, follow the lines it
+       printed: signing in to Xcode with an Apple ID is NOT enough on its own, the
+       certificate is a separate click (Manage Certificates -> + -> Apple
+       Development). Without one, macOS treats every rebuild as a different app and
+       revokes Accessibility silently.
 
-    The first dictation still takes a little longer than the rest: the model is on
-    disk now, but macOS compiles it for this machine's neural engine on first load.
+    Expect the FIRST dictation to be slow, and the machine with it: the model is on
+    disk now, but macOS compiles it for this machine's neural engine the first time
+    it loads. Measured on an 8-core Mac: ANECompilerService at 100 % CPU for several
+    minutes, load average above 40, everything sluggish. It is once per machine, it
+    is not a hang, and the app shows what it is doing.
 EOF

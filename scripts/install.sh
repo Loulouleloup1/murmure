@@ -34,8 +34,29 @@ xcodegen generate >/dev/null
 # Any codesigning identity in the keychain will do -- what matters is that it is
 # the SAME one on every run, not which one it is. Picked by query rather than
 # named here, so this script belongs to no particular machine or developer.
-IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-    | sed -n 's/.*) \([0-9A-F]\{40\}\) ".*/\1/p' | head -1)"
+find_identity() {
+    security find-identity -v -p codesigning 2>/dev/null \
+        | sed -n 's/.*) \([0-9A-F]\{40\}\) ".*/\1/p' | head -1
+}
+
+IDENTITY="$(find_identity)"
+
+# Signing in to Xcode with an Apple ID does NOT issue a certificate, and believing it does is what
+# actually blocked a first install: the account was there
+# (`defaults read com.apple.dt.Xcode DVTDeveloperAccountManagerAppleIDLists` listed it) while
+# `security find-identity` still answered "0 valid identities found". The certificate is a second,
+# separate step -- and rather than tell someone to go and click it, ask xcodebuild to do it, which
+# is what unblocked that machine. DEVELOPMENT_TEAM may be set in the environment; without it
+# xcodebuild can still resolve a single-team account on its own.
+if [ -z "$IDENTITY" ]; then
+    echo "No codesigning identity yet -- asking Xcode to issue one…"
+    # shellcheck disable=SC2086
+    xcodebuild -project Murmure.xcodeproj -scheme Murmure -configuration Debug \
+        -derivedDataPath "$DD" -allowProvisioningUpdates CODE_SIGN_STYLE=Automatic \
+        ${DEVELOPMENT_TEAM:+DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM"} build >/dev/null 2>&1 || true
+    IDENTITY="$(find_identity)"
+    [ -n "$IDENTITY" ] && echo "Xcode issued one."
+fi
 
 echo "Building $(git rev-parse --short HEAD)…"
 if [ -n "$IDENTITY" ]; then
@@ -48,6 +69,12 @@ else
     # macOS will ask for microphone and Accessibility again after every rebuild.
     echo "WARNING: no codesigning identity found -- falling back to ad-hoc."
     echo "         Permissions will have to be granted again after each rebuild."
+    echo
+    echo "         To fix it, in Xcode: Settings -> Accounts -> select your Apple ID"
+    echo "         -> Manage Certificates… -> + -> Apple Development, then re-run."
+    echo "         Adding the Apple ID alone is NOT enough -- that is the trap: the"
+    echo "         account shows as signed in while no certificate exists."
+    echo "         If you know your team ID:  DEVELOPMENT_TEAM=XXXXXXXXXX $0"
     xcodebuild -project Murmure.xcodeproj -scheme Murmure -configuration Debug \
         -derivedDataPath "$DD" build CODE_SIGNING_ALLOWED=NO >/dev/null
 fi

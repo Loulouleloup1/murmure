@@ -57,14 +57,21 @@ signature has no stable identity, so every rebuild looks like a different app an
 silently revoked — the app records and transcribes normally and then the paste does nothing.
 
 `install.sh` signs with whatever identity is in your keychain, which keys the grant to the identifier
-instead of to the bytes. If it prints
+instead of to the bytes. If it finds none it asks Xcode to issue one for you
+(`-allowProvisioningUpdates`), and only warns if that also fails.
 
-```
-WARNING: no codesigning identity found -- falling back to ad-hoc.
-```
+**Signing in to Xcode with your Apple ID does not issue a certificate.** This is the trap, and it is
+what actually blocked a real install: Xcode listed the account as signed in while
+`security find-identity -v -p codesigning` still answered `0 valid identities found`. The
+certificate is a second, separate step:
 
-open Xcode, sign in under *Settings → Accounts*, and run the script again. It will otherwise work,
-but macOS will ask for microphone and Accessibility again after every single build.
+*Xcode → Settings → Accounts → your Apple ID → **Manage Certificates… → + → Apple Development***
+
+or, if you know your team ID, let the script do it:
+
+```sh
+DEVELOPMENT_TEAM=XXXXXXXXXX ./scripts/bootstrap.sh
+```
 
 ### Permissions, once
 
@@ -72,10 +79,15 @@ On the first dictation macOS asks for the **microphone**, and Murmure asks for *
 (System Settings → Privacy & Security → Accessibility), because pasting into another app means
 sending it a keystroke. Both are once, provided the signature above is in order.
 
-### The first dictation is still a little slower
+### The first dictation is slow, and so is the whole machine while it happens
 
-The model is on disk after bootstrap, but macOS compiles it for this machine's neural engine the
-first time it loads. Every later dictation starts immediately.
+Not "a little slower" — that wording was measured wrong and is corrected here. The model is on disk
+after bootstrap, but macOS compiles it for this machine's neural engine the first time it loads.
+Measured on an 8-core Apple Silicon Mac: `ANECompilerService` pinned at 100 % CPU for **several
+minutes**, load average above **40**, the whole machine sluggish.
+
+It happens **once per machine**, it is not a hang, and the app shows what it is doing. Every later
+dictation starts immediately.
 
 ---
 
