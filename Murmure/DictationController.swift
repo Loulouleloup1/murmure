@@ -20,10 +20,14 @@ final class DictationController {
     /// own state changes -- never the hotkey, which fires on presses the session then ignores.
     private let notch: NotchController
     /// The surface for a display that has no notch to grow, which is every external one. Driven
-    /// from the same state changes as the notch; on any one display only one of the two can draw,
-    /// because each asks `StatusSurfaceChoice.surface(on:)` about the display it resolved. They
-    /// resolve that display by different signals, though -- see `StatusPanelController`.
+    /// from the same state changes as the notch, and from the same PLACEMENT: `StatusRouter`
+    /// resolves one display per state change and the two surfaces are handed that one answer, so
+    /// exactly one of them draws.
     private let statusPanel: StatusPanelController
+
+    /// Which display a dictation's status goes on, and therefore which of the two transient
+    /// surfaces shows it. One decision, made here, for both.
+    private let router: StatusRouter
     /// The one surface that takes clicks and the only one that waits: it holds a dictation the
     /// paste could not deliver, with Re-paste and Copy, and it holds an `AppAlert` when Murmure
     /// itself cannot work. Everything else in lot 3 retracts on a timer; this does not, and that
@@ -74,6 +78,12 @@ final class DictationController {
         // these directly, so it never has to reach back through `self`.
         let statusPanel = StatusPanelController(levels: levels, progress: transcriptionProgress)
         self.statusPanel = statusPanel
+
+        // A local for the same reason, and it matters more here than for the two surfaces: the
+        // closure has to reach it on every state change, and reaching it through `self` inside
+        // this initialiser is not something Swift will allow.
+        let router = StatusRouter()
+        self.router = router
 
         // Task 6 made `onClipboardOutcome` a REQUIRED init parameter with no default, precisely so
         // this line cannot forget to decide. `PasteInserter()` no longer compiles.
@@ -260,12 +270,19 @@ final class DictationController {
                 // it is tested) turns each state change into the phase to show, including the two
                 // the machine used to collapse into one -- a dictation that inserted text and one
                 // that inserted nothing.
-                notch.apply(state)
+                // ONE decision, for both surfaces. It used to be two -- the notch resolved a
+                // display from `NSScreen.main` and the panel from the ranked signals of
+                // `StatusSurfaceChoice` -- and nothing made them agree. On Louis's machine they
+                // do not: `NSScreen.main` for a process with no key window is the built-in
+                // NOTCHED display even while the frontmost window and the pointer are on the
+                // external one, so a dictation there lit up both screens at once.
+                let placement = router.placement(for: state)
+                notch.apply(placement)
                 // And the panel, which is what Louis sees when the display he is working on has
                 // no cutout for the line above to grow. It is not an alternative wired by a
                 // setting: both are driven, and each draws only on the kind of display it is for,
                 // so plugging a monitor in mid-session needs nothing switched.
-                statusPanel.apply(state)
+                statusPanel.apply(placement)
                 // And the surface that waits. Driven from the same state changes as the other
                 // two so there is one source of truth, but it is the only one that outlives the
                 // dictation: `FailureSurface.standing` says which of a paste failure, an alert
@@ -314,8 +331,14 @@ final class DictationController {
         // nothing here -- the alert is about a permission, not about a dictation in flight.
         if let alert = appState.alert {
             Task { @MainActor in
-                notch.raise(alert)
-                statusPanel.raise(alert)
+                // Through the same one placement as a dictation's, so the "shows once, not twice"
+                // above is a property of the value rather than of the two calls agreeing.
+                // `FailureSurface.transient` over `.hidden` because nothing is on screen yet: this
+                // runs one main-actor turn into launch, before any dictation can have started.
+                let placement = router.placement(
+                    for: FailureSurface.transient(dictation: .hidden, alert: alert))
+                notch.apply(placement)
+                statusPanel.apply(placement)
                 problemPanel.show(.alert(alert))
             }
         }

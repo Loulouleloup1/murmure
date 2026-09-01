@@ -2,7 +2,6 @@ import AppKit
 import DynamicNotchKit
 import MurmureCore
 import SwiftUI
-import os
 
 /// The one notch surface, and the only object in Murmure allowed to grow it or retract it.
 ///
@@ -62,27 +61,11 @@ final class NotchController {
     /// What the card reads. Held here because the two are one mechanism: the phase decides both
     /// what is drawn and whether there is a window to draw it in.
     private let model: NotchModel
-    private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "notch")
-
-    /// The state the session was in before the one being handled. `NotchPresenter.phase` needs it
-    /// because `DictationSession` emits `.completed` and `.idle` in the same breath: without the
-    /// previous state the notch would retract in the instant it was told the dictation succeeded.
-    private var previousState: DictationSession.State = .idle
 
     /// Retracts a completion or a failure once it has been on screen long enough. Cancelled by
     /// the next phase, so a dictation started during a flash never has its card pulled out from
     /// under it by the previous one's timer.
     private var retraction: Task<Void, Never>?
-
-    /// The screen the dictation in progress is drawn on, captured once when its recording starts
-    /// and passed explicitly to every appearance.
-    ///
-    /// The library's own defaults are `NSScreen.screens[0]` (`DynamicNotch.swift:173`, `219`) --
-    /// the display holding the coordinate origin, which is not the one Louis is typing on. Nil
-    /// between dictations, and read rather than re-derived by the later phases: a screen resolved
-    /// afresh mid-dictation could move the surface out from under a shape that is meant never to
-    /// jump.
-    private var dictationScreen: NSScreen?
 
     /// Appearances and disappearances are chained, never overlapped.
     ///
@@ -114,80 +97,38 @@ final class NotchController {
         )
     }
 
-    /// The session changed state. The only entry point, and the only thing allowed to move the
-    /// notch: `NotchPresenter` turns the change into a phase, and this shows it.
-    func apply(_ state: DictationSession.State) {
-        let phase = NotchPresenter.phase(previous: previousState, current: state)
-        previousState = state
-        show(phase)
+    /// The only entry point, and the only thing allowed to move the notch.
+    ///
+    /// **Which display, and therefore whether this surface draws at all, is not decided here any
+    /// more.** `StatusRouter` decides it once per state change and hands the same answer to both
+    /// surfaces, which is what makes "the notch on the laptop and the strip on the external
+    /// display, at the same time" unrepresentable rather than merely unintended. A nil
+    /// `notchScreen` is the router saying the strip has this one.
+    func apply(_ placement: StatusPlacement) {
+        show(placement.phase, on: placement.notchScreen)
     }
 
-    /// A problem with Murmure itself -- Accessibility revoked, ⌥Space refused -- on the surface a
-    /// dictation would otherwise be using.
-    ///
-    /// `FailureSurface.transient` is what decides, and its answer is that a dictation always wins:
-    /// with one on screen this resolves to the phase already showing and `show` returns at its
-    /// first line. So this can be called at any moment without ever painting over a waveform.
-    ///
-    /// It leaves on `NotchPresenter.dwell`, like every other notice, because the card is a black
-    /// slab across the menu bar and one that outlived what it was about is the "band with no
-    /// dictation behind it" the plan refuses. The surface that WAITS is `ProblemPanelController`,
-    /// which is also the only one that can be acted on.
-    func raise(_ alert: AppAlert) {
-        show(FailureSurface.transient(dictation: model.phase, alert: alert))
-    }
-
-    private func show(_ phase: NotchPhase) {
+    private func show(_ phase: NotchPhase, on screen: NSScreen?) {
         guard phase != model.phase else { return }
         model.enter(phase, at: Date())
         // Whatever was on its way out is no longer the thing on screen.
         retraction?.cancel()
         retraction = nil
 
-        guard NotchAppearance.showsShape(in: phase) else {
-            dictationScreen = nil
+        // Nothing to draw, or nothing of this surface's to draw. **A guard the library used to
+        // make for us**: `_compact` refuses a screen with no cutout and hides instead
+        // (`DynamicNotch.swift:226-229`), which is what kept this controller silent on an external
+        // display while `StatusPanelController` drew there, but `_expand` makes no such check --
+        // it would draw DynamicNotchKit's own `NotchlessView` card, on top of the floating panel,
+        // saying the same thing twice. The router answers that question now, for both surfaces at
+        // once.
+        guard NotchAppearance.showsShape(in: phase), let screen else {
             // Idempotent -- `hide()` returns immediately when the state is already `.hidden`
             // (`DynamicNotch.swift:285-288`).
             enqueue { [notch] in await notch.hide() }
             return
         }
 
-        // `NSScreen.main` is the screen with the key window, or with the menu bar when no window
-        // is key -- and Murmure is `LSUIElement`, so it never has one. `.first` rather than the
-        // plan's `screens[0]`: an index into an empty array would crash the whole app over a
-        // decoration, and `NSScreen.screens` is empty on a Mac with every display asleep.
-        //
-        // Resolved when the dictation starts and then reused, so nothing can move the surface
-        // mid-dictation. A phase that arrives with no dictation behind it -- a microphone that
-        // refused to start, so there was never a `.recording` -- resolves one here rather than
-        // saying nothing at all.
-        let screen: NSScreen
-        if case .recording = phase {
-            guard let current = NSScreen.main ?? NSScreen.screens.first else {
-                log.error("no screen available -- the dictation runs, the notch does not appear")
-                return
-            }
-            screen = current
-            dictationScreen = current
-        } else if let known = dictationScreen {
-            screen = known
-        } else {
-            guard let current = NSScreen.main ?? NSScreen.screens.first else { return }
-            screen = current
-            dictationScreen = current
-        }
-
-        // **A guard the library used to make for us.** `_compact` refuses a screen with no cutout
-        // and hides instead (`DynamicNotch.swift:226-229`), which is what kept this controller
-        // silent on an external display while `StatusPanelController` drew there. `_expand` makes
-        // no such check -- it would draw DynamicNotchKit's own `NotchlessView` card, on top of the
-        // floating panel, saying the same thing twice. Asking the same question the panel asks
-        // (`StatusSurfaceChoice.surface(on:)`) is what keeps exactly one surface per display.
-        let geometry = ScreenGeometry(screen)
-        guard StatusSurfaceChoice.surface(on: geometry) == .notch else {
-            enqueue { [notch] in await notch.hide() }
-            return
-        }
         model.fit(toNotchWidth: notchWidth(of: screen))
 
         // `expand()` for every phase of a dictation, and exactly once: it returns immediately when
@@ -217,7 +158,7 @@ final class NotchController {
         retraction = Task { [weak self] in
             try? await Task.sleep(for: .seconds(dwell))
             guard !Task.isCancelled else { return }
-            self?.show(.hidden)
+            self?.show(.hidden, on: nil)
         }
     }
 
