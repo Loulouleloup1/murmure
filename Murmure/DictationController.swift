@@ -15,6 +15,9 @@ final class DictationController {
     private let hotkeys = HotkeyManager()
     private let inserter: PasteInserter
     private let appState: AppState
+    /// Nil when Application Support could not be reached at all; see `init`. Kept so the menu can
+    /// re-read the folder without a restart.
+    private let modesDirectory: URL?
     private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "dictation")
 
     init(appState: AppState) {
@@ -42,6 +45,7 @@ final class DictationController {
                     + "Dictation runs on the built-in Voice mode.",
             ]
         }
+        self.modesDirectory = modesDirectory
         if let modesDirectory {
             // Every launch, not only the first: a built-in deleted by hand comes back, which is
             // how `voice.json` repairs itself. It writes only files that are ABSENT, so a mode
@@ -53,8 +57,9 @@ final class DictationController {
             // so no `ModeLoadProblem` is ever produced. It is still passed because `ModeStore.init`
             // requires it on purpose (a store built without one would drop modes in silence), and
             // it logs rather than does nothing so that the day this store is asked to read
-            // anything, the problem has somewhere to go. The live reporting path is
-            // `ModeAwareRefinement.modeForNewDictation()` below, which does call `loadAll()`.
+            // anything, the problem has somewhere to go. The reporting paths that DO fire are
+            // `refreshModes()` and `ModeAwareRefinement.modeForNewDictation()`, each building its
+            // own store precisely so its problems go somewhere of their own.
             let store = ModeStore(directory: modesDirectory) { [log] problem in
                 log.error("mode file problem: \(problem.description, privacy: .public)")
             }
@@ -119,6 +124,24 @@ final class DictationController {
             appState.hotkeyUnavailable = true
             appState.status = .failed
         }
+
+        // The menu has to be able to list the modes before the first dictation ever resolves one.
+        refreshModes()
+    }
+
+    /// Re-reads `modes/` into the list the menu draws, so a mode file added, renamed or deleted by
+    /// hand is offered without restarting Murmure.
+    ///
+    /// Deliberately does NOT touch `appState.modeProblems`. That list is owned by the resolution
+    /// of a dictation, and a mode chosen then deleted is reported there by `ModeSelection` and
+    /// nowhere else: overwriting it here -- from the very act of opening the menu to read it --
+    /// would erase the explanation at the instant it is being looked at. A broken file's own
+    /// problem still reaches the menu, on the next dictation, which is when it starts to matter.
+    func refreshModes() {
+        guard let modesDirectory else { return }
+        appState.availableModes = ModeStore(directory: modesDirectory) { [log] problem in
+            log.error("mode file problem: \(problem.description, privacy: .public)")
+        }.loadAll()
     }
 
     /// Menu action: paste the last transcript again — after an insertion failure, or into a second
@@ -172,19 +195,19 @@ private struct ModeAwareRefinement: DictationRefining {
         let modes = ModeStore(directory: modesDirectory) { problems.append($0.description) }
             .loadAll()
 
-        // Sampled here, on the main actor, because this runs on the toggle that STARTS the
+        // Both sampled here, on the main actor, because this runs on the toggle that STARTS the
         // recording (`DictationSession`, R-T5-2): the frontmost application is the one Louis was
-        // looking at when he pressed. Murmure is `LSUIElement` and the hotkey is a Carbon one, so
-        // pressing it does not bring Murmure forward -- what this reads is still his editor.
-        let frontmost = await MainActor.run {
-            NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        // looking at when he pressed, and the ticked menu item is the one that was ticked then.
+        // Murmure is `LSUIElement` and the hotkey is a Carbon one, so pressing it does not bring
+        // Murmure forward -- what this reads is still his editor.
+        let (manualKey, frontmost) = await MainActor.run {
+            (appState.manualModeKey, NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
         }
 
-        // `manualKey` is nil because there is no way to make a manual choice yet: lot 2 shipped
-        // no mode picker, and the menu has no selection to read. Passed explicitly rather than
-        // defaulted so the UI lot has one line to fill in, not a rule to rediscover.
+        // Rule 1 of spec §5: what he ticked in the menu, and nil when he ticked "Automatique" --
+        // which is the whole of lot 2's behaviour, and what Murmure ships doing.
         let mode = ModeSelection.resolve(
-            among: modes, manualKey: nil, frontmostBundleID: frontmost
+            among: modes, manualKey: manualKey, frontmostBundleID: frontmost
         ) { problems.append($0.description) }
 
         log.info("""
@@ -197,7 +220,15 @@ private struct ModeAwareRefinement: DictationRefining {
         // Replaced, not appended: the list is what is wrong *now*, so a file Louis has fixed
         // stops being listed on the next dictation.
         let resolved = problems
-        await MainActor.run { appState.modeProblems = resolved }
+        await MainActor.run {
+            appState.modeProblems = resolved
+            // The menu is drawn from these two while the recording runs. `activeMode` is what
+            // answers "does what I am saying go to the LLM": with "Automatique" ticked, the
+            // checkmark cannot say. `availableModes` is refreshed from the same read that just
+            // happened rather than left for the next menu opening -- it costs nothing here.
+            appState.availableModes = modes
+            appState.activeMode = mode
+        }
         return mode
     }
 

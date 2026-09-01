@@ -37,6 +37,32 @@ struct MurmureApp: App {
 
     var body: some Scene {
         MenuBarExtra("Murmure", systemImage: appState.menuBarSymbol) {
+            // Which mode the dictation in progress is running under -- readable while it runs,
+            // because that is what decides whether what he is saying goes to the LLM. The
+            // checkmarks below cannot answer it: with "Automatique" ticked, the app picks.
+            //
+            // `onAppear` re-reads `modes/` so a file added or renamed by hand is offered without
+            // restarting Murmure. It is attached to this line rather than to a conditional one so
+            // it is always present in the menu, and it is a best effort: whether SwiftUI runs
+            // `onAppear` for the items of a `MenuBarExtra` menu could not be verified without
+            // launching the app. If it never fires, the list is the one the launch and the last
+            // dictation left -- stale by at most one dictation, never wrong about the modes it
+            // does show.
+            Button("Mode : \(appState.activeMode.name)") {}
+                .disabled(true)
+                .onAppear { controller.refreshModes() }
+            // `Toggle` is how a SwiftUI menu draws a checkmark. These are radio buttons, not
+            // switches -- see `AppState.modeSelection`.
+            //
+            // "Automatique" is a real choice and the shipped one, not the absence of a choice: it
+            // hands `ModeSelection.resolve` a nil `manualKey`, which is exactly what lot 2 did.
+            // Without it, picking a mode once would make the `autoActivate` rule unreachable for
+            // good, and Louis would have no way back to the behaviour he validated.
+            Toggle("Automatique", isOn: appState.modeSelection(nil))
+            ForEach(appState.availableModes, id: \.key) { mode in
+                Toggle(mode.name, isOn: appState.modeSelection(mode.key))
+            }
+            Divider()
             if let warning = appState.clipboardWarning {
                 Button(warning) {}.disabled(true)
             }

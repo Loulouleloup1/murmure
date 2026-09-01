@@ -9,6 +9,27 @@ final class AppState: ObservableObject {
 
     @Published var status: Status = .idle
 
+    /// Every mode on disk, for the menu to list. Replaced -- never merged -- so a mode file
+    /// deleted by hand stops being offered.
+    ///
+    /// Seeded with the built-ins rather than left empty: `ModeStore.createBuiltInsIfMissing()`
+    /// rewrites exactly these at every launch, so this is what the folder contains until
+    /// `DictationController` reads it a few lines later. An empty menu would be a lie for that
+    /// instant, and a worse one if the read ever failed.
+    @Published var availableModes: [Mode] = Mode.builtIns
+
+    /// The mode chosen by hand in the menu, or nil for "automatic" -- rule 1 of spec §5, which
+    /// `ModeSelection.resolve` lets nothing overrule. Persisted on every change, including back
+    /// to nil: see `ModePreference`.
+    @Published var manualModeKey: String? {
+        didSet { preference.selectedKey = manualModeKey }
+    }
+
+    /// The mode the last dictation actually resolved, and therefore the one running right now:
+    /// with "automatic" ticked, the checkmark says nothing about which mode won. This is what
+    /// answers "is what I am saying going to the LLM or not" while the recording is live.
+    @Published var activeMode: Mode = .voice
+
     /// Set once, at launch, when Carbon refuses ⌥Space. There is no retry: the combination is
     /// taken for as long as the other application holds it, and a dead key with no explanation is
     /// exactly what task 4 refused to ship.
@@ -33,6 +54,30 @@ final class AppState: ObservableObject {
     /// text he expected. The dictation still produced text -- that is what makes this a notice
     /// and not a failure. Cleared when the next dictation starts.
     @Published var refinementNotice: String?
+
+    private let preference: ModePreference
+
+    /// `defaults` is a parameter with the real domain as its default so the app stays a
+    /// `AppState()`, and so anything that ever tests this class cannot write into the preferences
+    /// of the application Louis is using.
+    init(defaults: UserDefaults = .standard) {
+        preference = ModePreference(defaults: defaults)
+        // `didSet` does not fire from an initialiser, which is what is wanted here: this reads the
+        // stored choice, it does not make one.
+        manualModeKey = preference.selectedKey
+    }
+
+    /// The checkmark of one item in the menu's mode list; `key` is nil for the "automatic" item.
+    ///
+    /// A `Toggle` is how a SwiftUI menu draws a checkmark, but these behave as radio buttons and
+    /// not as switches: ticking one unticks the rest, and unticking the current one does nothing.
+    /// "No mode at all" is not a state `ModeSelection` has -- going back to letting the rules
+    /// decide is the "automatic" item, which is itself one of the choices.
+    func modeSelection(_ key: String?) -> Binding<Bool> {
+        Binding(
+            get: { self.manualModeKey == key },
+            set: { isOn in if isOn { self.manualModeKey = key } })
+    }
 
     var menuBarSymbol: String {
         switch status {
