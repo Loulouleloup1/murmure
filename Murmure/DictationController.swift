@@ -388,7 +388,7 @@ final class DictationController {
             try await inserter.insert(text)
         } catch {
             log.error("re-paste failed: \(error.localizedDescription, privacy: .public)")
-            appState.lastFailureMessage = "Recollage échoué : \(error.localizedDescription)"
+            appState.lastFailureMessage = MenuText.repasteFailed(error.localizedDescription)
             appState.status = .failed
         }
     }

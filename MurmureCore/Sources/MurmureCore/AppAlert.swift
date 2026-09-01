@@ -38,15 +38,18 @@ public enum AppAlert: String, Equatable, Sendable, CaseIterable {
 
     /// What Murmure says about it, in one line.
     ///
-    /// French, and `hotkeyUnavailable`'s is the sentence `MurmureApp`'s menu already shows, quoted
-    /// rather than rewritten: the menu and the surfaces are two places the same problem is read,
-    /// and two wordings would be a difference Louis has to learn for nothing.
+    /// English, decided 2026-09-01 with the rest of the interface -- and translated HERE rather
+    /// than moved into `MenuText`, because this is already the table for these two sentences and a
+    /// second layer of indirection over it would buy nothing. `hotkeyUnavailable`'s is the sentence
+    /// `MurmureApp`'s menu shows, read off this property rather than rewritten: the menu and the
+    /// surfaces are two places the same problem is read, and two wordings would be a difference
+    /// Louis has to learn for nothing.
     public var message: String {
         switch self {
         case .hotkeyUnavailable:
-            "⌥Espace indisponible — une autre app détient le raccourci"
+            "⌥Space unavailable — another app holds the shortcut"
         case .accessibilityDenied:
-            "Accessibilité refusée — Murmure ne peut rien coller"
+            "Accessibility denied — Murmure cannot paste anything"
         }
     }
 
@@ -59,7 +62,7 @@ public enum AppAlert: String, Equatable, Sendable, CaseIterable {
     public var actionTitle: String? {
         switch self {
         case .hotkeyUnavailable: nil
-        case .accessibilityDenied: "Ouvrir Réglages…"
+        case .accessibilityDenied: "Open Settings…"
         }
     }
 

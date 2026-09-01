@@ -71,7 +71,7 @@ struct MurmureApp: App {
             // launching the app. If it never fires, the list is the one the launch and the last
             // dictation left -- stale by at most one dictation, never wrong about the modes it
             // does show.
-            Button("Mode : \(appState.activeMode.name)") {}
+            Button(MenuText.activeMode(appState.activeMode.name)) {}
                 .disabled(true)
                 .onAppear { controller.refreshModes() }
             // `Toggle` is how a SwiftUI menu draws a checkmark. These are radio buttons, not
@@ -81,7 +81,7 @@ struct MurmureApp: App {
             // hands `ModeSelection.resolve` a nil `manualKey`, which is exactly what lot 2 did.
             // Without it, picking a mode once would make the `autoActivate` rule unreachable for
             // good, and Louis would have no way back to the behaviour he validated.
-            Toggle("Automatique", isOn: appState.modeSelection(nil))
+            Toggle(MenuText.automaticMode, isOn: appState.modeSelection(nil))
             ForEach(appState.availableModes, id: \.key) { mode in
                 Toggle(mode.name, isOn: appState.modeSelection(mode.key))
             }
@@ -100,9 +100,15 @@ struct MurmureApp: App {
             if appState.accessibilityDenied {
                 Button(AppAlert.accessibilityDenied.message) {}
                     .disabled(true)
+                // Both the label and the destination come off the alert rather than being
+                // written here, so the menu and the standing panel cannot end up offering the
+                // same fix under two different words. Unwrapped together: an alert with a link
+                // and no title, or a title and no link, is a button that says nothing or does
+                // nothing, and neither belongs in a menu.
                 if let raw = AppAlert.accessibilityDenied.settingsURL,
-                   let url = URL(string: raw) {
-                    Button("Ouvrir Réglages…") { NSWorkspace.shared.open(url) }
+                   let url = URL(string: raw),
+                   let title = AppAlert.accessibilityDenied.actionTitle {
+                    Button(title) { NSWorkspace.shared.open(url) }
                 }
             }
             if let message = appState.lastFailureMessage {
@@ -119,19 +125,19 @@ struct MurmureApp: App {
             ForEach(appState.modeProblems, id: \.self) { problem in
                 Button(problem) {}.disabled(true)
             }
-            Button("Recoller la dernière transcription") { controller.repasteLast() }
+            Button(MenuText.repasteLastTranscription) { controller.repasteLast() }
             // The recovery that survives a denied Accessibility: without that permission
             // `CGEvent.post` does nothing, so the line above cannot work and the clipboard is the
             // only way the transcript leaves Murmure. Also the standing panel's Copy button's
             // fallback, for the reason given above it.
-            Button("Copier la dernière transcription") { controller.copyLast() }
+            Button(MenuText.copyLastTranscription) { controller.copyLast() }
             Divider()
             // The window's only entry point, and it has to be: an accessory app is not in ⌘Tab,
             // so once the window is behind Xcode nothing but this glyph brings it back
             // (plan §2.4, consequence 1).
             OpenWindowMenuItem(controller: windowController)
             Divider()
-            Button("Quit") { NSApplication.shared.terminate(nil) }
+            Button(MenuText.quit) { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
         }
         .environmentObject(appState)
@@ -167,7 +173,7 @@ private struct OpenWindowMenuItem: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("Ouvrir la fenêtre Murmure") { controller.show(using: openWindow) }
+        Button(MenuText.openWindow) { controller.show(using: openWindow) }
             .keyboardShortcut(",")
     }
 }

@@ -54,10 +54,11 @@ public enum WindowSection: String, CaseIterable, Sendable {
 
     /// The word in the sidebar.
     ///
-    /// English, matching every user-facing string `MurmureCore` already owns — `StatusPanelText`
-    /// says "Recording", "Transcribing", "Inserted 1 character". The menu is French in places and
-    /// English in others, and that inconsistency is older than this window; it is reported rather
-    /// than resolved here, because renaming the app's whole vocabulary is not this task.
+    /// English. It was the language `MurmureCore` already spoke -- `StatusPanelText` says
+    /// "Recording", "Transcribing", "Inserted 1 character" -- while the menu was French in places
+    /// and English in others. Louis settled it on 2026-09-01: English throughout, and the mix has
+    /// to disappear rather than move, which is why the menu's own words are now in `MenuText` with
+    /// a test that walks all of them.
     public var title: String {
         switch self {
         case .history: "History"
