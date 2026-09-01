@@ -419,10 +419,17 @@ private struct DictationArchive: DictationRecording {
     /// The two reads are deliberately not shared. They answer different questions -- which mode
     /// to use, and what to write in the row -- and the day one of them moves, the other must not
     /// move with it by accident.
+    /// `isSelf` is answered by comparing PROCESS IDENTIFIERS, which is `PasteInserter`'s own test
+    /// for the same question (`frontmostTarget()`) and is used here for its reasons: a bundle
+    /// identifier can be absent, and a second copy of Murmure running from another build shares
+    /// it. This is the one fact about the desktop `MurmureCore` cannot work out for itself, which
+    /// is why the guard that reads it lives in the session and the answer is computed here.
     func targetForNewDictation() async -> DictationTarget {
         await MainActor.run {
             guard let app = NSWorkspace.shared.frontmostApplication else { return .unknown }
-            return DictationTarget(bundleID: app.bundleIdentifier, name: app.localizedName)
+            return DictationTarget(
+                bundleID: app.bundleIdentifier, name: app.localizedName,
+                isSelf: app.processIdentifier == ProcessInfo.processInfo.processIdentifier)
         }
     }
 

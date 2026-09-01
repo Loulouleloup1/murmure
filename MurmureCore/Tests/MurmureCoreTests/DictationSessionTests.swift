@@ -1040,20 +1040,113 @@ final class DictationSessionTests: XCTestCase {
     }
 
     /// The same line the mode resolution already draws: a microphone that refused to start is not
-    /// a dictation. No mode is resolved, no target is read, and no row is written.
-    func testAMicrophoneThatRefusesToStartWritesNoRecord() async {
+    /// a dictation. No mode is resolved and no row is written.
+    ///
+    /// **The target IS now read, and that is a deliberate narrowing rather than a regression.**
+    /// Until lot 4 it was read after a successful start, and this test asserted zero. The
+    /// start-refusal guard needs it before the microphone opens, so a refused microphone pays for
+    /// one read of the frontmost application -- a property access on `NSWorkspace`. What the old
+    /// assertion was really protecting is the expensive read, and that is asserted here directly:
+    /// the modes folder is still never touched.
+    func testAMicrophoneThatRefusesToStartResolvesNoModeAndWritesNoRecord() async {
         let recorder = FakeRecorder()
         recorder.startError = TestError()
         let recording = SpyRecording()
+        let refiner = SpyRefiner()
         let session = DictationSession(
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
-            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            inserter: SpyInserter(), refiner: refiner, recording: recording,
             onStateChange: { _ in }
         )
         await session.toggle()
         XCTAssertEqual(recording.records, [])
-        XCTAssertEqual(recording.targetResolutions, 0)
+        XCTAssertEqual(refiner.calls.modeResolutions, 0, "the modes folder is not read")
+        XCTAssertEqual(recording.targetResolutions, 1, "the guard needs it before the mic opens")
+    }
+
+    // MARK: - Lot 4: the dictation Murmure's own window would have swallowed
+
+    /// **The refusal that D2 made necessary.** Murmure's window flips the activation policy to
+    /// `.regular`, so for the first time in the app's life Murmure can be the frontmost
+    /// application -- and the surface that puts it there is History, which is the pane Louis will
+    /// open every day. A hotkey pressed there used to run the whole pipeline and fail at the very
+    /// end, in `PasteInserter`.
+    ///
+    /// **`startCount` is the assertion, not the state.** A version that opened the microphone,
+    /// noticed, and closed it again would reach `.failed` too, and a test reading only the state
+    /// would call that a pass -- while Louis had thirty seconds of speech go nowhere.
+    func testAPressWhileMurmureIsInFrontOpensNoMicrophoneAtAll() async {
+        let states = StateLog()
+        let recorder = FakeRecorder()
+        let refiner = SpyRefiner()
+        let recording = SpyRecording(
+            target: DictationTarget(
+                bundleID: "com.louiscourcier.Murmure", name: "Murmure", isSelf: true))
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("jamais atteint")),
+            inserter: SpyInserter(), refiner: refiner, recording: recording,
+            onStateChange: { states.append($0) }
+        )
+
+        await session.toggle()
+
+        XCTAssertEqual(recorder.startCount, 0, "the microphone must never have opened")
+        XCTAssertEqual(recorder.stopCount, 0, "and therefore never have been closed either")
+        XCTAssertFalse(recorder.started)
+        XCTAssertEqual(refiner.calls.modeResolutions, 0, "nothing downstream of the guard ran")
+        XCTAssertEqual(recording.records, [], "no dictation happened, so there is no row")
+        let state = await session.state
+        guard case .failed(let message, let recovered) = state else {
+            return XCTFail("expected a refusal, got \(state)")
+        }
+        XCTAssertNil(recovered, "there is no text to recover -- he never spoke")
+        // The message has to say what to DO. A refusal naming only what went wrong leaves him
+        // pressing the same key again.
+        XCTAssertTrue(
+            message.lowercased().contains("click into the app"),
+            "the refusal must tell him what to do, got: \(message)")
+        XCTAssertEqual(states.values.count, 1, "one state change, and it is the refusal")
+    }
+
+    /// The other half, and the one that stops the guard from being "refuse everything": an
+    /// ordinary press, with an ordinary application in front, still opens the microphone.
+    /// Without this a guard inverted by a stray `!` would pass the test above and break dictation
+    /// entirely.
+    func testAPressWithAnyOtherAppInFrontStillStartsRecording() async {
+        let recorder = FakeRecorder()
+        let recording = SpyRecording(
+            target: DictationTarget(bundleID: "com.example.editor", name: "Éditeur"))
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("une phrase inventée")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
+            onStateChange: { _ in }
+        )
+
+        await session.toggle()
+
+        XCTAssertEqual(recorder.startCount, 1)
+        let state = await session.state
+        XCTAssertEqual(state, .recording)
+    }
+
+    /// `.unknown` is what the app answers when nothing is in front or nothing could be read, and
+    /// it must not be mistaken for Murmure. Reading a missing bundle identifier as "it is us"
+    /// would refuse every dictation started from a desktop with no frontmost application.
+    func testAnUnknownTargetIsNotReadAsMurmure() async {
+        let recorder = FakeRecorder()
+        let session = DictationSession(
+            recorder: recorder,
+            transcriber: FakeTranscriber(result: .success("une phrase inventée")),
+            inserter: SpyInserter(), refiner: SpyRefiner(), recording: SpyRecording(target: .unknown),
+            onStateChange: { _ in }
+        )
+
+        await session.toggle()
+
+        XCTAssertEqual(recorder.startCount, 1)
     }
 
     /// A press landing inside the running pipeline is ignored, and the ignoring has to reach the

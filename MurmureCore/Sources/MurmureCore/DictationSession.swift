@@ -48,9 +48,22 @@ public struct DictationTarget: Equatable, Sendable {
     public var bundleID: String?
     public var name: String?
 
-    public init(bundleID: String? = nil, name: String? = nil) {
+    /// The application in front is **Murmure itself**, so there is nowhere for the text to go.
+    ///
+    /// Answered by the app rather than derived from `bundleID` here, and that is not pedantry:
+    /// `PasteInserter` has always settled this by comparing PROCESS IDENTIFIERS, because a bundle
+    /// identifier can be absent, can be shared with a second copy running from another build, and
+    /// would have to be written into `MurmureCore` as a literal that nothing keeps in step with
+    /// the plist. The app knows which process it is. The package does not, and should not.
+    ///
+    /// Not carried into a history row, because a dictation refused for this reason never reaches
+    /// `.recording` and therefore writes none.
+    public var isSelf: Bool
+
+    public init(bundleID: String? = nil, name: String? = nil, isSelf: Bool = false) {
         self.bundleID = bundleID
         self.name = name
+        self.isSelf = isSelf
     }
 
     /// Nothing was in front, or nothing could be read.
@@ -180,6 +193,29 @@ public actor DictationSession {
         // in the same call (`complete(insertedCharacters:)`), so no press can ever observe it.
         // Grouped with `.idle` because that is what it becomes a line later.
         case .idle, .completed, .failed:
+            // **Read BEFORE the microphone opens, and this is the whole of the guard below.**
+            //
+            // The target used to be read after a successful start, which was right while Murmure
+            // could not be in front of anything: an `LSUIElement` app with no window is never the
+            // frontmost application, so `isSelf` was unreachable. Lot 4's window changes that --
+            // its activation policy goes `.regular` while the window is up (D2) -- and the surface
+            // it puts in front is History, which is the one Louis will open every day.
+            //
+            // `PasteInserter` already refuses this case, but it refuses it at the END: the
+            // microphone opens, he speaks for thirty seconds, WhisperKit transcribes, and only
+            // then does anything say the text has nowhere to go. Everything after this line is
+            // work that cannot produce an insertion, so the refusal belongs here, where it costs
+            // nothing and he finds out while his mouth is still shut.
+            let target = await recording.targetForNewDictation()
+            guard !target.isSelf else {
+                // Says what to do, not what failed -- `PasteInserter`'s message is the model.
+                transition(to: .failed(
+                    message: "Murmure is in front -- click into the app you want the text in, "
+                        + "then press again",
+                    recoveredText: nil))
+                return
+            }
+
             do {
                 try recorder.start()
                 // The clock is read before either resolution below, because what the row calls
@@ -191,25 +227,24 @@ public actor DictationSession {
                 transcriptionSeconds = nil
                 refinementSeconds = nil
 
-                // Both resolved here rather than in `finishRecording()`: what decides is the
-                // application Louis was looking at while he pressed, not the one he may have
-                // switched to by the time he stops. Resolved AFTER a successful start, so a
-                // refused microphone never pays for a read of the modes folder -- and writes no
-                // history row either, for the same reason: there was no dictation.
+                // Both resolved on the press that STARTS: what decides is the application
+                // Louis was looking at while he pressed, not the one he may have switched to by
+                // the time he stops. The target is now read above, before the microphone opens,
+                // for the reason given there -- so a refused microphone DOES pay for one read of
+                // the frontmost application, which is a property access on `NSWorkspace`. It
+                // still never pays for a read of the modes folder, and still writes no history
+                // row, because there was no dictation. That narrower claim is what
+                // `testAMicrophoneThatRefusesToStartResolvesNoModeAndWritesNoRecord` pins.
                 //
-                // The target is read first because it is the more perishable of the two: it is a
-                // property of the desktop, which a click can change while the modes are being
-                // read off the disk.
-                //
-                // These two `await`s are the suspension points in a branch lot 1 kept atomic, so a
-                // second press landing inside them is read as another start rather than as a stop.
+                // The mode resolution is a suspension point in a branch lot 1 kept atomic, so a
+                // second press landing inside it is read as another start rather than as a stop.
                 //
                 // Nothing closes that window: it stays open for as long as these lines take, and
-                // the only reason a press does not land in it is TIMING -- what is awaited is one
-                // read of the frontmost application and a read of four small files, orders of
-                // magnitude under the reaction time of a double press. That is an argument to
-                // re-verify the day either resolution grows a network call or a model load, not a
-                // structural guarantee.
+                // the only reason a press does not land in it is TIMING -- what is awaited is a
+                // read of four small files (measured: median 0.45 ms), orders of magnitude under
+                // the reaction time of a double press. That is an argument to re-verify the day
+                // the mode resolution grows a network call or a model load, not a structural
+                // guarantee.
                 //
                 // What does not depend on timing is the outcome when a press DOES land inside:
                 // `AudioRecorder.start()` refuses a second recording (`guard sink == nil`), so
@@ -218,7 +253,7 @@ public actor DictationSession {
                 // on one device. That exact sequence is pinned by
                 // `testASecondPressInsideTheModeResolutionCannotStartASecondRecording`, so a
                 // change to it fails a test rather than passing unnoticed.
-                target = await recording.targetForNewDictation()
+                self.target = target
                 activeMode = await refiner.modeForNewDictation()
                 transition(to: .recording)
             } catch {
