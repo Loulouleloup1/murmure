@@ -22,6 +22,20 @@ import Foundation
 public enum NotchCard {
     // MARK: - Turning a card width into the width its content gets
 
+    /// The card's outer width, in points, including the black the library adds around the content.
+    ///
+    /// **Arbitrary, and recorded as arbitrary.** What it has to buy is stated: the cutout is
+    /// 185 pt on this Mac and the design before it added 32 pt of wing on each side, which Louis
+    /// read as nothing at all. 400 pt is a little over twice the cutout, so the card reads as a
+    /// shape with the hole inside it rather than as the hole with fringes -- and it still leaves
+    /// the menu bar's own items, which live at the two ends of the screen, uncovered on a 1512 pt
+    /// display. Louis's to move.
+    ///
+    /// It is here rather than in `NotchController` so that the two things that must agree about it
+    /// can be checked together: the widest waveform the card asks for, and the number of levels
+    /// `LevelHistory` keeps for it to draw.
+    public static let width: Double = 400
+
     /// The horizontal room DynamicNotchKit takes on each side of the expanded content, in points.
     ///
     /// **Read off the library, not chosen.** At tag 1.1.0 `NotchView.expandedContent()` puts a
@@ -61,28 +75,6 @@ public enum NotchCard {
 
     // MARK: - How wide the dictation's drawing is
 
-    /// The width a waveform of `barCount` bars occupies, at the bar geometry the drawing uses.
-    ///
-    /// `DictationPhaseView` lays its bars out in an `HStack` of **absolute** widths and spacings
-    /// and then centres that stack in whatever frame it is given -- its line weights are points,
-    /// by contract, and only lengths and positions scale. So a waveform handed a frame wider than
-    /// this floats in the middle of it, and on the card, where the two halves are drawn edge to
-    /// edge, two floating clusters would be separated by a gap the width of the card. The
-    /// recording phase therefore asks for exactly this width and no more.
-    ///
-    /// The three inputs are passed rather than declared here because the app target owns them:
-    /// duplicating `barWidth`/`barSpacing` in the package would be a second source of truth that
-    /// goes stale silently, and the failure it produces -- a seam down the middle of the waveform
-    /// -- is small enough to survive a review.
-    ///
-    /// `n` bars have `n - 1` gaps; zero bars occupy nothing.
-    public static func waveformWidth(
-        barCount: Int, barWidth: Double, barSpacing: Double
-    ) -> Double {
-        guard barCount > 0 else { return 0 }
-        return Double(barCount) * barWidth + Double(barCount - 1) * barSpacing
-    }
-
     /// How much of the content width the refinement's half claims.
     ///
     /// **Arbitrary in its digits, deliberate in what it prevents.** Past five seconds the
@@ -93,46 +85,71 @@ public enum NotchCard {
     /// quarter of the card keeps the pair together around the middle. Tune by use.
     public static let refiningHalfFraction: Double = 0.28
 
+    /// How much of the content width the silence's half claims.
+    ///
+    /// **A tenth: the smallest the drawing ever gets, and that is the point.** `nothingHeard` is
+    /// drawn as a short dim mark *centred in each half*, so the two can never meet however wide
+    /// the halves are -- at a full half they would be two dashes a third of the card apart, with
+    /// nothing in the middle to explain the gap (on the old wings there was a hardware cutout
+    /// there; on the card there is not). Shrunk to a tenth they become one small still object in
+    /// the middle of a card that is otherwise empty, which is what the phase means.
+    public static let silentHalfFraction: Double = 0.10
+
+    /// The gap between the two mirrored halves of the recording's waveform.
+    ///
+    /// **This is a bug fix wearing a constant's clothes.** The two halves each put the *newest*
+    /// sample against the join -- that is what makes them a mirror -- so with the halves abutting,
+    /// one level was drawn twice, side by side, with no gap between the two copies while every
+    /// other pair of bars had one. It read as a single double-width bar down the middle. Louis saw
+    /// it before anyone described it to him: *"j'ai l'impression que ça se chevauche un peu au
+    /// milieu."*
+    ///
+    /// 9 pt is **arbitrary** in its digits; what it has to be is comfortably wider than the gaps
+    /// inside the row, or it is not a seam but merely one more gap. At the card's own width the
+    /// bars sit about 4.4 pt apart, so this is a little over twice that, and a test refuses the
+    /// two ever converging.
+    public static let waveformCentreGap: Double = 9
+
+    /// The gap between the two halves, for this phase.
+    ///
+    /// Only the recording has one. The travelling mark of a transcription *emerges* from the
+    /// middle and a gap there would be a place it comes from rather than a seam; the completion's
+    /// green fill and the failure's bar are single objects spanning the card, and a notch cut out
+    /// of the middle of them would read as damage.
+    public static func centreGap(for phase: NotchPhase) -> Double {
+        if case .recording = phase { waveformCentreGap } else { 0 }
+    }
+
     /// The width of ONE of the two mirrored halves of the dictation's drawing, in a card whose
     /// content area is `contentWidth` wide.
     ///
     /// Three answers, and the ordering between them is the decision:
     ///
-    /// - **`recording` is the narrowest**, and its width is not a fraction of anything: it is the
-    ///   waveform's own, so the two halves meet with no seam (see `waveformWidth`).
-    /// - **`nothingHeard` is drawn at exactly that same width**, and this is the one answer here
-    ///   that is about meaning rather than about fit. Its drawing is a short dim mark *centred in
-    ///   each half*, so the two can never meet however wide the halves are -- at a full half they
-    ///   would be two disconnected dashes a third of the card apart, with nothing in the middle to
-    ///   explain the gap (on the wings there was a hardware cutout there; on the card there is
-    ///   not). Shrunk to the waveform's own footprint they become one small still object sitting
-    ///   exactly where the voice would have been, which is what the phase means.
-    /// - **`refining` is in between**, so the breathing bar and the elapsed counter form one
-    ///   centred pair (see `refiningHalfFraction`).
+    /// - **The recording fills the card**, minus the seam down the middle. It used to be given the
+    ///   waveform's own intrinsic width, because the bars were a fixed-width block that would
+    ///   otherwise float in the middle of whatever frame it was handed. `WaveformLayout` removed
+    ///   that constraint -- the row now fits itself to its frame -- so the frame can finally be
+    ///   the whole card, which is what Louis asked for.
+    /// - **The silence and the refinement take a fraction**, for the two reasons their own
+    ///   constants give.
     /// - **Everything else takes half the card.** The sweep of a transcription, the fill of a
     ///   completion and the bar of a failure are all drawn at the same full width, which is what
     ///   lets the crossfade between them change what is drawn without changing where it is -- the
     ///   same argument `NotchAppearance.mark(for:)` makes for `transcribing` and `inserting`
     ///   sharing a family.
     ///
-    /// Clamped to half the content width, so a waveform whose bar count outgrew the card spills
-    /// over the card's own edge rather than out of the black shape.
-    public static func drawingHalfWidth(
-        for phase: NotchPhase, contentWidth: Double, waveformWidth: Double
-    ) -> Double {
-        let full = max(0, contentWidth) / 2
+    /// Together with `centreGap(for:)` this exactly accounts for the content width: two halves
+    /// plus the seam are the card, never more.
+    public static func drawingHalfWidth(for phase: NotchPhase, contentWidth: Double) -> Double {
+        let content = max(0, contentWidth)
+        let room = max(0, content - centreGap(for: phase))
         switch phase {
-        case .recording, .nothingHeard:
-            return min(waveformWidth, full)
+        case .nothingHeard:
+            return content * silentHalfFraction
         case .refining:
-            // Not clamped to `full`, unlike the waveform above, and the asymmetry is deliberate:
-            // `refiningHalfFraction` is a constant in this file that a test holds below a half
-            // (the refinement must stay tighter than a sweep), whereas `waveformWidth` is a
-            // measurement passed in from the app and can outgrow any card. A clamp here would be
-            // a line no test could ever reach.
-            return max(0, contentWidth) * refiningHalfFraction
-        case .hidden, .transcribing, .inserting, .completed, .failed, .alert:
-            return full
+            return content * refiningHalfFraction
+        case .hidden, .recording, .transcribing, .inserting, .completed, .failed, .alert:
+            return room / 2
         }
     }
 

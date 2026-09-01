@@ -19,10 +19,14 @@ public enum StatusPanelLayout {
     /// The inset on each end, inside the capsule's own stroke.
     public static let horizontalPadding: CGFloat = 14
 
-    /// The dictation's drawing: two `DictationPhaseView` halves of 32 pt each, which is the notch
-    /// wing's width. The same drawing at the same size on both surfaces, so a dictation looks
-    /// identical whichever display it was started on -- that is the whole reason the halves are one
-    /// view and not two.
+    /// The dictation's drawing: two `DictationPhaseView` halves of 32 pt each.
+    ///
+    /// The same view as the notch card's, at a size of its own. It used to be the same *size* as
+    /// well -- 32 pt was the notch wing's width, back when the notch had wings -- and the sentence
+    /// that stood here said a dictation therefore looked identical on either display. That stopped
+    /// being true when the notch became a 400 pt card: what the two surfaces share is the drawing
+    /// and its cadence, not its scale. `WaveformLayout` is what keeps 32 pt meaning six bars here
+    /// while the card fits its own, so this number needs no defending against that one.
     public static let drawingWidth: CGFloat = 64
 
     /// Between the drawing and the sentence. Wide enough that they read as two things.

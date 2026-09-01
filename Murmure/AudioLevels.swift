@@ -22,18 +22,12 @@ import os
 /// exists to avoid: a slow interface delaying the end of a recording. They are taken one after the
 /// other, never one inside the other.
 final class AudioLevels: @unchecked Sendable {
-    /// How much audio each bar measures.
+    /// How much audio each bar measures, and therefore how far back the waveform reaches.
     ///
-    /// ~43 ms, i.e. about 23 bars a second. It is a *fraction of a tap buffer*, not a buffer: at
-    /// the 48 kHz of this Mac a 4 096-frame buffer is 85.3 ms, so one level per callback would
-    /// update the waveform 11.7 times a second and a syllable would be a single bar. Two blocks
-    /// per buffer is what puts the update rate above the 20 Hz the eye reads as continuous.
-    ///
-    /// (The lot-3 plan says "100 ms sub-blocks … so the level updates at ~20 Hz". Those two are
-    /// not the same statement: a 100 ms block is *longer* than the 85.3 ms buffer it would have to
-    /// be cut from, and would have lowered the rate to 10 Hz. The 20 Hz is the intent worth
-    /// keeping, so it is the number implemented.)
-    static let blockDuration: Double = 0.043
+    /// The constant itself is `WaveformLayout.blockDuration`, in the package: `LevelHistory`'s
+    /// capacity is derived from it -- how many bars fit inside `WaveformLayout.window` -- and a
+    /// derivation with one half here and one half there is one the app target cannot test.
+    static let blockDuration = WaveformLayout.blockDuration
 
     private let lock = UnsafeMutablePointer<os_unfair_lock>.allocate(capacity: 1)
     private var meter = AudioLevelMeter()

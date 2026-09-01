@@ -5,18 +5,8 @@ import XCTest
 /// `NotchController` actually ships, so the assertions below are about the interface Louis sees
 /// rather than about round numbers chosen to make arithmetic tidy.
 private let notchWidth: Double = 185
-private let cardWidth: Double = 400
-private let contentWidth = NotchCard.contentWidth(forCardWidth: cardWidth, notchWidth: notchWidth)
-
-/// `DictationPhaseView`'s bar geometry, in the app target. Repeated here as *test data*, never as
-/// a second definition: the production path passes the real constants in
-/// (`NotchController.waveformWidth`), and nothing below would still pass if it stopped doing so.
-private let barWidth: Double = 3
-private let barSpacing: Double = 2.5
-private let barsPerHalf = LevelHistory.defaultCapacity
-
-private let waveformWidth = NotchCard.waveformWidth(
-    barCount: barsPerHalf, barWidth: barWidth, barSpacing: barSpacing)
+private let contentWidth = NotchCard.contentWidth(
+    forCardWidth: NotchCard.width, notchWidth: notchWidth)
 
 /// Every phase, so a phase added later has to be added here too rather than being silently
 /// untested by the properties that quantify over all of them.
@@ -54,37 +44,44 @@ final class NotchCardTests: XCTestCase {
 
     // MARK: - How wide the dictation's drawing is
 
-    /// `n` bars have `n - 1` gaps. The six bars of one wing at 3 pt and 2.5 pt are 30.5 pt.
-    func testTheWaveformIsItsBarsPlusTheGapsBetweenThem() {
-        XCTAssertEqual(
-            NotchCard.waveformWidth(barCount: 6, barWidth: 3, barSpacing: 2.5), 30.5,
-            accuracy: 0.0001)
-        // One bar is one bar, with no gap hanging off it.
-        XCTAssertEqual(
-            NotchCard.waveformWidth(barCount: 1, barWidth: 3, barSpacing: 2.5), 3, accuracy: 0.0001)
-        XCTAssertEqual(NotchCard.waveformWidth(barCount: 0, barWidth: 3, barSpacing: 2.5), 0)
+    /// **The recording now fills the card**, and this is the assertion that broke the clump: it
+    /// used to be given the waveform's own fixed width, ~30 pt, so twelve bars sat marooned in the
+    /// middle of a 340 pt row. The seam is the only width it gives up.
+    func testTheRecordingFillsTheCardApartFromItsSeam() {
+        let half = NotchCard.drawingHalfWidth(for: .recording, contentWidth: contentWidth)
+        XCTAssertEqual(2 * half + NotchCard.waveformCentreGap, contentWidth, accuracy: 0.0001)
     }
 
-    /// The recording's half is the waveform's own width, so the two mirrored halves meet with no
-    /// gap down the middle of the card. This is the one phase whose width is not a fraction.
-    func testTheRecordingsHalfIsExactlyTheWaveform() {
-        XCTAssertEqual(
-            NotchCard.drawingHalfWidth(
-                for: .recording, contentWidth: contentWidth, waveformWidth: waveformWidth),
-            waveformWidth,
-            accuracy: 0.0001)
+    /// Only the recording has a seam. A sweep emerges from the middle, and a completion's green
+    /// fill is one object spanning the card -- a notch cut out of either would read as damage.
+    func testOnlyTheRecordingIsSplitDownTheMiddle() {
+        XCTAssertEqual(NotchCard.centreGap(for: .recording), NotchCard.waveformCentreGap)
+        for phase in everyPhase where !isRecording(phase) {
+            XCTAssertEqual(NotchCard.centreGap(for: phase), 0, "\(phase) must not be split")
+        }
     }
 
-    /// The silence is drawn at the width the voice would have had. Its mark is centred in each
-    /// half and so can never meet its mirror; at a full half the card would show two dashes a
-    /// third of its width apart, with nothing between them to explain the gap.
-    func testTheSilenceIsDrawnWhereTheVoiceWouldHaveBeen() {
-        XCTAssertEqual(
-            NotchCard.drawingHalfWidth(
-                for: .nothingHeard, contentWidth: contentWidth, waveformWidth: waveformWidth),
-            NotchCard.drawingHalfWidth(
-                for: .recording, contentWidth: contentWidth, waveformWidth: waveformWidth),
-            accuracy: 0.0001)
+    /// **The seam has to be wider than the gaps inside the row, or it is not a seam.** Louis saw
+    /// the two halves collide before anyone described it to him -- both put the newest level
+    /// against the join, so one level was drawn twice with no gap between the copies.
+    func testTheSeamIsWiderThanTheGapsBetweenTheBars() {
+        let half = NotchCard.drawingHalfWidth(for: .recording, contentWidth: contentWidth)
+        let spacing = WaveformLayout.barSpacing(
+            inWidth: half, barCount: WaveformLayout.barCount(inWidth: half))
+        XCTAssertGreaterThanOrEqual(NotchCard.waveformCentreGap, 1.5 * spacing)
+    }
+
+    /// The silence is the smallest the drawing ever gets. Its mark is centred in each half and so
+    /// can never meet its mirror; at a full half the card would show two dashes a third of its
+    /// width apart, with nothing between them to explain the gap.
+    func testTheSilenceIsTheSmallestDrawingOnTheCard() {
+        let silence = NotchCard.drawingHalfWidth(for: .nothingHeard, contentWidth: contentWidth)
+        for phase in everyPhase where !isNothingHeard(phase) {
+            XCTAssertLessThan(
+                silence,
+                NotchCard.drawingHalfWidth(for: phase, contentWidth: contentWidth),
+                "the silence must be smaller than \(phase)")
+        }
     }
 
     /// Everything that is not a recording, a silence or a refinement is drawn at the same full
@@ -95,37 +92,36 @@ final class NotchCardTests: XCTestCase {
         for phase in everyPhase
         where !isRecording(phase) && !isRefining(phase) && !isNothingHeard(phase) {
             XCTAssertEqual(
-                NotchCard.drawingHalfWidth(
-                    for: phase, contentWidth: contentWidth, waveformWidth: waveformWidth),
+                NotchCard.drawingHalfWidth(for: phase, contentWidth: contentWidth),
                 full,
                 accuracy: 0.0001,
                 "\(phase) must be drawn at the full half")
         }
     }
 
-    /// The ordering is the decision: the recording is the tightest, the refinement sits between,
-    /// and everything else spans the card. Collapsing any two of them loses either the waveform's
-    /// seam or the counter's pairing.
-    func testTheRecordingIsTighterThanTheRefinementWhichIsTighterThanTheRest() {
-        let recording = NotchCard.drawingHalfWidth(
-            for: .recording, contentWidth: contentWidth, waveformWidth: waveformWidth)
-        let refining = NotchCard.drawingHalfWidth(
-            for: .refining, contentWidth: contentWidth, waveformWidth: waveformWidth)
+    /// The ordering is the decision: the silence is the smallest, the refinement sits between, and
+    /// the recording spans the card like the rest. Collapsing any two of them loses either the
+    /// silence's legibility or the counter's pairing.
+    func testTheSilenceIsTighterThanTheRefinementWhichIsTighterThanTheRest() {
+        let silence = NotchCard.drawingHalfWidth(for: .nothingHeard, contentWidth: contentWidth)
+        let refining = NotchCard.drawingHalfWidth(for: .refining, contentWidth: contentWidth)
         let steady = NotchCard.drawingHalfWidth(
-            for: .completed(insertedCharacters: 1), contentWidth: contentWidth,
-            waveformWidth: waveformWidth)
-        XCTAssertLessThan(recording, refining)
+            for: .completed(insertedCharacters: 1), contentWidth: contentWidth)
+        XCTAssertLessThan(silence, refining)
         XCTAssertLessThan(refining, steady)
     }
 
-    /// A drawing wider than its own half would be drawn outside the black shape. The clamp covers
-    /// both the waveform outgrowing a narrow card and a refining fraction raised past a half.
-    func testNoPhaseIsEverDrawnWiderThanHalfTheCard() {
-        for phase in everyPhase {
-            let half = NotchCard.drawingHalfWidth(
-                for: phase, contentWidth: 40, waveformWidth: 500)
-            XCTAssertLessThanOrEqual(half, 20, "\(phase) spills out of the card")
-            XCTAssertGreaterThanOrEqual(half, 0, "\(phase) has a negative width")
+    /// Two halves plus the seam are the card, never more: a drawing wider than that would be drawn
+    /// outside the black shape.
+    func testTheTwoHalvesAndTheSeamNeverExceedTheCard() {
+        for content in [contentWidth, 40.0, 12.0] {
+            for phase in everyPhase {
+                let half = NotchCard.drawingHalfWidth(for: phase, contentWidth: content)
+                XCTAssertLessThanOrEqual(
+                    2 * half + NotchCard.centreGap(for: phase), content + 0.0001,
+                    "\(phase) spills out of a \(content) pt card")
+                XCTAssertGreaterThanOrEqual(half, 0, "\(phase) has a negative width")
+            }
         }
     }
 
@@ -134,7 +130,7 @@ final class NotchCardTests: XCTestCase {
     func testAnEmptyCardHandsOutNothingRatherThanANegativeWidth() {
         for phase in everyPhase {
             XCTAssertEqual(
-                NotchCard.drawingHalfWidth(for: phase, contentWidth: -10, waveformWidth: 30), 0,
+                NotchCard.drawingHalfWidth(for: phase, contentWidth: -10), 0,
                 "\(phase) must be empty in an empty card")
         }
     }

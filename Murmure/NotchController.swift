@@ -58,16 +58,6 @@ import os
 /// made key by one, so ⌘V cannot land in it.
 @MainActor
 final class NotchController {
-    /// The card's outer width, in points, including the black the library adds around the content.
-    ///
-    /// **Arbitrary, and recorded as arbitrary.** What it has to buy is stated: the cutout is
-    /// 185 pt on this Mac and the previous design added 32 pt of wing on each side, which Louis
-    /// read as nothing at all. 400 pt is a little over twice the cutout, so the card reads as a
-    /// shape with the hole inside it rather than as the hole with fringes -- and it still leaves
-    /// the menu bar's own items, which live at the two ends of the screen, uncovered on a 1512 pt
-    /// display. Louis's to move.
-    static let cardWidth: Double = 400
-
     private let notch: DynamicNotch<NotchCardView, EmptyView, EmptyView>
     /// What the card reads. Held here because the two are one mechanism: the phase decides both
     /// what is drawn and whether there is a window to draw it in.
@@ -281,7 +271,7 @@ final class NotchModel: ObservableObject {
     /// with one cutout, never at all -- the guard below is what makes that true rather than
     /// hoped for.
     @Published private(set) var contentWidth: Double = NotchCard.contentWidth(
-        forCardWidth: NotchController.cardWidth, notchWidth: 0)
+        forCardWidth: NotchCard.width, notchWidth: 0)
 
     /// The waveform's levels. Deliberately NOT `@Published`: they change about twenty-three times
     /// a second, and publishing them would re-evaluate the card's whole body on the audio thread's
@@ -316,7 +306,7 @@ final class NotchModel: ObservableObject {
     /// dictation -- publishes nothing at all.
     fileprivate func fit(toNotchWidth notchWidth: Double) {
         let width = NotchCard.contentWidth(
-            forCardWidth: NotchController.cardWidth, notchWidth: notchWidth)
+            forCardWidth: NotchCard.width, notchWidth: notchWidth)
         guard width != contentWidth else { return }
         contentWidth = width
     }
@@ -370,25 +360,13 @@ struct NotchCardView: View {
         brightness: NotchAppearance.accentBrightness
     )
 
-    /// The waveform's own width, so the two mirrored halves of a recording meet with no seam.
-    ///
-    /// Read off the real bar geometry rather than restated: `DictationPhaseView` owns the two
-    /// point sizes and `LevelHistory` owns the count, and a copy of either here would go stale in
-    /// silence. The arithmetic over them is `NotchCard.waveformWidth`, where it is tested.
-    static let waveformWidth = NotchCard.waveformWidth(
-        barCount: LevelHistory.defaultCapacity,
-        barWidth: DictationPhaseView.barWidth,
-        barSpacing: DictationPhaseView.barSpacing
-    )
-
     @ObservedObject var model: NotchModel
 
     var body: some View {
         // The phase the card DRAWS, which is not the phase the controller is in while it retracts.
         let phase = model.displayPhase
         let half = CGSize(
-            width: NotchCard.drawingHalfWidth(
-                for: phase, contentWidth: model.contentWidth, waveformWidth: Self.waveformWidth),
+            width: NotchCard.drawingHalfWidth(for: phase, contentWidth: model.contentWidth),
             height: Self.drawingHeight
         )
         VStack(spacing: Self.rowSpacing) {
@@ -450,10 +428,17 @@ struct NotchCardView: View {
         ZStack {
             Capsule()
                 .fill(Self.color(for: phase))
-                .frame(width: 2 * half.width + Self.glowSpill, height: Self.glowHeight)
+                .frame(
+                    width: 2 * half.width + NotchCard.centreGap(for: phase) + Self.glowSpill,
+                    height: Self.glowHeight)
                 .blur(radius: Self.glowBlur)
                 .opacity(Self.glowOpacity(for: phase))
-            HStack(spacing: 0) {
+            // The seam. Both halves put the NEWEST level against the join -- that is what makes
+            // them a mirror -- so with them abutting, one level was drawn twice side by side with
+            // no gap between the copies while every other pair of bars had one, and it read as a
+            // double-width bar down the middle. `NotchCard.centreGap(for:)` opens the recording's
+            // join and leaves every other phase joined, where the two halves are one object.
+            HStack(spacing: NotchCard.centreGap(for: phase)) {
                 DictationPhaseView(
                     phase: phase, markBegan: model.markBegan, levels: model.levels,
                     mirrored: false, size: half)

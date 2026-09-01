@@ -18,6 +18,9 @@ import SwiftUI
 ///   scaling it would make the same design read as a hairline in one surface and a slab in the
 ///   other, which is the opposite of the point. This is already what lot 3 T3's bars do
 ///   (`barWidth` is absolute, the bar's height is not), and it is kept rather than invented.
+/// - **The waveform answers a wider container with more bars and wider gaps, never thicker ones.**
+///   That is the same rule read the other way: `WaveformLayout` fits the count and the spacing to
+///   `size.width` so the row fills it, and `barWidth` is the one number it never touches.
 ///
 /// Every decision above the pixels -- which family of drawing a phase belongs to, where the mark
 /// is at this instant, how bright the breath is, when the counter appears -- is `NotchAppearance`
@@ -35,8 +38,9 @@ struct DictationPhaseView: View {
     /// is the only phase that is a result rather than a progress report.
     static let fillHeight: CGFloat = 7
 
-    static let barWidth: CGFloat = 3
-    static let barSpacing: CGFloat = 2.5
+    /// A bar's width. `WaveformLayout`'s, because how many bars a frame draws and how far apart
+    /// they sit are now decided in the package, from this number and the frame's own width.
+    static let barWidth = CGFloat(WaveformLayout.barWidth)
 
     /// How often the waveform samples the level box. It is a PULL -- nothing about the audio
     /// thread's rate reaches this timeline, and a frame missed here is a bar not drawn, never a
@@ -194,9 +198,21 @@ struct DictationPhaseView: View {
         .animation(.smooth, value: phase)
     }
 
+    /// The recording: one bar per level, **fitted to the frame rather than centred in it**.
+    ///
+    /// This used to be an `HStack` of every level at a fixed spacing, which made the row a block
+    /// of fixed width wherever it was drawn -- 32 pt of bars on a 32 pt panel half, and the same
+    /// 32 pt marooned in the middle of the card's 165 pt half. `WaveformLayout` decides both
+    /// numbers from `size.width` instead: how many of the newest levels this surface has room for,
+    /// and how far apart they go so that they fill it exactly.
+    ///
+    /// The newest levels and not the first ones: `levels` is oldest-first and a narrow surface
+    /// showing the *start* of the history would be a waveform running a second behind the voice.
     private func bars(_ levels: [Float]) -> some View {
-        HStack(spacing: Self.barSpacing) {
-            ForEach(Array((mirrored ? levels.reversed() : levels).enumerated()), id: \.offset) { _, level in
+        let shown = Array(levels.suffix(WaveformLayout.barCount(inWidth: size.width)))
+        let spacing = WaveformLayout.barSpacing(inWidth: size.width, barCount: shown.count)
+        return HStack(spacing: spacing) {
+            ForEach(Array((mirrored ? shown.reversed() : shown).enumerated()), id: \.offset) { _, level in
                 Capsule()
                     .fill(.white.opacity(0.9))
                     .frame(
@@ -209,7 +225,7 @@ struct DictationPhaseView: View {
         }
         // The meter's own attack and release do the smoothing; this only carries each bar from one
         // arrival to the next so a burst of levels reads as movement rather than as a flicker.
-        .animation(.linear(duration: Self.levelCarry), value: levels)
+        .animation(.linear(duration: Self.levelCarry), value: shown)
     }
 
     /// The transcription -- and the insertion behind it: a mark leaving the inner edge and running
