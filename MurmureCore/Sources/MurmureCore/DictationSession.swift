@@ -105,6 +105,16 @@ public protocol DictationRecording: Sendable {
 public actor DictationSession {
     public enum State: Equatable {
         case idle, recording, transcribing, refining, inserting
+        /// The recording was abandoned before it produced anything. Always followed immediately
+        /// by `.idle`, for the reason `.completed` is: this state says what happened, it is not a
+        /// state the session sits in.
+        ///
+        /// **It exists for the same reason `.completed` does, one gesture later.** Without it a
+        /// cancel is a `.recording` followed by an `.idle` -- which is what the app is in all day
+        /// -- so nothing downstream could tell an abandoned dictation from a launch, from a
+        /// finished one, or from a press macOS never delivered. The notch would simply retract,
+        /// and the one gesture whose entire feedback is that something STOPS would have none.
+        case cancelled
         /// The dictation ran to its end, and `insertedCharacters` is how much of it reached the
         /// target application. Always followed immediately by `.idle`: this state says what
         /// happened, it is not a state the session sits in, and how long a completion stays on
@@ -189,10 +199,11 @@ public actor DictationSession {
             await finishRecording()
         case .transcribing, .refining, .inserting:
             break // pipeline already running; ignore extra presses
-        // `.completed` is here for the compiler and not for the machine: it is emitted and left
-        // in the same call (`complete(insertedCharacters:)`), so no press can ever observe it.
-        // Grouped with `.idle` because that is what it becomes a line later.
-        case .idle, .completed, .failed:
+        // `.completed` and `.cancelled` are here for the compiler and not for the machine: each
+        // is emitted and left in the same call (`complete(insertedCharacters:)` and `cancel()`),
+        // so no press can ever observe either. Grouped with `.idle` because that is what they
+        // both become a line later.
+        case .idle, .completed, .cancelled, .failed:
             // **Read BEFORE the microphone opens, and this is the whole of the guard below.**
             //
             // The target used to be read after a successful start, which was right while Murmure
@@ -471,6 +482,10 @@ public actor DictationSession {
         // dictation leaves behind.
         let wav = recorder.stop()
         recordedSeconds = now().timeIntervalSince(startedAt)
+        // Two transitions rather than one, exactly as `complete(insertedCharacters:)` does and for
+        // its reason: the interface needs both facts, and they are not the same fact. What this
+        // dictation did, and that the session is free again.
+        transition(to: .cancelled)
         transition(to: .idle)
         await archive(.cancelled, audio: wav)
     }

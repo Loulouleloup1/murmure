@@ -12,7 +12,7 @@ final class StatusPanelTextTests: XCTestCase {
             .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
             .preparingModel(.loading),
             .transcribing, .refining, .inserting,
-            .completed(insertedCharacters: 42), .nothingHeard,
+            .completed(insertedCharacters: 42), .nothingHeard, .cancelled,
             .failed(message: "clipboard lost", recoveredText: nil),
             .alert(message: "Accessibility is off"),
         ]
@@ -33,6 +33,22 @@ final class StatusPanelTextTests: XCTestCase {
             silent.localizedCaseInsensitiveContains("inserted"),
             "a silence must not borrow the completion's verb")
         XCTAssertTrue(silent.localizedCaseInsensitiveContains("nothing"))
+    }
+
+    /// **On a display with no cutout the sentence is most of the interface**, so the cancellation
+    /// has to have one of its own. It may not borrow the silence's -- "Nothing heard" would be a
+    /// lie about the microphone in the one place Louis can read one; he spoke, Murmure heard him,
+    /// and he threw it away -- and it may not borrow the completion's verb either.
+    func testACancellationSaysSoInItsOwnWords() {
+        let cancelled = StatusPanelText.label(for: .cancelled)
+        XCTAssertEqual(cancelled, "Cancelled")
+        XCTAssertNotEqual(cancelled, StatusPanelText.label(for: .nothingHeard))
+        XCTAssertFalse(
+            cancelled.localizedCaseInsensitiveContains("nothing"),
+            "a cancellation must not claim the microphone heard nothing")
+        XCTAssertFalse(
+            cancelled.localizedCaseInsensitiveContains("inserted"),
+            "a cancellation must not borrow the completion's verb")
     }
 
     /// The count, not just the fact. It is what says whether the sentence under the cursor is the

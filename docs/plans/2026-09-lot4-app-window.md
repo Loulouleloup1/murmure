@@ -515,10 +515,29 @@ compares the two texts trimmed; the rule that decides what to STORE compares the
 - `HistoryStore` names a corrupt database as an error, and no screen shows it.
 - A dictation whose row failed to write is silent; the dictation itself still succeeded, which is
   the right priority, but the archive is then quietly incomplete.
-- `DictationSession.cancel()` writes a `.cancelled` row and **has no caller in the app**. The path
-  is tested and unreachable in real use — lot 3 T5 (the hover dashboard with Stop/Cancel) is what
-  would reach it, and that task is blocked on `ignoresMouseEvents`. Either a later task gives cancel
-  a caller or the row type is aspirational; say which rather than leaving it ambiguous.
+- ~~`DictationSession.cancel()` writes a `.cancelled` row and **has no caller in the app**.~~
+  **Resolved: cancel got a caller, and the row type is real.** Escape while recording abandons the
+  dictation — the recording stops, nothing is transcribed, nothing is pasted, the WAV is kept, and
+  the row is written exactly as it always was. Lot 3 T5 is still blocked on `ignoresMouseEvents`
+  and no longer needs to be unblocked for this: a key is the better gesture anyway, because Louis
+  dictates with his hands on the keyboard.
+
+  Two things had to change around the already-tested `cancel()`, and both are the same shape of
+  argument the plan makes elsewhere. The session gained a `.cancelled` STATE, emitted with the
+  `.idle` behind it exactly as `.completed` is (D8's reasoning one gesture later): without it a
+  cancel is a `.recording` followed by an `.idle`, which no surface can tell from a launch. And
+  `NotchPhase` gained a `cancelled` case, sharing the silence's tint and mark and differing only in
+  glyph and sentence — because "Nothing heard" is a statement about the microphone, and this is a
+  statement about Louis.
+
+  The hazard is not the cancel, it is the registration. A Carbon hot key is taken from **every**
+  application on the Mac, so an Escape outliving its recording is Escape silently ceasing to work
+  everywhere. It is therefore never registered by the code that starts a recording and released by
+  the code that ends one — there are seven places a recording can end. `CancelHotkey`
+  (`MurmureCore`) makes the registration a **function of the session's state**, driven from the
+  same one line the cue and the two surfaces are, so every exit is covered by construction rather
+  than by review. Lot 3 D9 refused a global Escape and was right to: what it refused is a
+  registration with no lifetime, which is a different thing from this one.
 
 **Nobody's task yet — the retention decision has no mechanism.** `clearText` and `clearAudio` exist
 and have no caller, so the 30-day / 3-day rule Louis decided on 2026-09-01 is at present a sentence

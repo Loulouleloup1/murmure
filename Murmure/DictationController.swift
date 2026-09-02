@@ -14,6 +14,16 @@ import SwiftUI
 final class DictationController {
     private let session: DictationSession
     private let hotkeys = HotkeyManager()
+    /// Escape, and the rule that decides when Murmure is allowed to hold it.
+    ///
+    /// **Two objects rather than one, and the split is where the hazard lives.** `escapeKey` is
+    /// the Carbon registration and knows nothing about dictations; `cancelKey` is the rule --
+    /// held if and only if the session is `.recording` -- and it lives in `MurmureCore`, where it
+    /// is tested against the real state machine on every path a recording can end by. A
+    /// registered Escape is taken from every application on the Mac, so "when is it held" is the
+    /// one decision here that must not live in a target with no test bundle.
+    private let escapeKey: EscapeCancelKey
+    private let cancelKey: CancelHotkey
     private let inserter: PasteInserter
     private let appState: AppState
     /// The notch surface. Owned here because the only thing allowed to drive it is the session's
@@ -216,6 +226,15 @@ final class DictationController {
             statusPanel.apply(placement)
         }
 
+        // Before the session, because the state-change closure below is what drives it -- and
+        // driving it from THERE is the whole design: every exit from a recording is a state
+        // change, so there is one line rather than a release to remember at each of the seven
+        // places a recording can end.
+        let escapeKey = EscapeCancelKey()
+        self.escapeKey = escapeKey
+        let cancelKey = CancelHotkey(key: escapeKey)
+        self.cancelKey = cancelKey
+
         session = DictationSession(
             recorder: AudioRecorder(levels: levels),
             transcriber: engine,
@@ -223,6 +242,15 @@ final class DictationController {
             refiner: ModeAwareRefinement(modesDirectory: modesDirectory, appState: appState),
             recording: DictationArchive(store: history, appState: appState)
         ) { state in
+            // **Stamped HERE, and the position of this line is the whole of the guarantee.** It
+            // runs synchronously inside `DictationSession`'s actor, in the order the states are
+            // emitted; the `Task` below hops each one onto the main actor separately, and separate
+            // unstructured tasks carry no ordering guarantee at all. `CancelHotkey` drops anything
+            // that arrives older than what it has already acted on, so a `.recording` overtaking
+            // the state that ended its dictation cannot re-register Escape after the release has
+            // run -- which would hold the key across the whole of macOS with nothing to undo it.
+            // Stamping inside the `Task` would record the order the runtime chose, i.e. nothing.
+            let change = cancelKey.stamp(state)
             Task { @MainActor in
                 // FIRST, ahead of every line below it, and that ordering is the feature. Louis
                 // starts speaking the moment he hears the start cue, so everything queued in front
@@ -237,6 +265,12 @@ final class DictationController {
                 // (median 0.02 ms). Half a millisecond, against the 27 ms the output device itself
                 // costs -- so the session keeps its side effects and its tests unchanged.
                 feedback.apply(state)
+                // Immediately after the cue and before every surface, which is the one ordering
+                // constraint it has: the cue is what tells Louis the microphone is live, and
+                // everything queued in front of it is time he is speaking without knowing it.
+                // Escape comes next because it is the only line here that changes what the rest
+                // of the Mac does, and it should be true for as much of the recording as possible.
+                cancelKey.apply(change)
                 if case .recording = state {
                     // Starting a dictation clears the previous one's warnings, and this is the only
                     // thing that ever will: `PasteInserter` reports an outcome only when it actually
@@ -284,6 +318,10 @@ final class DictationController {
                 // two; the surface that shows a completion is the notch, which holds it on
                 // purpose. What lot 1's menu did is exactly what it keeps doing.
                 case .completed: .idle
+                // Like `.completed`, and for its reason: it is emitted and immediately followed
+                // by `.idle`, so a symbol of its own would be a flicker of a frame or two. The
+                // surface that shows a cancellation is the notch, which holds it on purpose.
+                case .cancelled: .idle
                 case .failed: .failed
                 }
                 // The notch is driven from the same state changes as the menu, and from nothing
@@ -322,6 +360,18 @@ final class DictationController {
                     state: state, alert: appState.alert,
                     clipboardWarning: appState.clipboardWarning))
             }
+        }
+
+        // What Escape does, installed here because it needs the session and the session's own
+        // initialiser is what took the closure that drives `cancelKey`. Nothing registers
+        // anything yet: `EscapeCancelKey` refuses to take the key without a handler, and
+        // `CancelHotkey` only asks for it on a `.recording`.
+        //
+        // `cancel()` is a no-op outside `.recording`, so a press that races the end of a
+        // recording -- the key is released one main-actor turn after the session has moved on --
+        // abandons nothing and cannot cut a transcription short.
+        escapeKey.onPress = { [session] in
+            Task { await session.cancel() }
         }
 
         // Task 4 deliberately shipped `register` WITHOUT `@discardableResult`. A ⌥Space that

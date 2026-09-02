@@ -129,7 +129,12 @@ public enum NotchCard {
     public static func drawingPieceWidth(for phase: NotchPhase, contentWidth: Double) -> Double {
         let content = max(0, contentWidth)
         switch phase {
-        case .nothingHeard:
+        // Both phases drawn as the quiet mark, and the pair is listed rather than left to the
+        // `default` below: a cancellation falling through would be drawn at a full half, i.e. two
+        // dim marks a third of the card apart with nothing between them -- the exact failure
+        // `silentHalfFraction` was measured to prevent, re-introduced by a phase that merely
+        // forgot to be named.
+        case .nothingHeard, .cancelled:
             return content * silentHalfFraction
         case .refining:
             return content * refiningHalfFraction
@@ -178,7 +183,11 @@ public enum NotchCard {
         case .hidden, .recording, .preparingModel, .transcribing, .inserting: .neutral
         case .refining: .accent
         case .completed: .success
-        case .nothingHeard: .muted
+        // The cancellation shares the silence's tint because it makes the silence's statement
+        // about the target application: nothing got there, and an absence has to be legible AS an
+        // absence. What separates them is the glyph and the sentence, never the colour -- and it
+        // is deliberately not `.warning`, which would read as something having gone wrong.
+        case .nothingHeard, .cancelled: .muted
         case .failed, .alert: .warning
         }
     }
@@ -213,6 +222,12 @@ public enum NotchCard {
         case .refining: "sparkles"
         case .completed: "checkmark.circle.fill"
         case .nothingHeard: "mic.slash.fill"
+        // **Where the cancellation stops being a silence.** The two share a tint and a mark, so
+        // the glyph is the whole of the difference -- and the card is read glyph first. The cross
+        // is the completion's checkmark inverted, in the same family and at the same weight,
+        // because that is the pair it is actually opposed to: a dictation that landed, and one
+        // Louis stopped. A second `mic.slash` would say the microphone failed him.
+        case .cancelled: "xmark.circle.fill"
         case .failed, .alert: "exclamationmark.triangle.fill"
         }
     }

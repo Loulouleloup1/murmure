@@ -63,7 +63,12 @@ public enum NotchPresenter {
     public static func dwell(for phase: NotchPhase) -> TimeInterval? {
         switch phase {
         case .completed: completionDwell
-        case .nothingHeard: nothingHeardDwell
+        // **The cancellation takes the silence's dwell for the silence's reason, and it is pinned
+        // as an equality rather than given a digit of its own.** Escape is consumed without a
+        // sound and pastes nothing, so this surface is the ONLY evidence the press was received --
+        // exactly the position `nothingHeard` argues from. A green flash corroborates text Louis
+        // can already see; these two are sole witnesses, and a sole witness has to stay longer.
+        case .nothingHeard, .cancelled: nothingHeardDwell
         case .failed, .alert: failureDwell
         // The preparation joins the phases with no timer, and it is the one that would suffer most
         // from inheriting one: a 1.6 GB download is minutes long, and a dwell would retract the
@@ -101,8 +106,8 @@ public enum NotchPresenter {
 
     /// Which phase the notch is in, given the state change that just arrived.
     ///
-    /// `previous` is not decoration. `DictationSession` emits `.completed` and `.idle` in the same
-    /// breath -- the machine holds no timer, by design -- so a reducer reading only `current`
+    /// `previous` is not decoration. `DictationSession` emits `.completed` and `.idle` -- and
+    /// `.cancelled` and `.idle` -- in the same breath -- the machine holds no timer, by design -- so a reducer reading only `current`
     /// would hide the notch in the same instant it was told the dictation succeeded, and the
     /// completion would never be seen at all. An `.idle` arriving straight after a completion
     /// therefore KEEPS the completion on screen, and how long it stays is the interface's
@@ -112,6 +117,7 @@ public enum NotchPresenter {
     ) -> NotchPhase {
         switch current {
         case .recording: .recording
+        case .cancelled: .cancelled
         case .transcribing: .transcribing
         case .refining: .refining
         case .inserting: .inserting
@@ -129,6 +135,12 @@ public enum NotchPresenter {
             switch previous {
             case .completed(let inserted):
                 inserted > 0 ? .completed(insertedCharacters: inserted) : .nothingHeard
+            // The third phase that survives its own `.idle`, and it joined the list the moment the
+            // cancel stopped going straight to idle: `cancel()` emits `.cancelled` and `.idle` in
+            // the same breath, so a reducer reading only `current` would retract the notch in the
+            // same instant it was told the dictation had been abandoned.
+            case .cancelled:
+                .cancelled
             default:
                 .hidden
             }

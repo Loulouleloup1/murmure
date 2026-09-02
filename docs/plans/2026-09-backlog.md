@@ -4,17 +4,8 @@ Everything below is already argued somewhere — in a plan, a doc comment, or a 
 file exists because it was **argued in prose and never listed**, so the honest answer to "what is
 left?" took a grep. One page, ordered, each item pointing at where it is actually specified.
 
-The loop works today: ⌥Space, record, transcribe, refine, paste, plus History and the retention
-purge. What follows is what the app still cannot do.
-
----
-
-## In flight
-
-**Cancel gets a caller.** `DictationSession.cancel()` writes a `.cancelled` row, is tested, and had
-no caller — a started dictation could not be abandoned. Escape while recording, registered only for
-the length of the recording so it is not stolen from the rest of macOS. Resolves the open question
-in `2026-09-lot4-app-window.md` §"For T9".
+The loop works today: ⌥Space, record, transcribe, refine, paste, Escape to abandon a recording,
+plus History and the retention purge. What follows is what the app still cannot do.
 
 ---
 
@@ -67,7 +58,7 @@ the same seam.
 ## Known, argued, and deliberately not scheduled
 
 - **The hover dashboard with Stop/Cancel** (lot 3 T5) stays blocked on `ignoresMouseEvents = true`.
-  Escape supersedes its only urgent purpose.
+  Escape shipped and supersedes its only urgent purpose.
 - **`durationSeconds` comes from `Date`.** An NTP correction mid-dictation writes a wrong duration.
   A monotonic clock fixes it; T4 declined to add an unguarded fix and said so.
 - **Two surfaces with nothing behind them**: a corrupt database is named as an error no screen

@@ -181,7 +181,10 @@ public enum StatusSurfaceChoice {
     /// Written without a `default`, so a state added later has to say which it is.
     public static func routeOutlives(_ state: DictationSession.State) -> Bool {
         switch state {
-        case .recording, .transcribing, .refining, .inserting, .completed: true
+        // `.cancelled` keeps it for `.completed`'s reason, one gesture later: it and the `.idle`
+        // behind it both draw the `.cancelled` phase, so a release keyed on the first would
+        // re-resolve a display under a mark that is already on screen.
+        case .recording, .transcribing, .refining, .inserting, .completed, .cancelled: true
         case .idle, .failed: false
         }
     }

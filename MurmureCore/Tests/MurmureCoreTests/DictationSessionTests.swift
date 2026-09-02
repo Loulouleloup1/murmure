@@ -657,8 +657,34 @@ final class DictationSessionTests: XCTestCase {
         await session.cancel()
         let finalState = await session.state
         XCTAssertEqual(finalState, .idle)
-        XCTAssertEqual(states.values, [.recording, .idle])
+        XCTAssertEqual(states.values, [.recording, .cancelled, .idle])
         XCTAssertTrue(inserter.inserted.isEmpty)
+    }
+
+    /// **The machine has to SAY the dictation was abandoned, in the same shape `.completed`
+    /// already uses**: one state that names what happened, then the `.idle` that says the session
+    /// is free again, both in the same breath.
+    ///
+    /// Without the first of those, a cancel is a `.recording` followed by an `.idle` -- which is
+    /// the state the app spends all day in -- and no surface downstream can tell it from a
+    /// dictation that ended, a launch, or a press macOS never delivered. The notch would simply
+    /// retract, and the one gesture whose whole feedback is that something STOPS would have no
+    /// feedback at all.
+    func testACancelSaysWhatHappenedBeforeItSaysTheSessionIsFree() async {
+        // Given
+        let states = StateLog()
+        let session = DictationSession(
+            recorder: FakeRecorder(), transcriber: FakeTranscriber(result: .success("bonjour")),
+            inserter: SpyInserter(), refiner: SpyRefiner(),
+            recording: SpyRecording(), onStateChange: { states.append($0) }
+        )
+        await session.toggle()
+
+        // When
+        await session.cancel()
+
+        // Then
+        XCTAssertEqual(states.values.suffix(2), [.cancelled, .idle])
     }
 
     /// The microphone really stops. Without this the device would stay live for the rest of the

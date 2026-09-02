@@ -39,7 +39,7 @@ final class StatusPanelLayoutTests: XCTestCase {
         .recording,
         .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
         .preparingModel(.loading),
-        .transcribing, .refining, .inserting, .nothingHeard,
+        .transcribing, .refining, .inserting, .nothingHeard, .cancelled,
         .completed(insertedCharacters: 1), .completed(insertedCharacters: 12345),
     ]
 

@@ -15,7 +15,7 @@ private let everyPhase: [NotchPhase] = [
     .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
     .preparingModel(.loading),
     .transcribing, .refining, .inserting,
-    .completed(insertedCharacters: 47), .nothingHeard,
+    .completed(insertedCharacters: 47), .nothingHeard, .cancelled,
     .failed(message: "paste refused", recoveredText: "bonjour"), .alert(message: "no hotkey"),
 ]
 
@@ -105,12 +105,24 @@ final class NotchCardTests: XCTestCase {
     /// third of its width apart, with nothing between them to explain the gap.
     func testTheSilenceIsTheSmallestDrawingOnTheCard() {
         let silence = NotchCard.drawingPieceWidth(for: .nothingHeard, contentWidth: contentWidth)
-        for phase in everyPhase where !isNothingHeard(phase) {
+        for phase in everyPhase where !isQuiet(phase) {
             XCTAssertLessThan(
                 silence,
                 NotchCard.drawingPieceWidth(for: phase, contentWidth: contentWidth),
                 "the silence must be smaller than \(phase)")
         }
+    }
+
+    /// **The cancellation draws the quiet mark, so it has to draw it at the quiet mark's size.**
+    /// Excluded from the comparison above only because it is the same width -- and this is what
+    /// says so, rather than letting a phase be skipped there and silently fall through to the
+    /// `default` arm, where it would be drawn at half the card. Two dim marks a third of the card
+    /// apart, with nothing between them: the exact failure `silentHalfFraction` was measured to
+    /// prevent, re-introduced by a phase that merely forgot to be listed.
+    func testACancellationIsDrawnAtTheSameSizeAsASilence() {
+        XCTAssertEqual(
+            NotchCard.drawingPieceWidth(for: .cancelled, contentWidth: contentWidth),
+            NotchCard.drawingPieceWidth(for: .nothingHeard, contentWidth: contentWidth))
     }
 
     /// Everything that is not a silence or a refinement spans the same full row, which is what
@@ -124,7 +136,7 @@ final class NotchCardTests: XCTestCase {
     /// it always satisfied the rule too: it was excluded for being a single piece, not for being
     /// drawn anywhere else.
     func testEverySteadyPhaseSpansTheSameFullRow() {
-        for phase in everyPhase where !isRefining(phase) && !isNothingHeard(phase) {
+        for phase in everyPhase where !isRefining(phase) && !isQuiet(phase) {
             let total = Double(NotchCard.drawingPieces(for: phase))
                 * NotchCard.drawingPieceWidth(for: phase, contentWidth: contentWidth)
             XCTAssertEqual(
@@ -202,6 +214,32 @@ final class NotchCardTests: XCTestCase {
             NotchCard.tint(for: .failed(message: "boom", recoveredText: nil)),
         ]
         XCTAssertEqual(outcomes.count, 3)
+    }
+
+    /// **A cancellation is not a failure, and the card must not say it is.** Nothing went wrong:
+    /// Louis abandoned a sentence on purpose, and orange with an exclamation triangle would turn a
+    /// deliberate act into an incident. It takes the muted tint -- the one that means an absence
+    /// legible AS an absence -- which is the same answer the silence gets, because it is the same
+    /// statement about what reached the target application: nothing.
+    func testACancellationIsMutedRatherThanOrange() {
+        XCTAssertEqual(NotchCard.tint(for: .cancelled), .muted)
+        XCTAssertNotEqual(
+            NotchCard.tint(for: .cancelled),
+            NotchCard.tint(for: .failed(message: "boom", recoveredText: nil)))
+        XCTAssertNotEqual(
+            NotchCard.tint(for: .cancelled), NotchCard.tint(for: .completed(insertedCharacters: 1)))
+    }
+
+    /// **And the glyph is where it stops being a silence.** They share a tint because they share a
+    /// meaning about the target application, and the glyph is what carries the difference: a
+    /// microphone that heard nothing is not a dictation Louis threw away, and the card is read at
+    /// a glance, glyph first.
+    func testACancellationDoesNotWearTheSilencesGlyph() {
+        XCTAssertNotEqual(
+            NotchCard.symbolName(for: .cancelled), NotchCard.symbolName(for: .nothingHeard))
+        XCTAssertNotEqual(
+            NotchCard.symbolName(for: .cancelled),
+            NotchCard.symbolName(for: .completed(insertedCharacters: 1)))
     }
 
     /// The insertion must not repaint the card on its way past: it lasts one CGEvent round-trip.
@@ -296,6 +334,15 @@ private func isRefining(_ phase: NotchPhase) -> Bool {
     if case .refining = phase { true } else { false }
 }
 
-private func isNothingHeard(_ phase: NotchPhase) -> Bool {
-    if case .nothingHeard = phase { true } else { false }
+/// The phases drawn as the dim, still mark: the silence, and now the cancellation.
+///
+/// **Enumerated by hand rather than asked of `NotchAppearance.mark(for:)`**, for the reason
+/// `drawsOneTimelineRow` gives one helper up: the widths below are what the card decides ABOUT
+/// that mark, and a predicate routed through the mark would compare a function with itself. A
+/// phase added later has to be placed on one side of this line by hand, in as many words.
+private func isQuiet(_ phase: NotchPhase) -> Bool {
+    switch phase {
+    case .nothingHeard, .cancelled: true
+    default: false
+    }
 }

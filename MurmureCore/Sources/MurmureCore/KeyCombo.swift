@@ -17,4 +17,8 @@ public struct KeyCombo: Codable, Equatable {
 
     /// Option+Space -- Murmure's default dictation toggle.
     public static let defaultToggle = KeyCombo(keyCode: 49, carbonModifiers: 2048)
+
+    /// Escape, bare. Abandons the recording in progress, and is registered only for as long as
+    /// one is running (`CancelHotkey`).
+    public static let cancelRecording = KeyCombo(keyCode: 53, carbonModifiers: 0)
 }

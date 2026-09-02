@@ -58,7 +58,7 @@ public enum FeedbackPolicy {
         // screen across its own `.idle`, or it would never be seen at all. A sound has no such
         // problem: it has already been heard. Answering `.idle` the way the notch does would
         // simply play the insertion cue twice.
-        case .idle, .transcribing, .refining, .inserting, .failed: nil
+        case .idle, .transcribing, .refining, .inserting, .failed, .cancelled: nil
         }
     }
 }

@@ -28,6 +28,20 @@ public enum NotchPhase: Equatable {
     /// retracts on a timer" -- and only the sentence, the glyph and whether there is a bar differ.
     /// Two cases would have to be kept in step by hand at five call sites.
     case preparingModel(ModelPreparation)
+    /// Louis abandoned the dictation with Escape. Nothing was transcribed, nothing was pasted,
+    /// and the recording is kept (`DictationSession.cancel()`).
+    ///
+    /// **A phase of its own rather than `nothingHeard` reused, and the distinction is the same one
+    /// `DictationOutcome` already keeps one layer down (lot 4 D8).** The two agree about the
+    /// target application -- nothing reached it -- and about the tint and the mark, which is why
+    /// they share both. They disagree about the only thing Louis is reading: "Nothing heard" says
+    /// the microphone got nothing, and here the microphone got everything and he threw it away.
+    /// On the floating panel the sentence is most of the interface, so borrowing the silence's
+    /// would be a lie told in the one place he can see one.
+    ///
+    /// It is emphatically not `failed` either. Nothing went wrong; orange and an exclamation
+    /// triangle would turn a deliberate act into an incident.
+    case cancelled
     case transcribing
     /// The long one: 19 s at the p-high of the measured refinements, 57.5 s on the worst real
     /// case. It has to look different from `transcribing`, which is why it is a phase of its own

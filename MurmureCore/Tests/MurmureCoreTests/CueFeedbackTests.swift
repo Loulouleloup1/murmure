@@ -46,6 +46,15 @@ final class CueFeedbackTests: XCTestCase {
         XCTAssertNil(FeedbackPolicy.cue(for: .inserting))
     }
 
+    /// **Silent, and it is a decision rather than an omission.** `FeedbackCue` has two cases
+    /// because this fires dozens of times a day into headphones, and a cancellation is the one
+    /// outcome Louis already knows about before it happens -- he pressed the key. The notch and
+    /// the panel say it in words; a third sound would be a noise he cannot switch off, earned by
+    /// the one event he is never surprised by.
+    func testACancellationIsSilent() {
+        XCTAssertNil(FeedbackPolicy.cue(for: .cancelled))
+    }
+
     func testIdleIsSilent() {
         XCTAssertNil(FeedbackPolicy.cue(for: .idle))
     }

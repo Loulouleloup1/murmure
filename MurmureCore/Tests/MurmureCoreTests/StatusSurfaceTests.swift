@@ -171,6 +171,15 @@ final class StatusSurfaceTests: XCTestCase {
         XCTAssertFalse(StatusSurfaceChoice.routeOutlives(.idle))
     }
 
+    /// A cancellation is the same shape of pair: `.cancelled` and `.idle` arrive together and both
+    /// draw the `.cancelled` phase, so the hold has to survive the first and die on the second --
+    /// or the mark Louis is looking at is re-placed halfway through and handed to the other
+    /// surface, on a display he is not reading.
+    func testACancellationKeepsItsDisplayAndTheIdleBehindItReleasesIt() {
+        XCTAssertTrue(StatusSurfaceChoice.routeOutlives(.cancelled))
+        XCTAssertFalse(StatusSurfaceChoice.routeOutlives(.idle))
+    }
+
     /// Every phase of a running dictation keeps it, so nothing re-resolves under a shape that is
     /// on screen.
     func testARunningDictationKeepsItsDisplay() {

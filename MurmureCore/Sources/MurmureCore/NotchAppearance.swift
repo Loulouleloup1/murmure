@@ -84,7 +84,11 @@ public enum NotchAppearance {
         case .preparingModel, .transcribing, .inserting: .travelling
         case .refining: .pulsing
         case .completed: .success
-        case .nothingHeard: .quiet
+        // The cancellation takes the silence's family rather than a fourth drawing of its own.
+        // It is the same statement about the drawing -- nothing is happening any more, and
+        // nothing reached the target -- and what separates the two is the glyph and the sentence,
+        // which is the same split `preparingModel` makes against `transcribing`.
+        case .nothingHeard, .cancelled: .quiet
         case .failed, .alert: .warning
         }
     }

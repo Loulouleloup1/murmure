@@ -371,7 +371,7 @@ final class ModelPreparationTests: XCTestCase {
         .hidden, .recording,
         .preparingModel(.downloading(ModelDownload(expectedBytes: 1000))),
         .preparingModel(.loading), .transcribing, .refining, .inserting,
-        .completed(insertedCharacters: 3), .nothingHeard,
+        .completed(insertedCharacters: 3), .nothingHeard, .cancelled,
         .failed(message: "boom", recoveredText: nil), .alert(message: "no hotkey"),
     ]
 

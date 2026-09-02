@@ -23,7 +23,7 @@ final class NotchAppearanceTests: XCTestCase {
             .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
             .preparingModel(.loading),
             .transcribing, .refining, .inserting,
-            .completed(insertedCharacters: 12), .nothingHeard,
+            .completed(insertedCharacters: 12), .nothingHeard, .cancelled,
             .failed(message: "boom", recoveredText: nil), .alert(message: "accessibility"),
         ]
         for phase in visible {
@@ -39,6 +39,11 @@ final class NotchAppearanceTests: XCTestCase {
         XCTAssertEqual(NotchAppearance.mark(for: .refining), .pulsing)
         XCTAssertEqual(NotchAppearance.mark(for: .completed(insertedCharacters: 3)), .success)
         XCTAssertEqual(NotchAppearance.mark(for: .nothingHeard), .quiet)
+        // **No family of its own, deliberately.** A cancellation is the same statement about the
+        // drawing as a silence -- nothing is happening any more and nothing reached the target --
+        // and a family is a whole motion to design. What separates the two is the glyph and the
+        // sentence, which is the same split `preparingModel` makes against `transcribing`.
+        XCTAssertEqual(NotchAppearance.mark(for: .cancelled), .quiet)
         XCTAssertEqual(
             NotchAppearance.mark(for: .failed(message: "boom", recoveredText: nil)), .warning)
         XCTAssertEqual(NotchAppearance.mark(for: .alert(message: "revoked")), .warning)
@@ -51,6 +56,15 @@ final class NotchAppearanceTests: XCTestCase {
     func testInsertingIsDrawnAsATranscriptionAndNotAsItsOwnThing() {
         XCTAssertEqual(NotchAppearance.mark(for: .transcribing), .travelling)
         XCTAssertEqual(NotchAppearance.mark(for: .inserting), .travelling)
+    }
+
+    /// A cancellation is still a shape on screen. It is the one thing telling Louis that the
+    /// Escape he pressed was received: the key is consumed silently, nothing is pasted, nothing
+    /// is copied, and a notch that simply vanished would be indistinguishable from a press macOS
+    /// swallowed on its way to Murmure.
+    func testACancellationIsSeenRatherThanBeingNoWindowAtAll() {
+        XCTAssertTrue(NotchAppearance.showsShape(in: .cancelled))
+        XCTAssertNotEqual(NotchAppearance.mark(for: .cancelled), .none)
     }
 
     /// A silence must never be drawn the way a success is. This is the same decision

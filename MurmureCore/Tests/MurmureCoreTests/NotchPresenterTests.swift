@@ -64,8 +64,26 @@ final class NotchPresenterTests: XCTestCase {
             .nothingHeard)
     }
 
-    /// Every other route to idle is a retraction: a cancel from `.recording`, and the idle the
-    /// app starts life in. Hidden is no window at all -- idle costs zero pixels (D4).
+    /// A cancellation is the third phase that survives its own `.idle`, and for the reason the
+    /// other two do: `DictationSession.cancel()` emits `.cancelled` and `.idle` in the same
+    /// breath, so a reducer reading only `current` would retract the notch in the same instant it
+    /// was told the dictation had been abandoned -- and Louis, who pressed a key that is silently
+    /// consumed, would have nothing at all telling him the press landed.
+    func testTheIdleThatFollowsACancellationKeepsItOnScreen() {
+        XCTAssertEqual(NotchPresenter.phase(previous: .cancelled, current: .idle), .cancelled)
+    }
+
+    /// The state itself, before the `.idle` behind it.
+    func testACancelledDictationIsShownRatherThanVanishing() {
+        XCTAssertEqual(NotchPresenter.phase(previous: .recording, current: .cancelled), .cancelled)
+    }
+
+    /// Every other route to idle is a retraction: the idle the app starts life in, and the one
+    /// after a failure. Hidden is no window at all -- idle costs zero pixels (D4).
+    ///
+    /// `.recording` straight to `.idle` is no longer a route the session can take -- a cancel now
+    /// says `.cancelled` on the way through -- and it is kept here as the answer for a pair
+    /// nothing draws, which is what this arm is for.
     func testAnyOtherRouteToIdleHidesTheNotch() {
         XCTAssertEqual(NotchPresenter.phase(previous: .recording, current: .idle), .hidden)
         XCTAssertEqual(NotchPresenter.phase(previous: .idle, current: .idle), .hidden)
@@ -152,7 +170,7 @@ final class NotchPresenterTests: XCTestCase {
     /// phase that answered nil here would leave a black band with nothing behind it.
     func testEveryPhaseThatEndsADictationRetractsOnATimer() {
         for phase: NotchPhase in [
-            .completed(insertedCharacters: 9), .nothingHeard,
+            .completed(insertedCharacters: 9), .nothingHeard, .cancelled,
             .failed(message: "boom", recoveredText: nil), .alert(message: "revoked"),
         ] {
             XCTAssertNotNil(NotchPresenter.dwell(for: phase), "\(phase) would never leave")
@@ -177,6 +195,23 @@ final class NotchPresenterTests: XCTestCase {
     func testASilenceOutlastsAFlash() {
         XCTAssertGreaterThan(
             NotchPresenter.dwell(for: .nothingHeard) ?? 0,
+            NotchPresenter.dwell(for: .completed(insertedCharacters: 1)) ?? 0)
+    }
+
+    /// **A cancellation is the second sole witness, and takes the silence's dwell for the
+    /// silence's reason.** Louis pressed Escape and Escape is consumed without a sound, so nothing
+    /// anywhere corroborates it: no text appears, no clipboard changes, the recording simply
+    /// stops. As with a silence, the surface is the ONLY evidence the press was received, and a
+    /// sole witness has to stay longer than a corroborating one.
+    ///
+    /// Pinned as an equality to the silence rather than as a digit of its own, because the
+    /// argument is the same argument and a second arbitrary number would be one more thing to
+    /// tune in two places.
+    func testACancellationStaysAsLongAsASilence() {
+        XCTAssertEqual(
+            NotchPresenter.dwell(for: .cancelled), NotchPresenter.dwell(for: .nothingHeard))
+        XCTAssertGreaterThan(
+            NotchPresenter.dwell(for: .cancelled) ?? 0,
             NotchPresenter.dwell(for: .completed(insertedCharacters: 1)) ?? 0)
     }
 

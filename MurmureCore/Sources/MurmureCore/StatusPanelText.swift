@@ -76,6 +76,13 @@ public enum StatusPanelText {
         // longer than a completion for the same reason: it is the only witness there is.
         case .nothingHeard:
             "Nothing heard"
+        // **Its own sentence, and it may not be the one above.** "Nothing heard" is a statement
+        // about the microphone; a cancellation is a statement about Louis. He spoke, Murmure was
+        // recording, and he pressed Escape -- reading that the app heard nothing would send him
+        // looking for a hardware fault that is not there. The word is the one `HistoryRow` already
+        // gives the same outcome, so the archive and the strip say the same thing.
+        case .cancelled:
+            "Cancelled"
         // The failure's own sentence, because a generic word would send Louis to a menu to find
         // out what happened, and lot 3 exists because that menu is not read. `recoveredText` is
         // not shown here: offering text to re-paste needs a control, and this panel takes no
