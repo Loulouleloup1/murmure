@@ -13,6 +13,16 @@ benchmark/pull.log
 # fixtures and tests, NEVER committed. Decision recorded as ruling R12.
 benchmark/*.local.jsonl
 benchmark/results-*.local.jsonl
+# Same rule, same content, other extension: the vocabulary probe's job files carry
+# absolute paths into ~/Documents/superwhisper/recordings and its selection metadata
+# names which recording carries which term. Both are derived from his dictations.
+benchmark/*.local.json
+# The probe is a SwiftPM package; its build products are not the measurement.
+benchmark/vocabprobe/.build/
+# The probe's own progress logs ("210/327"). No transcript text -- verified -- but they
+# are run artefacts, not measurements.
+benchmark/run-*.local.log
+benchmark/vocabprobe/Package.resolved
 benchmark/__pycache__/
 
 # Benchmark v2 generation log: results-v2.jsonl carries 8 rows generated on
