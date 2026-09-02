@@ -1,0 +1,100 @@
+{
+  "arms": [
+    {
+      "arm": "q4",
+      "model_id": "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M",
+      "weights_mb": 484.2,
+      "num_ctx": 4096,
+      "ollama_ps": [
+        "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M    cc49c07563aa    1.0 GB    100% GPU     4096       4 minutes from now"
+      ],
+      "peak_rss_first_load_gb": 1.083,
+      "peak_rss_warm_gb": 1.084,
+      "settled_rss_gb": 1.084,
+      "peak_rss_longest_dictation_gb": 1.107,
+      "longest_dictation_words": 531,
+      "longest_prompt_tokens": 804,
+      "longest_completion_tokens": 740,
+      "first_cold_load_ms": 559.5,
+      "cold_latency_s": [
+        0.804,
+        0.814,
+        0.806,
+        0.819
+      ],
+      "cold_latency_median_s": 0.81,
+      "cold_latency_max_s": 0.819,
+      "warm_latency_s": [
+        0.178,
+        0.176,
+        0.178,
+        0.184,
+        0.192,
+        0.199,
+        0.202
+      ],
+      "warm_latency_median_s": 0.184
+    },
+    {
+      "arm": "f16",
+      "model_id": "hf.co/superwhisper/s1-mini-GGUF:F16",
+      "weights_mb": 1509.3,
+      "num_ctx": 4096,
+      "ollama_ps": [
+        "hf.co/superwhisper/s1-mini-GGUF:F16    2250db29587c    2.0 GB    100% GPU     4096       4 minutes from now"
+      ],
+      "peak_rss_first_load_gb": 2.108,
+      "peak_rss_warm_gb": 2.109,
+      "settled_rss_gb": 2.109,
+      "peak_rss_longest_dictation_gb": 2.133,
+      "longest_dictation_words": 531,
+      "longest_prompt_tokens": 804,
+      "longest_completion_tokens": 730,
+      "first_cold_load_ms": 560.1,
+      "cold_latency_s": [
+        0.904,
+        0.904,
+        0.91,
+        0.875
+      ],
+      "cold_latency_median_s": 0.904,
+      "cold_latency_max_s": 0.91,
+      "warm_latency_s": [
+        0.307,
+        0.313,
+        0.311,
+        0.312,
+        0.311,
+        0.312,
+        0.312
+      ],
+      "warm_latency_median_s": 0.312
+    }
+  ],
+  "f16_ctx_sweep": [
+    {
+      "arm": "f16",
+      "num_ctx": 2048,
+      "rss_gb": 1.875,
+      "ollama_ps": [
+        "hf.co/superwhisper/s1-mini-GGUF:F16    2250db29587c    1.8 GB    100% GPU     2048       4 minutes from now"
+      ]
+    },
+    {
+      "arm": "f16",
+      "num_ctx": 4096,
+      "rss_gb": 2.109,
+      "ollama_ps": [
+        "hf.co/superwhisper/s1-mini-GGUF:F16    2250db29587c    2.0 GB    100% GPU     4096       4 minutes from now"
+      ]
+    },
+    {
+      "arm": "f16",
+      "num_ctx": 8192,
+      "rss_gb": 2.576,
+      "ollama_ps": [
+        "hf.co/superwhisper/s1-mini-GGUF:F16    2250db29587c    2.5 GB    100% GPU     8192       4 minutes from now"
+      ]
+    }
+  ]
+}
