@@ -569,8 +569,22 @@ is the right call, and this is the note that stops it being forgotten.
   §1.2).
 
 **MurmureCore proves.** ~22 tests. The initial-prompt string built from N terms, and what happens at
-Whisper's 224-token prompt budget — terms are dropped, deterministically, from the end, and the
-rule is stated rather than discovered. Replacements: case-insensitive matching that preserves the
+Whisper's prompt budget — **both numbers in the sentence that used to be here were wrong**, measured
+2026-09-02 against the pinned WhisperKit 1.1.0 the app actually resolves:
+
+- The budget is **111 tokens, not 224**. `Constants.maxTokenContext` is `Int(448 / 2)` = 224
+  (`Models.swift:1340`), and the decoder then trims to `(maxTokenContext / 2) - 1`
+  (`TextDecoder.swift:199`). Half of what this plan assumed.
+- Overflow drops from the **FRONT, not the end**: the trim is `Array(promptTokens.suffix(maxPromptLen))`.
+
+The second error is the one that reaches the surface. A vocabulary that silently discards the terms
+Louis added **first** is a list whose oldest, most-established entries are the ones that stop working
+— the opposite of what anyone would expect from a list they have been curating. And 111 tokens is
+tight: a 35-term list already runs to ~300 characters, so the ceiling arrives while the list still
+feels small. Whichever way the `promptTokens` measurement lands, the pane cannot accept an unbounded
+list without shipping a silent truncation: it either caps what it accepts, or makes the priority
+order visible and says which end is dropped. The rule is stated rather than discovered — and it is
+stated from the source, because it was assumed twice and was wrong both times. Replacements: case-insensitive matching that preserves the
 replacement's own casing; whether a replacement applies inside a longer word (decide and pin it —
 a term like `DCG` must not fire inside `ADCGX`); that no replacement is applied to the output of
 another, so ordering cannot change the result; that a term with no replacement contributes to the

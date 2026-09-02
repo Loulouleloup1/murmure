@@ -83,11 +83,21 @@ BUILT="$DD/Build/Products/Debug/Murmure.app"
 [ -d "$BUILT" ] || { echo "build produced no app at $BUILT"; exit 1; }
 
 # Quit rather than kill: a running dictation gets to finish writing its WAV.
-if pgrep -f "Murmure.app/Contents/MacOS/Murmure" >/dev/null; then
+#
+# `pgrep -x Murmure` and NOT `pgrep -f <path>`, for the reason doctor.sh already carries: -f matches
+# any process whose whole COMMAND LINE holds the string, so a shell that merely mentions the app --
+# an `open "$DEST"`, a `cp -R`, this script invoked with the path in an outer command -- is reported
+# as a running Murmure. The cost here was invisible rather than fatal: the loop below then never
+# breaks, and every install paid a silent ten-second wait for a process that was never running.
+#
+# The same -f trap cost a benchmark run its whole pipeline on 2026-09-02: a `pkill -f` whose pattern
+# also matched the waiting shells that carried it in their own wait condition, so the killer killed
+# itself. A pattern that can describe the process doing the matching is the bug, in either direction.
+if pgrep -x Murmure >/dev/null; then
     echo "Quitting the running Murmure…"
     osascript -e 'quit app "Murmure"' 2>/dev/null || true
     for _ in $(seq 1 20); do
-        pgrep -f "Murmure.app/Contents/MacOS/Murmure" >/dev/null || break
+        pgrep -x Murmure >/dev/null || break
         sleep 0.5
     done
 fi
