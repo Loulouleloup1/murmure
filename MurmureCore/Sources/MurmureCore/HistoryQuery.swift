@@ -30,7 +30,8 @@ public enum HistoryQuery: Equatable, Sendable {
     ///
     /// This deliberately does not try to predict what the tokenizer will do with the string. It
     /// answers the one question the pane has to answer before it asks — is this worth a query —
-    /// and `FTS5Pattern(matchingAllTokensIn:)` remains the authority on the rest.
+    /// and `HistorySearchPattern` remains the authority on the rest, including which word is
+    /// still being typed.
     public init(typed: String) {
         let collapsed = StatusPanelText.oneLine(typed)
         if collapsed.isEmpty {

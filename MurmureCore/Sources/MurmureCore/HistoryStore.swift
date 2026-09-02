@@ -242,17 +242,21 @@ public struct HistoryStore: Sendable {
 
     /// Full-text search over the raw transcript and the refined text, newest first.
     ///
-    /// The query is turned into an FTS5 pattern by `FTS5Pattern(matchingAllTokensIn:)` rather than
-    /// handed to `MATCH` as typed: `MATCH` has a syntax, and a dictation search box will be given
-    /// quotes, colons and stray parentheses. A query that carries no token at all -- empty, or
-    /// only punctuation -- yields no pattern, and that is answered with no rows rather than with
-    /// every row, because a search that matched everything would read as a search that failed.
+    /// The query is turned into an FTS5 expression by `HistorySearchPattern` rather than handed to
+    /// `MATCH` as typed: `MATCH` has a syntax, and a dictation search box will be given quotes,
+    /// colons and stray parentheses. That is also where the search-as-you-type rule lives -- the
+    /// word still under the cursor matches as a prefix, so `mo` finds `moi` -- which is a decision
+    /// about feel, not about storage, and is tested as a string.
     ///
-    /// Tokens are matched whole, not as prefixes: `connect` does not find `connecteur`. Whether
-    /// the last token should match as a prefix is a search-feel decision and belongs with the
-    /// query builder in T5, not here.
+    /// A query that carries nothing searchable at all -- empty, or only punctuation -- yields no
+    /// expression, and that is answered with no rows rather than with every row, because a search
+    /// that matched everything would read as a search that failed. An expression FTS5 will not
+    /// take is answered the same way: rows or none, never a thrown syntax error. Quoting every
+    /// word makes that unreachable, and it stays as the floor under it.
     public func search(_ query: String, limit: Int, offset: Int = 0) throws -> [HistoryRecord] {
-        guard let pattern = FTS5Pattern(matchingAllTokensIn: query) else { return [] }
+        guard let expression = HistorySearchPattern.matchExpression(for: query),
+              let pattern = try? FTS5Pattern(rawPattern: expression)
+        else { return [] }
         return try dbQueue.read { db in
             try HistoryRecord.fetchAll(
                 db,

@@ -105,6 +105,43 @@ public enum HistoryDetail {
 
     // MARK: - The metadata block
 
+    /// Why there is no Raw/Refined switch on this row, when the reason is not already on screen.
+    ///
+    /// Louis: *"la distinction entre le RAW et le raffiné n'apparaît pas tout le temps... je ne
+    /// sais pas trop comment ça se fait."* The behaviour is right — D6 stores no `refinedText`
+    /// when the refinement changed nothing, so there is no second version and D11 hides the
+    /// switch — but a control that comes and goes reads from the outside as a defect. The answer
+    /// is a sentence in the block, not a second empty pane: the pane would be the thing D11
+    /// refused, and it would still not say why.
+    ///
+    /// **The four cases are the two columns `DictationSession.storedRefinement` documents**, and
+    /// this invents no fifth. `llmModel` is non-NULL when the mode has a refiner at all;
+    /// `refinementSeconds` is non-NULL when it was actually called.
+    ///
+    /// - No `llmModel`: the mode does not refine. **Nothing is said** — the block's missing
+    ///   `Language model` row already says it, and D6's rule is that an absent column yields no
+    ///   row rather than a row denying itself.
+    /// - A model, never called: the dictation ended before the refiner (cancelled, or nothing
+    ///   heard). Said, because a `Language model` row with no `Refined in` beside it otherwise
+    ///   invites the reader to wonder which of the two facts is missing.
+    /// - A model, called, no second version: **the case Louis hit.** Said.
+    /// - A model, called, a second version to show: the switch is there, and a row saying the
+    ///   refinement changed something would repeat what the reader is already looking at.
+    ///
+    /// Keyed off `lenses` rather than off `refinedText` so that the fourth case includes the
+    /// refinement that changed only the edges: the switch is hidden for it too, by the same rule,
+    /// and it needs the same sentence. Hence "no change to show" rather than "changed nothing" —
+    /// a trailing newline did change the text, and nothing about it can be shown.
+    ///
+    /// Silent when there is no raw transcript at all: on a purged row, or one that heard nothing,
+    /// the text is visibly gone and the missing switch needs no other explanation — and after the
+    /// 30-day purge the two refinement cases are no longer distinguishable anyway.
+    public static func refinementNote(for record: HistoryRecord) -> String? {
+        guard record.rawTranscript != nil, record.llmModel != nil, lenses(for: record).isEmpty
+        else { return nil }
+        return record.refinementSeconds == nil ? "did not run" : "ran, no change to show"
+    }
+
     /// The rows under the transcript, in order.
     ///
     /// **A column that is NULL yields no row at all**, rather than a row with an empty value or a
@@ -126,7 +163,9 @@ public enum HistoryDetail {
         // cannot be read.
         add("Mode", record.modeName)
         add("Speech model", record.sttModel)
-        add("Language model", record.llmModel)
+        // By name, not by where it was pulled from: the column keeps the exact Ollama identifier
+        // because that is what makes the row reproducible, and this is the reading of it.
+        add("Language model", record.llmModel.map(ModelDisplayName.readable))
         // The application, by whichever half of it there is. `targetAppName` is what Louis
         // recognises; the bundle identifier is the fallback for an application that had no
         // localised name, and is better than nothing because it still names the app.
@@ -135,6 +174,9 @@ public enum HistoryDetail {
         add("Duration", HistoryRow.duration(record.durationSeconds))
         add("Transcribed in", record.transcriptionSeconds.map(HistoryRow.elapsed))
         add("Refined in", record.refinementSeconds.map(HistoryRow.elapsed))
+        // Beside the refinement's own timing, because it is the same fact one step further: what
+        // the refiner did with the time it took.
+        add("Refinement", refinementNote(for: record))
         // Only where it means something. On a failed or cancelled dictation the count is zero
         // because nothing was inserted, and "Inserted 0 characters" reads as a measurement of a
         // thing that did not happen -- the same distinction `StatusPanelText` draws between a

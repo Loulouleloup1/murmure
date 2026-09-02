@@ -201,6 +201,105 @@ final class HistoryDetailTests: XCTestCase {
             "Ollama is not running on port 11434")
     }
 
+    /// Louis, looking at a row his Prompt mode refined: *"pour le language model, je trouve ça
+    /// assez étrange... Pourquoi est-ce qu'on a le lien du modèle et pas juste le nom ? Un peu
+    /// plus classique, un peu plus joli à regarder."*
+    ///
+    /// What was shown was the stored identifier verbatim, registry path and all. The stored value
+    /// does not move -- it is what makes the row reproducible -- and the row shows the name.
+    func testTheLanguageModelRowNamesTheModelRatherThanWhereItWasPulledFrom() {
+        let rows = HistoryDetail.metadata(
+            for: record(refined: "Il faut brancher.",
+                        llmModel: "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M",
+                        refinementSeconds: 0.38),
+            calendar: paris)
+
+        XCTAssertEqual(rows.first { $0.label == "Language model" }?.value, "s1-mini-GGUF:Q4_K_M")
+    }
+
+    /// Louis again: *"la distinction entre le RAW et le raffiné n'apparaît pas tout le temps... je
+    /// ne sais pas trop comment ça se fait."*
+    ///
+    /// It is correct and it is invisible. D6 stores no `refinedText` when the refinement changed
+    /// nothing, so there is no second version and D11 hides the switch -- but from the outside a
+    /// control that comes and goes reads as a defect. The block says the thing the missing switch
+    /// cannot.
+    func testARefinementThatChangedNothingSaysSoWhereTheLensWouldHaveBeen() {
+        let unchanged = record(refined: nil, llmModel: "s1-mini", refinementSeconds: 0.38)
+
+        XCTAssertEqual(HistoryDetail.lenses(for: unchanged), [], "nothing to switch to")
+        XCTAssertEqual(
+            HistoryDetail.metadata(for: unchanged, calendar: paris)
+                .first { $0.label == "Refinement" }?.value,
+            "ran, no change to show")
+    }
+
+    // MARK: - The four cases behind a missing lens
+
+    /// **Case one: the mode does not refine.** Nothing is said, because the block already says
+    /// it by not carrying a `Language model` row — and D6's rule at the surface is that an absent
+    /// column yields no row rather than a row denying itself.
+    func testAModeThatNeverRefinesExplainsItselfByHavingNoLanguageModelRow() {
+        let voice = record(llmModel: nil)
+        let labels = HistoryDetail.metadata(for: voice, calendar: paris).map(\.label)
+
+        XCTAssertNil(HistoryDetail.refinementNote(for: voice))
+        XCTAssertFalse(labels.contains("Refinement"))
+        XCTAssertFalse(labels.contains("Language model"))
+    }
+
+    /// **Case two: a refiner the dictation never reached** — cancelled, or the run stopped short.
+    /// Said, because a `Language model` row with no `Refined in` beside it otherwise leaves the
+    /// reader to guess which of the two facts is the missing one.
+    func testARefinerThatWasNeverCalledSaysSo() {
+        XCTAssertEqual(
+            HistoryDetail.refinementNote(
+                for: record(refined: nil, llmModel: "s1-mini", refinementSeconds: nil)),
+            "did not run")
+    }
+
+    /// **Case three: it ran and there is no second version.** The case Louis hit, and the whole
+    /// reason for the row.
+    func testARefinerThatRanAndChangedNothingSaysSo() {
+        XCTAssertEqual(
+            HistoryDetail.refinementNote(
+                for: record(refined: nil, llmModel: "s1-mini", refinementSeconds: 0.38)),
+            "ran, no change to show")
+    }
+
+    /// **Case four: it ran and there is something to switch to.** Silent — the switch is on
+    /// screen, and a row announcing that the refinement changed the text would only repeat what
+    /// the reader is already looking at.
+    func testARefinementWithSomethingToShowSaysNothingBecauseTheSwitchIsThere() {
+        let refined = record(refined: "Il faut brancher le connecteur.",
+                             llmModel: "s1-mini", refinementSeconds: 0.38)
+
+        XCTAssertEqual(HistoryDetail.lenses(for: refined), [.raw, .refined])
+        XCTAssertNil(HistoryDetail.refinementNote(for: refined))
+    }
+
+    /// The one that would have been a fifth case and is not: a refinement that changed only the
+    /// edges. D11 hides its switch by the same rule, so it needs the same sentence — which is why
+    /// the note is keyed off `lenses` rather than off `refinedText`, and why it says "no change to
+    /// show" rather than "changed nothing". A trailing newline did change the text.
+    func testARefinementThatChangedOnlyTheEdgesGetsTheSameSentenceAndNotAFifthOne() {
+        XCTAssertEqual(
+            HistoryDetail.refinementNote(
+                for: record(raw: "  bonjour   Murmure\n", refined: "bonjour   Murmure",
+                            llmModel: "s1-mini", refinementSeconds: 0.38)),
+            "ran, no change to show")
+    }
+
+    /// Silent when there is no transcript to compare against. On a purged row the text is visibly
+    /// gone and the missing switch needs no other explanation — and once both texts are NULL the
+    /// two refinement cases cannot be told apart anyway, so any sentence here would be a guess.
+    func testARowWhoseTextIsGoneMakesNoClaimAboutItsRefinement() {
+        XCTAssertNil(
+            HistoryDetail.refinementNote(
+                for: record(raw: nil, refined: nil, llmModel: "s1-mini",
+                            refinementSeconds: 0.38)))
+    }
+
     /// D9 priced this block at "about six rows, which fits under the transcript" -- that is what
     /// makes it a block rather than the doc corpus's third pane. A typical row stays inside it.
     func testATypicalRecordYieldsABlockThatFitsUnderTheTranscript() {

@@ -457,6 +457,55 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(try store.search("le", limit: 2, offset: 2).count, 1)
     }
 
+    // MARK: - Search as it is typed
+
+    /// Louis, an hour after the pane shipped: *"quand je vais rechercher « moi », je tape « mo »
+    /// -- aucun résultat, puis « moi » -- 5 résultats."*
+    ///
+    /// A search field that answers nothing until the word is finished answers nothing at all:
+    /// typing is the only way anyone uses one. The word still under the cursor is matched as a
+    /// prefix.
+    func testTypingTheFirstLettersOfAWordAlreadyFindsIt() throws {
+        let store = try makeStore()
+        _ = try store.insert(voiceRecord(raw: "note pour moi, relancer le batch avant jeudi"))
+
+        XCTAssertEqual(try store.search("mo", limit: 10).count, 1, "`mo` has to find `moi`")
+        XCTAssertEqual(try store.search("moi", limit: 10).count, 1, "and finishing it keeps it")
+    }
+
+    /// The other half of the same report: *"j'ai un message avec le mot « t'avoue », je cherche
+    /// « t'av » -- 0 résultat."*
+    ///
+    /// `unicode61` splits the apostrophe, so this is the tokens `t` and `av` against `t` and
+    /// `avoue`. A fix that hung a prefix operator on the whole typed string and left the
+    /// tokenizer to it would still answer nothing here -- the prefix has to land on the last
+    /// token of the word, not on the word.
+    func testTypingAcrossAnApostropheFindsTheWordBeingTyped() throws {
+        let store = try makeStore()
+        _ = try store.insert(voiceRecord(raw: "je t'avoue que le rapprochement m'échappe encore"))
+
+        XCTAssertEqual(try store.search("t'av", limit: 10).count, 1)
+        XCTAssertEqual(try store.search("t'avoue", limit: 10).count, 1)
+    }
+
+    /// And the rule that keeps the first half honest: only the word still being typed is a
+    /// prefix. `moi ava` must not quietly widen `moi` into `moins` as well -- a query that grows
+    /// vaguer as it grows longer is the failure a prefix search is prone to.
+    func testOnlyTheWordStillBeingTypedIsMatchedAsAPrefix() throws {
+        let store = try makeStore()
+        _ = try store.insert(voiceRecord(
+            startedAt: "2026-09-01T08:00:00.000Z",
+            raw: "note pour moi, relancer le batch avant jeudi"))
+        _ = try store.insert(voiceRecord(
+            startedAt: "2026-09-01T09:00:00.000Z",
+            raw: "il faudra moins de latence sur l'avatar de la page"))
+
+        let hits = try store.search("moi ava", limit: 10)
+
+        XCTAssertEqual(hits.count, 1, "`moins` is not `moi`, however far `ava` reaches")
+        XCTAssertEqual(hits.first?.rawTranscript?.contains("moi,"), true)
+    }
+
     // MARK: - Ordering and paging
 
     func testPageIsOrderedByStartedAtDescending() throws {

@@ -48,7 +48,8 @@ final class HistoryQueryTests: XCTestCase {
     }
 
     /// FTS5 syntax is not stripped here. `HistoryStore` hands the string to
-    /// `FTS5Pattern(matchingAllTokensIn:)`, which is the authority on what a token is; this type
+    /// `HistorySearchPattern`, which is the authority on what a word is and on which of them
+    /// is still being typed; this type
     /// answers only the question the pane has before it asks -- is this worth a query.
     func testSomethingCarryingFTS5SyntaxIsStillASearchableQuery() {
         XCTAssertEqual(HistoryQuery(typed: "\"connecteur\" OR"), .tokens("\"connecteur\" OR"))
