@@ -86,10 +86,23 @@ public enum OllamaS1 {
     /// Half the chat dialect's window, and that is the point of this model.
     ///
     /// 4096 is what holds the resident footprint at 1.08 GB against 8.63 for `gemma4:12b-it-qat`
-    /// -- the number that lets Murmure run on a 16 GB machine. It is not tight: the longest
-    /// dictation in the whole 1 449-dictation corpus (531 words) is 804 prompt tokens and 740
-    /// completion tokens, 1 544 of 4 096. Measured across the sweep, 2048 already produces the
-    /// identical answer and 8192 changes nothing but the footprint.
+    /// -- the number that lets Murmure run on a 16 GB machine. It is not tight, measured against
+    /// the true worst case: the longest dictation in the 1 500-dictation corpus is 987 words and
+    /// occupies 3 029 of 4 096 tokens, 74 % of the window. Ten dictations sit above 531 words.
+    ///
+    /// **Do not lower it.** An earlier version of this comment argued from a 531-word maximum and
+    /// concluded that 2048 "already produces the identical answer" -- true of the fixtures that
+    /// sweep was run on, and false of the corpus. At 2048 that same 987-word dictation needs 2 427
+    /// tokens and comes back as 574 words: 42 % deleted from the MIDDLE, beginning and end intact.
+    ///
+    /// ``truncate`` does not catch it, and cannot. That flag turns a prompt that does not fit into
+    /// `400 exceed_context_size_error`, and here the prompt fits -- 1 547 tokens of 2 048. The
+    /// overflow happens during generation, where llama-server's `--context-shift` slides the window
+    /// instead of failing, so Ollama answers `200` with `done_reason: "stop"` like any healthy call.
+    /// Nothing distinguishes the result from a clean refinement. Both quantisations do this.
+    ///
+    /// The lever is real and it is not worth pulling: 2048 buys 0.24 GB (0.84 vs 1.08), and 8192
+    /// changes nothing but the footprint. Measured in `docs/benchmarks/`.
     public static let numContext = 4096
 
     /// Refuse the call rather than silently shorten the input, and this is the whole reason
