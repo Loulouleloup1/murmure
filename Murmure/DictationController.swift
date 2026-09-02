@@ -370,6 +370,98 @@ final class DictationController {
 
         // The menu has to be able to list the modes before the first dictation ever resolves one.
         refreshModes()
+
+        // And the retention decision of 2026-09-01, which until now was a sentence in a document:
+        // `clearText` and `clearAudio` existed and had no caller anywhere in the app.
+        startRetentionPurge()
+    }
+
+    // MARK: - Retention
+
+    /// Six hours, and the timer is a convenience rather than the mechanism.
+    ///
+    /// Every cutoff `RetentionPurge` computes is an absolute instant, so nothing here depends on
+    /// this timer having fired on schedule. A Mac that slept through four of these clears the
+    /// whole backlog on the next one; a Mac shut for a week purges the week on the next launch.
+    /// That is why there is no persisted "last run" marker to go stale: the data's own timestamps
+    /// are the state, and a pass that finds nothing to do is the same pass as one that never ran.
+    private static let purgeInterval: TimeInterval = 6 * 60 * 60
+
+    /// Retained so it can be invalidated, not so it stays alive -- the run loop owns it. `[weak
+    /// self]` because the controller owns the timer and the timer owns its block.
+    private var purgeTimer: Timer?
+
+    /// Whether a pass is in flight. One purge at a time: two sweeps racing over one folder would
+    /// have each of them deleting files the other had already counted.
+    private var purgeInFlight = false
+
+    /// Once now, and every six hours for as long as Murmure is running.
+    private func startRetentionPurge() {
+        purge()
+        purgeTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.purgeInterval, repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in self?.purge() }
+        }
+    }
+
+    /// One pass, off the main actor and off the launch path.
+    ///
+    /// `Task.detached` rather than an inline call for the reason the whole of this file is written
+    /// around: nothing that is not a dictation may cost a dictation. A sweep of Louis's folder is
+    /// 148 `stat`s and up to 122 `unlink`s today, plus two SQLite writes, and the first of these
+    /// passes runs inside launch. None of it belongs on the main actor, and none of it may sit in
+    /// front of the hotkey being registered.
+    ///
+    /// **The report is logged and goes nowhere else, on purpose.** A WAV that could not be deleted
+    /// is not a dictation failure: it is maintenance Louis never asked for and cannot act on, six
+    /// hours after he last spoke. The notch, the strip and the standing panel exist for the
+    /// dictation in flight, and putting a file permission on them would be a black band on screen
+    /// for something that is not happening to him -- the same reasoning that keeps "history
+    /// unavailable" above a log line and not an alert.
+    private func purge() {
+        guard let history else { return }
+        guard !purgeInFlight else {
+            log.notice("retention purge still running -- this pass is skipped")
+            return
+        }
+        purgeInFlight = true
+        let recordings = recordingsDirectory
+        Task.detached(priority: .utility) { [log] in
+            do {
+                // `Date()` is read HERE, at the one place that is allowed to know what time it is,
+                // and handed in. `RetentionPurge` takes it as a parameter so that every window it
+                // computes can be asked about in a test.
+                let report = try RetentionPurge.run(
+                    store: history, recordings: recordings, now: Date())
+                // Every pass, including the ones that did nothing. A mechanism whose whole job is
+                // to delete things quietly needs one line saying it ran, or the first time it is
+                // wrong is also the first time anybody looks.
+                log.notice("""
+                    retention purge -- \(report.audioFilesDeleted, privacy: .public) audio files \
+                    deleted, \(report.audioDeletionFailures.count, privacy: .public) failed, \
+                    \(report.textRowsCleared, privacy: .public) rows lost their text
+                    """)
+                for failure in report.audioDeletionFailures {
+                    log.error("""
+                        could not delete \(failure.filename, privacy: .public): \
+                        \(failure.message, privacy: .public)
+                        """)
+                }
+                if let problem = report.recordingsUnreadable {
+                    log.error("recordings folder could not be listed: \(problem, privacy: .public)")
+                }
+            } catch {
+                // The archive itself refused, so the sweep deliberately did not run: the pin set
+                // comes from the database, and a purge that cannot read it does not know what it
+                // is allowed to delete. Nothing was deleted, and the next pass tries again.
+                log.error("""
+                    retention purge failed, nothing was deleted: \
+                    \(error.localizedDescription, privacy: .public)
+                    """)
+            }
+            await MainActor.run { [weak self] in self?.purgeInFlight = false }
+        }
     }
 
     /// Re-reads `modes/` into the list the menu draws, so a mode file added, renamed or deleted by

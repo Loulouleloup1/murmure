@@ -215,6 +215,24 @@ public struct HistoryStore: Sendable {
 
     // MARK: - Reading
 
+    /// Every audio filename the archive still points at.
+    ///
+    /// The counterpart to `clearAudio`'s return value, and the reason it exists is the retention
+    /// sweep: that one says which files became unreferenced, this one says which are still spoken
+    /// for. A sweep that deletes by modification time needs the second list or a clock skew, a
+    /// restored backup or a copied file deletes a recording the pane still offers to play.
+    ///
+    /// A `Set` because the only question ever asked of it is membership, and because two rows
+    /// naming the same file is a duplicate the caller must not be made to think about.
+    public func referencedAudioFilenames() throws -> Set<String> {
+        try dbQueue.read { db in
+            Set(try String.fetchAll(
+                db,
+                sql: "SELECT audioFilename FROM dictation WHERE audioFilename IS NOT NULL"
+            ))
+        }
+    }
+
     public func record(id: Int64) throws -> HistoryRecord? {
         try dbQueue.read { db in try HistoryRecord.fetchOne(db, key: id) }
     }

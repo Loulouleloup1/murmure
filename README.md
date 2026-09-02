@@ -239,9 +239,18 @@ cannot afford that is a mode to point back at `gemma4:12b-it-qat` with `--api ch
 | `recordings/*.wav` | the audio |
 | `models/` | Whisper downloads |
 
-Nothing leaves the machine. Retention was decided at audio for 3 days and text for 30; the
-primitives exist and **the purge that calls them does not yet** — so today nothing is deleted
-automatically.
+Nothing leaves the machine, and what stays on it is now bounded: **audio goes after 3 days, text
+after 30, and the rows are kept indefinitely** — a dictation whose text has expired still says it
+happened, when, how long it took and through which mode. The purge runs at launch and every six
+hours after, off every cutoff computed from the data's own timestamps rather than from a record of
+when it last ran, so a Mac that was shut for a week purges the week on the next launch instead of
+skipping it. The audio half sweeps `recordings/` as well as the rows, and it has to: on this
+machine 122 of 148 WAVs — 614 MB of 731 — were recorded before history existed, so no row names
+them and a database-driven purge would never have reached a byte. **A first run therefore deletes
+every `.wav` sitting directly in `recordings/` whose file is more than three days old, whether or
+not the database has ever heard of it** — but never one a row still points at and still considers
+current, however old the file itself looks. On this machine today that comes to nothing at all:
+every recording here was made in the last 40 hours. Four days from now it is all 150 of them.
 
 ---
 

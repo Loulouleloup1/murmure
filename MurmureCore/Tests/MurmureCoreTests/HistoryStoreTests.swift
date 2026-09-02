@@ -902,6 +902,38 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(try store.clearText(startedBefore: .distantFuture), 0)
     }
 
+    // MARK: - What the archive still points at
+
+    func testReferencedAudioFilenamesListsTheRowsThatStillHaveAudio() throws {
+        let store = try makeStore()
+        _ = try store.insert(voiceRecord(startedAt: "2026-08-01T10:00:00.000Z",
+                                         audioFilename: "rec-old.wav"))
+        _ = try store.insert(voiceRecord(startedAt: "2026-08-31T10:00:00.000Z",
+                                         audioFilename: "rec-fresh.wav"))
+        _ = try store.insert(voiceRecord(audioFilename: nil))
+
+        XCTAssertEqual(try store.referencedAudioFilenames(), ["rec-old.wav", "rec-fresh.wav"])
+    }
+
+    /// The pairing the retention sweep depends on: what `clearAudio` detaches is exactly what
+    /// stops being referenced, and what it spares is exactly what stays pinned.
+    func testReferencedAudioFilenamesLosesPreciselyWhatClearAudioDetached() throws {
+        let store = try makeStore()
+        _ = try store.insert(voiceRecord(startedAt: "2026-08-01T10:00:00.000Z",
+                                         audioFilename: "rec-old.wav"))
+        _ = try store.insert(voiceRecord(startedAt: "2026-08-31T10:00:00.000Z",
+                                         audioFilename: "rec-fresh.wav"))
+
+        let detached = try store.clearAudio(startedBefore: at("2026-08-29T00:00:00.000Z"))
+
+        XCTAssertEqual(detached, ["rec-old.wav"])
+        XCTAssertEqual(try store.referencedAudioFilenames(), ["rec-fresh.wav"])
+    }
+
+    func testReferencedAudioFilenamesOnAnEmptyArchiveIsEmpty() throws {
+        XCTAssertEqual(try makeStore().referencedAudioFilenames(), [])
+    }
+
     // MARK: - The index stays in step with the table
 
     /// The one that catches a missing delete trigger. The index is asked directly rather than
