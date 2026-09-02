@@ -244,10 +244,12 @@ bonne sur le synthétique, 70 % de latence en plus et +1,025 Go. On garde `Q4_K_
   Un démarrage vraiment froid est plus lent, et l'écart entre les bras y serait plus marqué : le
   fichier `F16` fait 3,1 fois les octets à déplacer. Purger le cache de pages demande les droits
   root.
-- **Le commentaire de `OllamaS1.numContext` est périmé** : il argumente sa marge contre « 531 mots,
-  corpus de 1 449 ». Le corpus fait 1 500 dictées et la plus longue 987 mots (§7). La conclusion
-  tient — 74 % de la fenêtre au vrai maximum — mais le nombre qui la porte est faux. `MurmureCore/`
-  n'a pas été touché par cette campagne.
+- **Le commentaire de `OllamaS1.numContext` a été corrigé ailleurs, à partir de §7.** Il argumentait
+  sa marge contre « 531 mots, corpus de 1 449 » et concluait que « 2048 produit déjà la réponse
+  identique » — vrai des fixtures du balayage v3, faux du corpus. Le commit `9d29236` le réargumente
+  contre les 987 mots réels et y inscrit l'interdiction de baisser la fenêtre. Il précède ce
+  document dans l'historique et le cite. **Cette campagne n'a pas touché `MurmureCore/`** : la
+  correction appartient à qui possède ce fichier, ce document n'en est que la mesure d'origine.
 
 ---
 
