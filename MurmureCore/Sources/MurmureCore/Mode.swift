@@ -261,8 +261,25 @@ extension Mode {
 // MARK: - Built-in modes (spec §5)
 
 extension Mode {
-    /// The four modes written on first launch. All editable afterwards, `Voice` included.
-    public static let builtIns: [Mode] = [.voice, .prompt, .message, .email]
+    /// The two modes written on first launch. Both editable afterwards, `Voice` included.
+    ///
+    /// **Two, and not four.** `Message` and `Email` shipped here pointing at `gemma4:12b-it-qat`,
+    /// which `scripts/bootstrap.sh` does not pull -- so on every machine set up the documented
+    /// way they refined nothing and inserted the raw transcript, which is this type's own
+    /// fallback and says nothing when it happens. Repointing them at the model that *is* pulled
+    /// was the other option and was rejected: it produces three modes with one model, one control
+    /// line and one output, which is four modes' worth of menu for one behaviour.
+    ///
+    /// What is left is the product as Louis described it -- *"on ne fait pas de mode, et on garde
+    /// simplement la dictée, la reformulation"*. `Voice` is la dictée; `Prompt` is la
+    /// reformulation. A rewriting mode is still one file away (``LLM/API/chat`` and
+    /// `scripts/set-refiner.sh` both stay), it is simply not a thing Murmure ships broken.
+    ///
+    /// Removing them from this list does **not** remove `message.json` and `email.json` from
+    /// anyone's modes folder: `ModeStore` writes a built-in only when its file is absent and
+    /// deletes nothing, so a stale file keeps working as a hand-written mode until its owner
+    /// removes it. An upgrade that deleted it would also delete a mode somebody wrote by hand.
+    public static let builtIns: [Mode] = [.voice, .prompt]
 
     /// Raw transcription, no LLM -- the default mode and the daily driver for Claude Code.
     /// Lot 2 requires this one to stay byte-identical to the dictation shipped in lot 1.
@@ -278,7 +295,7 @@ extension Mode {
     /// Light cleanup for dictating to AI harnesses -- the mode the refiner exists for.
     ///
     /// Runs `s1-mini`, a 1 GB model trained for exactly this task, rather than the 8.6 GB
-    /// general-purpose model the other two use. Measured over 784 generations on 48 of Louis's
+    /// general-purpose model. Measured over 784 generations on 48 of Louis's
     /// own dictations: 1.08 GB resident against 8.63, a 0.38 s median against 3.82, and the
     /// transcript returned untouched 4 times out of 48 against 17 -- the failure that makes a
     /// refiner pointless. The instructions are the whole difference in interface: they are the
@@ -299,7 +316,10 @@ extension Mode {
     /// character.
     ///
     /// A mode that cannot afford the merged sentences is a mode to point back at
-    /// `gemma4:12b-it-qat` with `"api": "chat"`; both are still installed and both still work.
+    /// `gemma4:12b-it-qat` with `"api": "chat"` -- the chat dialect stays supported for exactly
+    /// this, and `scripts/set-refiner.sh` writes the three correlated fields together. That model
+    /// is a separate 7.2 GB pull `bootstrap.sh` does not do, so it is a deliberate choice to
+    /// make, which is why no mode ships already making it.
     public static let prompt = Mode(
         key: "prompt", name: "Prompt",
         stt: .init(model: defaultSTTModel, language: defaultLanguage),
@@ -310,46 +330,6 @@ extension Mode {
         // `[Styling: casual]` is the arm where the runaway repetitions of `OllamaS1.repeatPenalty`
         // were found. Every field added here is a field to re-measure.
         instructions: "[Context: general]",
-        context: .init(selectedText: false, clipboard: false, appContext: false),
-        autoActivate: [], simulateKeypresses: false
-    )
-
-    /// Short conversational rewrite for Slack. Instructions are `message_rewrite.txt` verbatim.
-    public static let message = Mode(
-        key: "message", name: "Message",
-        stt: .init(model: defaultSTTModel, language: defaultLanguage),
-        llm: .init(enabled: true, endpoint: defaultEndpoint, model: rewriteModel),
-        instructions: """
-You turn dictated text into a short Slack message. The input is a raw speech-to-text transcript in French, often mixed with English technical terms.
-
-Rules:
-- Rewrite as a concise, informal-professional Slack message in French (tutoiement).
-- Remove all hesitations, fillers, and false starts.
-- Keep every technical term, product name, path, and English word exactly as dictated — never translate them.
-- Keep the original intent and ALL factual content (numbers, names, questions). Do not add greetings or sign-offs the speaker did not say.
-- Output ONLY the message text. No preamble, no quotes, no markdown fences, no commentary.
-""",
-        context: .init(selectedText: false, clipboard: false, appContext: false),
-        autoActivate: [], simulateKeypresses: false
-    )
-
-    /// Structured rewrite for email. Unlike the other two, these instructions were NOT benchmarked
-    /// -- lot 0 measured `prompt_cleanup` and `message_rewrite` only, and no email prompt exists in
-    /// `benchmark/prompts/`. They follow the shape of the measured ones and are a starting point.
-    public static let email = Mode(
-        key: "email", name: "Email",
-        stt: .init(model: defaultSTTModel, language: defaultLanguage),
-        llm: .init(enabled: true, endpoint: defaultEndpoint, model: rewriteModel),
-        instructions: """
-You turn dictated text into an email. The input is a raw speech-to-text transcript in French, often mixed with English technical terms.
-
-Rules:
-- Rewrite as a clear, professional email in French: an opening line, the body in paragraphs, a closing line.
-- Remove all hesitations, fillers, and false starts.
-- Keep every technical term, product name, path, and English word exactly as dictated - never translate them.
-- Keep the original intent and ALL factual content (numbers, names, questions). Do not invent a recipient, a subject, or any fact the speaker did not say.
-- Output ONLY the body of the email. No subject line, no preamble, no quotes, no markdown fences, no commentary.
-""",
         context: .init(selectedText: false, clipboard: false, appContext: false),
         autoActivate: [], simulateKeypresses: false
     )
@@ -373,15 +353,21 @@ Rules:
     /// benchmark's `s1-mini` alias.
     private static let cleanupModel = "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M"
 
-    /// The rewriting model, for the two modes that ask for something a cleanup model cannot do.
+    /// The rewriting model. No mode ships pointing at it; it is the placeholder in `Voice`, whose
+    /// refiner is off, and the value `set-refiner.sh` and the README name for the one job a
+    /// cleanup model cannot do.
     ///
-    /// `Message` and `Email` do not clean a transcript, they rewrite it from written instructions
-    /// -- and s1-mini follows no instructions at all, it copies them into its answer (v3 probe,
-    /// 1 fixture in 4). Nothing in the 784-generation benchmark measured those two tasks on it,
-    /// so they stay where their evidence is: v2 winner, unanimous across 3 judges, fidelity mean
-    /// 1.98 / min 1 and 0 auto-fails against 1.52 / min 0 and 3 auto-fails for the 4.3 GB model.
+    /// Kept as the `Voice` placeholder rather than swapped for `cleanupModel`, because turning
+    /// that mode's refiner on by hand has to keep doing what it did before this commit -- and
+    /// because it is the model the escape hatch points back at. Rewriting a transcript from
+    /// written instructions is something s1-mini cannot do at all: it follows no instructions, it
+    /// copies them into its answer (v3 probe, 1 fixture in 4). The evidence for this one is the
+    /// v2 grid -- winner, unanimous across 3 judges, fidelity mean 1.98 / min 1 and 0 auto-fails
+    /// against 1.52 / min 0 and 3 auto-fails for the 4.3 GB model.
     ///
-    /// Also the placeholder in `Voice`, whose refiner is off -- unchanged so that turning it on
-    /// by hand does what it did before.
+    /// **Not pulled by `scripts/bootstrap.sh`** -- a separate 7.2 GB download. That is why no
+    /// built-in may name it: `Message` and `Email` did, and refined nothing on every machine set
+    /// up the documented way. `ModeTests` pins it, against the script rather than against a
+    /// constant.
     private static let rewriteModel = "gemma4:12b-it-qat"
 }

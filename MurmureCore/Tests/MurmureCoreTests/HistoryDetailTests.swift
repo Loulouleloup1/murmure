@@ -22,11 +22,13 @@ final class HistoryDetailTests: XCTestCase {
         transcriptionSeconds: Double? = nil,
         refinementSeconds: Double? = nil,
         insertedCharacters: Int = 30,
-        failure: String? = nil
+        failure: String? = nil,
+        modeKey: String = "prompt",
+        modeName: String = "Prompt"
     ) -> HistoryRecord {
         HistoryRecord(
             startedAt: HistoryTimestamp.date(from: "2026-09-01T12:42:03.123Z") ?? .distantPast,
-            durationSeconds: 38, outcome: outcome, modeKey: "prompt", modeName: "Prompt",
+            durationSeconds: 38, outcome: outcome, modeKey: modeKey, modeName: modeName,
             sttModel: "large-v3-turbo", llmModel: llmModel, rawTranscript: raw,
             refinedText: refined, insertedCharacters: insertedCharacters,
             targetBundleID: bundleID, targetAppName: appName,
@@ -116,6 +118,31 @@ final class HistoryDetailTests: XCTestCase {
         XCTAssertTrue(HistoryDetail.canProcessAgain(record()))
         XCTAssertFalse(HistoryDetail.canProcessAgain(record(raw: nil)))
         XCTAssertFalse(HistoryDetail.canProcessAgain(record(raw: "   \n")))
+    }
+
+    /// **A row recorded under a mode that no longer ships.** Louis has real dictations stored with
+    /// `modeKey = "message"`; this commit removed that mode.
+    ///
+    /// Nothing had to change for them, and this pins why rather than asserting it by accident.
+    /// `modeKey` is written to the row and never read back to look a mode up -- no lookup exists
+    /// anywhere in the app -- and the pane renders the denormalised `modeName`, which §5.2
+    /// introduced for exactly this ("modes are hand-edited JSON files that can be renamed,
+    /// rekeyed or deleted"). So the row reads the same after the removal as before it, and
+    /// `Process again` stays offered, because what gates it is the transcript it re-refines and
+    /// not the mode it was produced by.
+    ///
+    /// A characterization test, deliberately: it was green before the removal too. There is no
+    /// behaviour change here to prove red, and writing code to "handle" the removed key would
+    /// have invented a lookup the app does not have.
+    func testARowRecordedUnderARemovedModeStillReadsAndCanStillBeProcessedAgain() {
+        for (key, name) in [("message", "Message"), ("email", "Email")] {
+            let stale = record(modeKey: key, modeName: name)
+
+            XCTAssertTrue(HistoryDetail.canProcessAgain(stale), key)
+            let modeRow = HistoryDetail.metadata(for: stale, calendar: paris)
+                .first { $0.label == "Mode" }
+            XCTAssertEqual(modeRow?.value, name, "the pane must still name the mode: \(key)")
+        }
     }
 
     // MARK: - The metadata block

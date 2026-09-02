@@ -28,15 +28,39 @@ final class ModeStoreTests: XCTestCase {
         try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
     }
 
+    /// A mode nobody shipped. `ModeStore` treats a hand-written file exactly like a built-in, and
+    /// since only two modes ship this is the only way to get a third file into the folder -- which
+    /// makes it the honest fixture for "one broken file must not cost the others" anyway. `Voice`
+    /// supplies the fields these tests never look at.
+    private func handWritten(_ key: String) -> Mode {
+        var mode = Mode.voice
+        mode.key = key
+        mode.name = key.capitalized
+        return mode
+    }
+
     // MARK: - First launch
 
-    func testFirstLaunchWritesTheFourBuiltInsAndReadsThemBack() throws {
+    func testFirstLaunchWritesTheTwoBuiltInsAndReadsThemBack() throws {
         try store.createBuiltInsIfMissing()
 
-        XCTAssertEqual(try fileNames(), ["email.json", "message.json", "prompt.json", "voice.json"])
+        XCTAssertEqual(try fileNames(), ["prompt.json", "voice.json"])
         XCTAssertEqual(store.loadAll().sorted { $0.key < $1.key },
                        Mode.builtIns.sorted { $0.key < $1.key })
         XCTAssertEqual(problems, [])
+    }
+
+    /// The file names are derived from `builtIns` rather than typed again, so this cannot drift
+    /// into agreeing with whatever the code happens to write -- and `message.json` / `email.json`
+    /// are named explicitly, because a first launch that recreated them would put back the two
+    /// modes that refined nothing.
+    func testFirstLaunchWritesNoFileForAModeThatNoLongerShips() throws {
+        try store.createBuiltInsIfMissing()
+
+        XCTAssertEqual(try fileNames(), Mode.builtIns.map { "\($0.key).json" }.sorted())
+        for gone in ["message.json", "email.json"] {
+            XCTAssertFalse(try fileNames().contains(gone), "\(gone) was recreated")
+        }
     }
 
     func testASecondLaunchLeavesAHandEditedBuiltInAlone() throws {
@@ -58,28 +82,54 @@ final class ModeStoreTests: XCTestCase {
         XCTAssertEqual(reloaded, edited)
     }
 
+    /// **`createBuiltInsIfMissing` writes; it never removes.** The case that made this worth a
+    /// test of its own: `message.json` and `email.json` are on disk on machines that ran an
+    /// earlier build, and this commit stopped shipping those modes. An upgrade that tidied them
+    /// away would use the same code path to delete a mode somebody wrote by hand -- the folder
+    /// cannot tell the two apart, because after this commit they *are* the same thing.
+    ///
+    /// So the stale file stays, and keeps working as a hand-written mode until its owner removes
+    /// it. Removing it is a person's decision, with a backup, once.
+    func testAFileForAModeThatNoLongerShipsIsLeftAloneAndStillLoads() throws {
+        try store.createBuiltInsIfMissing()
+        var stale = handWritten("message")
+        stale.name = "Message"
+        try store.save(stale)
+
+        try store.createBuiltInsIfMissing()
+
+        let names = try fileNames()
+        XCTAssertTrue(names.contains("message.json"), "\(names)")
+        XCTAssertEqual(store.loadAll().first { $0.key == "message" }, stale)
+        XCTAssertEqual(problems, [])
+    }
+
     // MARK: - A hand-edited file that is broken
 
     /// The reason this store exists: these files are edited by hand in a text editor, so a missing
     /// brace and a quoted boolean are going to happen. Neither may cost the other three modes.
     func testAMalformedFileIsReportedAndSkippedWhileEveryOtherModeStillLoads() throws {
         try store.createBuiltInsIfMissing()
+        try store.save(handWritten("custom"))
+        try store.save(handWritten("notes"))
         try write("""
         {
           "key": "prompt",
           "name": "Prompt",
           "stt": {"model": "large-v3-turbo",
         """, as: "prompt.json")
-        try write(String(decoding: try ModeStore.encoder.encode(Mode.message), as: UTF8.self)
+        try write(String(decoding: try ModeStore.encoder.encode(handWritten("notes")), as: UTF8.self)
             .replacingOccurrences(of: "\"simulateKeypresses\" : false",
                                   with: "\"simulateKeypresses\" : \"false\""),
-            as: "message.json")
+            as: "notes.json")
 
         let modes = store.loadAll()
 
-        XCTAssertEqual(modes.map(\.key), ["email", "voice"])
+        // `custom` is the survivor that matters: a hand-written mode, loaded from its own file,
+        // with a broken built-in and a broken hand-written file on either side of it.
+        XCTAssertEqual(modes.map(\.key), ["custom", "voice"])
         XCTAssertEqual(problems.count, 2, "\(problems)")
-        for name in ["prompt.json", "message.json"] {
+        for name in ["prompt.json", "notes.json"] {
             XCTAssertTrue(
                 problems.contains { if case .malformedJSON(name, _) = $0 { return true } else { return false } },
                 "no malformedJSON reported for \(name): \(problems)")
@@ -88,14 +138,14 @@ final class ModeStoreTests: XCTestCase {
 
     func testAFileThatParsesButIsNotAUsableModeIsReportedWithTheFieldThatIsWrong() throws {
         try store.createBuiltInsIfMissing()
-        try write(String(decoding: try ModeStore.encoder.encode(Mode.email), as: UTF8.self)
-            .replacingOccurrences(of: "\"name\" : \"Email\"", with: "\"name\" : \"\""),
-            as: "email.json")
+        try write(String(decoding: try ModeStore.encoder.encode(handWritten("custom")), as: UTF8.self)
+            .replacingOccurrences(of: "\"name\" : \"Custom\"", with: "\"name\" : \"\""),
+            as: "custom.json")
 
         let modes = store.loadAll()
 
-        XCTAssertFalse(modes.contains { $0.key == "email" })
-        XCTAssertEqual(problems, [.invalidField(name: "email.json", error: .emptyName)])
+        XCTAssertFalse(modes.contains { $0.key == "custom" })
+        XCTAssertEqual(problems, [.invalidField(name: "custom.json", error: .emptyName)])
     }
 
     /// Copying `prompt.json` to `perso.json` and forgetting the `key` inside gives two files
@@ -154,7 +204,9 @@ final class ModeStoreTests: XCTestCase {
         try write("", as: ".DS_Store")
         try write("scratch", as: "notes.txt")
 
-        XCTAssertEqual(store.loadAll().count, 4)
+        // The keys, not a count: "2 modes loaded" would also be satisfied by `notes.txt` coming
+        // in as a mode and a built-in silently dropping out.
+        XCTAssertEqual(store.loadAll().map(\.key).sorted(), Mode.builtIns.map(\.key).sorted())
         XCTAssertEqual(problems, [])
     }
 
@@ -172,7 +224,11 @@ final class ModeStoreTests: XCTestCase {
 
     func testLoadingIsOrderedTheSameWayTwice() throws {
         try store.createBuiltInsIfMissing()
+        // A hand-written mode sorting ahead of both built-ins, so the assertion distinguishes
+        // "ordered by file name" from "the order `builtIns` declares" -- which is the claim.
+        try store.save(handWritten("custom"))
+
         XCTAssertEqual(store.loadAll().map(\.key), store.loadAll().map(\.key))
-        XCTAssertEqual(store.loadAll().map(\.key), ["email", "message", "prompt", "voice"])
+        XCTAssertEqual(store.loadAll().map(\.key), ["custom", "prompt", "voice"])
     }
 }

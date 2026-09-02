@@ -122,17 +122,59 @@ final class ModeTests: XCTestCase {
         XCTAssertThrowsError(try mode.validate())
     }
 
-    func testTheFourBuiltInsAreValidAndOnlyVoiceSkipsTheLLM() throws {
-        XCTAssertEqual(Mode.builtIns.map(\.key), ["voice", "prompt", "message", "email"])
+    /// Two modes ship: `Voice` is la dictée, `Prompt` is la reformulation. `Message` and `Email`
+    /// were removed rather than repointed -- see ``Mode/builtIns``.
+    ///
+    /// The partition is asserted over `builtIns` rather than over a hand-written pair, so a third
+    /// built-in added later cannot slip past it: exactly one mode skips the refiner, it is
+    /// `Voice`, and every mode that keeps one carries the instructions to drive it.
+    func testTheTwoBuiltInsAreValidAndOnlyVoiceSkipsTheLLM() throws {
+        XCTAssertEqual(Mode.builtIns.map(\.key), ["voice", "prompt"])
+        XCTAssertEqual(Set(Mode.builtIns.map(\.key)).count, Mode.builtIns.count, "duplicate key")
         for mode in Mode.builtIns {
             XCTAssertNoThrow(try mode.validate(), mode.key)
         }
 
-        XCTAssertFalse(Mode.voice.llm.enabled)
+        XCTAssertEqual(Mode.builtIns.filter { !$0.llm.enabled }.map(\.key), ["voice"])
         XCTAssertTrue(Mode.voice.instructions.isEmpty)
-        for mode in [Mode.prompt, .message, .email] {
-            XCTAssertTrue(mode.llm.enabled, mode.key)
+        for mode in Mode.builtIns where mode.llm.enabled {
             XCTAssertFalse(mode.instructions.isEmpty, mode.key)
+        }
+    }
+
+    /// The defect that shipped, pinned so it cannot ship twice.
+    ///
+    /// `Message` and `Email` were declared with `gemma4:12b-it-qat` while `scripts/bootstrap.sh`
+    /// pulls exactly one refiner. On every machine set up the documented way, two of the four
+    /// built-ins named a model that was not on disk -- and a mode whose refiner cannot answer
+    /// falls back to inserting the raw transcript, silently, by design. Nothing reported it,
+    /// because a mode pointing at an absent model looks exactly like one pointing at a present
+    /// model until Ollama answers.
+    ///
+    /// The model is read out of the script rather than written here as a literal: two constants
+    /// agreeing inside a test say nothing about the file a fresh install actually runs.
+    func testEveryBuiltInRefinerNamesTheModelBootstrapPulls() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // MurmureCoreTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // MurmureCore
+            .deletingLastPathComponent()  // the repository
+        let script = root.appendingPathComponent("scripts/bootstrap.sh")
+        let source = try String(contentsOf: script, encoding: .utf8)
+
+        // The single `ollama pull` the script runs. Not found is a failure, never a skip: a test
+        // that quietly passes when it cannot find its subject is a test that never goes red.
+        let assignment = try XCTUnwrap(
+            source.split(separator: "\n").first { $0.hasPrefix("REFINER_MODEL=") },
+            "no REFINER_MODEL assignment in \(script.path)")
+        let pulled = assignment.dropFirst("REFINER_MODEL=".count)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        XCTAssertFalse(pulled.isEmpty, "REFINER_MODEL is empty in \(script.path)")
+
+        for mode in Mode.builtIns where mode.llm.enabled {
+            XCTAssertEqual(
+                mode.llm.model, pulled,
+                "built-in \(mode.key.debugDescription) names a refiner bootstrap.sh never pulls")
         }
     }
 
@@ -154,8 +196,15 @@ final class ModeTests: XCTestCase {
         let json = String(decoding: try ModeStore.encoder.encode(Mode.prompt), as: UTF8.self)
 
         XCTAssertTrue(json.contains("\"api\" : \"s1\""), json)
+        // No built-in speaks `chat` any more, so the chat side is written from a mode built here.
+        // The claim is about the encoder -- `chat` is the value that would be invisible if it
+        // were left to the decoder's default -- not about which modes ship.
+        let chat = Mode.prompt.with {
+            $0.llm.api = .chat
+            $0.instructions = "Rewrite the transcript as a short message."
+        }
         XCTAssertTrue(
-            String(decoding: try ModeStore.encoder.encode(Mode.message), as: UTF8.self)
+            String(decoding: try ModeStore.encoder.encode(chat), as: UTF8.self)
                 .contains("\"api\" : \"chat\""))
     }
 
@@ -167,12 +216,33 @@ final class ModeTests: XCTestCase {
         // `[Context: general]` alone. `[Styling: ...]` drops capitalisation from 96 % to 29 %.
         XCTAssertEqual(Mode.prompt.instructions, "[Context: general]")
 
-        // The two rewriting modes stay where their evidence is: nothing measured them on a
-        // cleanup model, and a cleanup model does not follow the instructions they are made of.
-        for mode in [Mode.message, Mode.email] {
-            XCTAssertEqual(mode.llm.api, .chat, mode.key)
-            XCTAssertEqual(mode.llm.model, "gemma4:12b-it-qat", mode.key)
+        // The claim the two removed rewriting modes used to carry, turned around: what ships is
+        // ONE refiner, and every built-in that refines is that one on that one protocol. This is
+        // what stops a rewriting mode being reintroduced pointing at a model nobody pulled.
+        for mode in Mode.builtIns where mode.llm.enabled {
+            XCTAssertEqual(mode.llm.model, Mode.prompt.llm.model, mode.key)
+            XCTAssertEqual(mode.llm.api, .s1, mode.key)
         }
+    }
+
+    /// Removing `Message` and `Email` removed two modes, not the dialect they spoke. The README
+    /// documents pointing a mode back at `gemma4:12b-it-qat` with `--api chat`,
+    /// `scripts/set-refiner.sh` writes that combination, and ``Mode/prompt`` offers it as the
+    /// escape hatch when merged sentences are unaffordable -- all three are a lie if a chat mode
+    /// no longer validates.
+    func testAChatModePointedAtTheRewritingModelIsStillAValidMode() throws {
+        let rewriting = Mode.prompt.with {
+            $0.key = "message"
+            $0.name = "Message"
+            $0.llm.api = .chat
+            $0.llm.model = "gemma4:12b-it-qat"
+            $0.instructions = "You turn dictated text into a short Slack message."
+        }
+
+        XCTAssertNoThrow(try rewriting.validate())
+        // Prose is refused on `s1` and accepted on `chat`: the dialect is what decides, which is
+        // the whole reason `api` is a field of the file.
+        XCTAssertThrowsError(try rewriting.with { $0.llm.api = .s1 }.validate())
     }
 
     /// Prose on an `s1` mode is not ignored, it is *copied into the answer*: measured on the v3

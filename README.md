@@ -48,8 +48,14 @@ transcription one as a footnote about the first run being slow. A fresh install 
 time apparently frozen, doing a 1.6 GB download behind a screen that said "transcribing". The
 transcription model is the mandatory one. `bootstrap.sh` fetches it before the app ever asks.
 
-`Message` and `Email` are set to `gemma4:12b-it-qat`, a separate 7.2 GB pull that the script does
-**not** do. **On a 16 GB machine, think before you pull it** — see *Memory*, below.
+Both shipped modes run on what this table fetches, and nothing else. That is the point of the
+table: an earlier build shipped two more modes — `Message` and `Email` — set to
+`gemma4:12b-it-qat`, a separate 7.2 GB pull `bootstrap.sh` does **not** do, so on every machine
+installed the documented way they refined nothing and pasted the raw transcript without saying so.
+They were removed rather than repointed. `gemma4:12b-it-qat` is still the model to reach for if you
+want a mode that *rewrites* rather than cleans — see *Switching a mode to a different refiner* —
+but that is now a pull you choose. **On a 16 GB machine, think before you pull it** — see *Memory*,
+below.
 
 ### What has to be there first
 
@@ -132,15 +138,15 @@ Measured 2026-09-01 on an M4 Pro, one model resident at a time, sampling `llama-
 | Configuration | Resident |
 |---|---|
 | `Prompt` — s1-mini @ `num_ctx` 4096 + Whisper | **~2.6 GB** |
-| `Message` / `Email` — gemma4 12B + Whisper | **~10.2 GB** |
+| a mode repointed at gemma4 12B + Whisper | **~10.2 GB** |
 
 **A GGUF file's size is not its memory footprint.** s1-mini is 484 MB on disk and 1.54 GB resident
 at `num_ctx: 8192` — the KV cache dominates, because the weights are small. Lowering `num_ctx` is a
 real lever on s1-mini (0.84 GB at 2048) and does nothing on gemma, which uses sliding attention.
 
-So on a 16 GB machine `Prompt` is comfortable and the 12B modes are not, especially with other work
-open. Switching `Message` and `Email` to something smaller is a mode-file edit and not a code
-change — but it is **three** fields, not one. See below.
+So on a 16 GB machine `Prompt` is comfortable and a 12B refiner is not, especially with other work
+open. That number is the other half of why nothing ships pointing at gemma. Pointing a mode at it
+is a mode-file edit and not a code change — but it is **three** fields, not one. See below.
 
 ---
 
@@ -177,25 +183,28 @@ else's words pasted into it.
 It refuses the combinations `Mode.validate` refuses, warns about the ones that validate and are
 still wrong, and copies the file aside before writing. `MURMURE_MODES_DIR` points it at a copy.
 
+Pointing `Prompt` at the rewriting model — the escape hatch `Mode.swift` names, and the reason the
+`chat` dialect is still supported now that no mode ships using it:
+
 ```console
-$ ./scripts/set-refiner.sh message hf.co/superwhisper/s1-mini-GGUF:Q4_K_M
-message.json
+$ ./scripts/set-refiner.sh prompt gemma4:12b-it-qat --api chat --instructions "$(cat rewrite.txt)"
+prompt.json
 
   before
-    model         "gemma4:12b-it-qat"
-    api           "chat"
-    instructions  "You turn dictated text into a short Slack message. The input is a…"
-
-  after
     model         "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M"
     api           "s1"
     instructions  "[Context: general]"
 
-  written   ~/Library/Application Support/Murmure/modes/message.json
-  backup    ~/Library/Application Support/Murmure/modes/message.json.20260901T234059.bak
+  after
+    model         "gemma4:12b-it-qat"
+    api           "chat"
+    instructions  "You turn dictated text into a short Slack message. The input is a…"
+
+  written   ~/Library/Application Support/Murmure/modes/prompt.json
+  backup    ~/Library/Application Support/Murmure/modes/prompt.json.20260902T104901.bak
 ```
 
-Going the other way needs a prompt, because a chat model is driven by prose and there is nothing to
+Omit the prompt and it refuses, because a chat model is driven by prose and there is nothing to
 invent it from:
 
 ```console

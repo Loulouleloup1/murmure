@@ -26,8 +26,8 @@
 # Usage:
 #   ./scripts/set-refiner.sh <mode-key> <model> [--api s1|chat] [--instructions TEXT] [--dry-run]
 #
-#   ./scripts/set-refiner.sh message hf.co/superwhisper/s1-mini-GGUF:Q4_K_M
-#   ./scripts/set-refiner.sh message gemma4:12b-it-qat --instructions "$(cat prompt.txt)"
+#   ./scripts/set-refiner.sh prompt gemma4:12b-it-qat --api chat --instructions "$(cat prompt.txt)"
+#   ./scripts/set-refiner.sh prompt hf.co/superwhisper/s1-mini-GGUF:Q4_K_M --api s1
 #
 # MURMURE_MODES_DIR overrides where the modes live -- required to try this against a copy rather
 # than against the real folder.
@@ -193,7 +193,7 @@ if not instructions_given:
                 'switching to "chat" leaves a control line where a written prompt has to go',
                 "A chat model is driven by prose, and this script will not write yours.",
                 'Pass one:  --instructions "$(cat your-prompt.txt)"',
-                "Mode.swift's `message` and `email` are the two measured examples.",
+                "benchmark/prompts/message_rewrite.txt is one that was measured.",
             )
         instructions = before["instructions"]
 
