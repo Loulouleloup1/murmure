@@ -78,5 +78,6 @@ the same seam.
 - **Two surfaces with nothing behind them**: a corrupt database is named as an error no screen
   shows, and a row that failed to write is silent. The dictation itself still succeeds, which is the
   right priority — but the archive is then quietly incomplete. Lot 4 T9.
-- **`master` has not been renamed to `main`.** Offered and held, because a rename mid-clone on the
-  second Mac breaks it.
+- **The default branch is `main`.** The rename happened; `origin/HEAD` points at it and no
+  `master` remains on the remote. A clone made before it needs
+  `git fetch --prune origin && git branch -m master main && git branch -u origin/main main`.
