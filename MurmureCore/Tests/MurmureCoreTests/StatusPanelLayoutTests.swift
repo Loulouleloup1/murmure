@@ -41,6 +41,7 @@ final class StatusPanelLayoutTests: XCTestCase {
         .preparingModel(.loading),
         .transcribing, .refining, .inserting, .nothingHeard, .cancelled,
         .completed(insertedCharacters: 1), .completed(insertedCharacters: 12345),
+        .copiedToClipboard(characters: 1), .copiedToClipboard(characters: 12345),
     ]
 
     /// The widest the download's sentence can be, measured rather than assumed: three digits.

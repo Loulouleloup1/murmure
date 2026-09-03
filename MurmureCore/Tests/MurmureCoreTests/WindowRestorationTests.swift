@@ -4,41 +4,17 @@ import XCTest
 /// The window comes back where it was left — and, more to the point, does not come back where it
 /// cannot be reached.
 final class WindowRestorationTests: XCTestCase {
-    private var suiteName: String!
-    private var defaults: UserDefaults!
+    /// In memory, never a `UserDefaults(suiteName:)`. The suite-per-test pattern this file used
+    /// to carry could not be cleaned up: `cfprefsd` owns the domain and flushes an empty plist
+    /// back into `~/Library/Preferences` after the `tearDown` has deleted it, which is why 31 of
+    /// them were found in Louis's home directory. `EphemeralDefaults` removes the domain from the
+    /// picture rather than racing it, so there is nothing to tear down.
+    private var defaults: EphemeralDefaults!
 
-    /// A suite of its own per test, removed afterwards, and the housekeeping `ModePreferenceTests`
-    /// already had to work out: nothing here may touch `.standard`, which is the real
-    /// application's own preferences domain, and `cfprefsd` leaves an emptied suite's plist behind
-    /// in Louis's home directory unless it is flushed and then deleted.
+    /// Nothing to tear down, which is the point: `EphemeralDefaults` registers no domain, so
+    /// there is no plist for `cfprefsd` to flush back into Louis's home directory afterwards.
     override func setUpWithError() throws {
-        suiteName = "WindowRestorationTests-\(UUID().uuidString)"
-        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-    }
-
-    override func tearDownWithError() throws {
-        defaults.removePersistentDomain(forName: suiteName)
-        defaults.synchronize()
-        defaults.removeSuite(named: suiteName)
-        let plist = try FileManager.default.url(
-            for: .libraryDirectory, in: .userDomainMask, appropriateFor: nil, create: false
-        ).appendingPathComponent("Preferences/\(suiteName!).plist")
-        try? FileManager.default.removeItem(at: plist)
-    }
-
-    /// The same safety net, and only ever this class's own prefix: `cfprefsd` writes
-    /// asynchronously, so a flush can land after the deletion above and recreate the file.
-    override class func tearDown() {
-        guard let preferences = try? FileManager.default.url(
-            for: .libraryDirectory, in: .userDomainMask, appropriateFor: nil, create: false
-        ).appendingPathComponent("Preferences"),
-            let leftovers = try? FileManager.default.contentsOfDirectory(atPath: preferences.path)
-        else { return }
-
-        for name in leftovers
-        where name.hasPrefix("WindowRestorationTests-") && name.hasSuffix(".plist") {
-            try? FileManager.default.removeItem(at: preferences.appendingPathComponent(name))
-        }
+        defaults = EphemeralDefaults()
     }
 
     private var restoration: WindowRestoration { WindowRestoration(defaults: defaults) }
@@ -60,7 +36,7 @@ final class WindowRestorationTests: XCTestCase {
     func testTheSectionIsReadBackByAFreshRestoration() throws {
         restoration.section = .vocabulary
 
-        let reopened = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let reopened = defaults.reopened()
         XCTAssertEqual(WindowRestoration(defaults: reopened).section, .vocabulary)
     }
 
@@ -102,7 +78,7 @@ final class WindowRestorationTests: XCTestCase {
         let frame = CGRect(x: 120, y: 84, width: 1040, height: 700)
         restoration.storedFrame = frame
 
-        let reopened = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let reopened = defaults.reopened()
         XCTAssertEqual(WindowRestoration(defaults: reopened).storedFrame, frame)
     }
 

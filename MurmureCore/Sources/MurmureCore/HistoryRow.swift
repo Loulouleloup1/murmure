@@ -50,6 +50,11 @@ public enum HistoryRow {
     private static func placeholder(for outcome: DictationOutcome) -> String {
         switch outcome {
         case .inserted: "Text cleared"
+        // The same "Text cleared" story as `inserted` above -- a dictation that worked, whose text
+        // the retention policy has since removed -- and it deliberately does not say so in those
+        // words. Once the text is gone the only thing left worth saying about this row is the one
+        // way it differed from an insertion, which is where the text went.
+        case .copiedToClipboard: "Copied to clipboard"
         case .nothingHeard: "Nothing heard"
         case .failed: "Failed"
         case .cancelled: "Cancelled"

@@ -18,8 +18,38 @@ public protocol Transcriber {
     func transcribe(wav: URL, language: String, initialPrompt: String?) async throws -> String
 }
 
+/// Where the text of one dictation actually went.
+///
+/// **It exists because "it did not throw" stopped meaning "it landed".** The Advanced pane's
+/// ``PasteBehaviour/copyToClipboardOnly`` puts the transcript on the clipboard and posts no ⌘V on
+/// purpose, and that path returns normally -- so a `Void` insertion made the session announce an
+/// insertion, sound the "text inserted" cue and archive `.inserted` for a dictation that had
+/// reached no application at all. The archive is what a lost paste is recovered from, so a row
+/// claiming `.inserted` lies in precisely the place it exists to be trusted.
+public enum InsertionDelivery: Equatable, Sendable {
+    /// A ⌘V was posted into the application that was in front: the text is where Louis was
+    /// looking, and the count the session announces is what got there.
+    case pastedIntoFrontmostApp
+
+    /// **No keystroke was posted, so no application received anything.** The text is on the
+    /// clipboard and Louis presses ⌘V himself, where and when he means to -- which is
+    /// ``PasteBehaviour/copyToClipboardOnly`` doing exactly what it was ticked for, not a
+    /// degraded paste and not a failure.
+    ///
+    /// It is also what an insertion with nothing to insert answers: `PasteInserter` returns early
+    /// on an empty transcript without touching the clipboard, and this case is the true half of
+    /// that -- nothing was pasted. The other half, that nothing was copied either, is deliberately
+    /// NOT a third case here: `DictationSession` decides `.nothingHeard` from the text itself
+    /// (lot 4 D8 -- what is stored is decided by whether there was text to insert, never recovered
+    /// from a count), and a second, weaker source for the same fact could only ever disagree
+    /// with it.
+    case copiedToClipboard
+}
+
 public protocol TextInserter {
-    func insert(_ text: String) async throws
+    /// Answers where the text went, because the two destinations are not the same event and
+    /// nothing else can tell them apart -- see ``InsertionDelivery``.
+    func insert(_ text: String) async throws -> InsertionDelivery
 }
 
 /// Which mode a dictation runs under, and what its transcript becomes (spec §5).
@@ -145,6 +175,24 @@ public actor DictationSession {
         /// "nothing you said got through". A green flash driven by `.idle` would congratulate
         /// Louis for a dictation that inserted nothing.
         case completed(insertedCharacters: Int)
+        /// The dictation ran to its end and its text is on the CLIPBOARD, having reached no
+        /// application: ``PasteBehaviour/copyToClipboardOnly``. Always followed immediately by
+        /// `.idle`, for `.completed`'s reason.
+        ///
+        /// **A state of its own rather than a `.completed` with a count, and rather than a
+        /// `.completed(0)`.** It is not a `.completed`: that state's own documentation says the
+        /// number is "how much of it reached the target application", and here nothing did, so a
+        /// count there would be the lie this case was added to remove -- the sound, the sentence
+        /// and the archived outcome all read off this state. And it is not `.completed(0)` either,
+        /// which `NotchPresenter` turns into `nothingHeard`: the microphone got everything, the
+        /// refiner ran, and the text is one ⌘V away. Telling Louis nothing was heard would send
+        /// him to check a microphone that is fine, and away from a clipboard that is holding his
+        /// sentence.
+        ///
+        /// The count is carried for the reason `.completed` carries one: it is how the surfaces
+        /// say which dictation this was, and "Copied 3 characters" is the same corroboration
+        /// "Inserted 3 characters" is.
+        case copiedToClipboard(characters: Int)
         case failed(message: String, recoveredText: String?)
     }
 
@@ -222,11 +270,11 @@ public actor DictationSession {
             await finishRecording()
         case .transcribing, .refining, .inserting:
             break // pipeline already running; ignore extra presses
-        // `.completed` and `.cancelled` are here for the compiler and not for the machine: each
-        // is emitted and left in the same call (`complete(insertedCharacters:)` and `cancel()`),
-        // so no press can ever observe either. Grouped with `.idle` because that is what they
-        // both become a line later.
-        case .idle, .completed, .cancelled, .failed:
+        // `.completed`, `.copiedToClipboard` and `.cancelled` are here for the compiler and not
+        // for the machine: each is emitted and left in the same call (`complete(insertedCharacters:)`,
+        // `copied(characters:)` and `cancel()`), so no press can ever observe any of them.
+        // Grouped with `.idle` because that is what they all become a line later.
+        case .idle, .completed, .copiedToClipboard, .cancelled, .failed:
             // **Read BEFORE the microphone opens, and this is the whole of the guard below.**
             //
             // The target used to be read after a successful start, which was right while Murmure
@@ -388,22 +436,60 @@ public actor DictationSession {
 
         transition(to: .inserting)
         do {
-            try await inserter.insert(text)
-            // The refined text, which is what `inserter` was handed and therefore what landed --
-            // not the raw transcript, and not a boolean "it worked". `PasteInserter` returns
-            // early on an empty string, so a count of 0 here is exactly the case where nothing
-            // was pasted.
-            complete(insertedCharacters: text.count)
+            let delivery = try await inserter.insert(text)
+
+            // What this dictation did, said once and read twice below -- by the state the surfaces
+            // are driven from, and by the row the archive keeps. They used to be decided in two
+            // places and could therefore disagree; a `.completed` beside a `.nothingHeard` row is
+            // the shape of defect this whole branch was rewritten for.
+            let outcome: DictationOutcome
+            let landed: Int
+
             // Whisper answering silence with "" is the third silence of ruling L7, and it is a
             // `.nothingHeard` rather than an `.inserted` of zero characters: what is stored is
             // decided by whether there was text to insert, never recovered from the count (D8).
+            //
+            // **Asked before the delivery, and that ordering is deliberate.** The emptiness of the
+            // text is a fact this actor holds; the delivery is an answer from a seam a test double
+            // also implements. Reading `.nothingHeard` off the delivery instead would let an
+            // inserter turn a real dictation into a silence, or a silence into a paste -- the same
+            // "one fact, two sources that can disagree" `storedRefinement` and `VocabularyProviding`
+            // are both written to avoid.
+            if text.isEmpty {
+                complete(insertedCharacters: 0)
+                outcome = .nothingHeard
+                landed = 0
+            } else {
+                // Written without a `default`, so a destination added later has to be answered
+                // here rather than quietly archived as an insertion -- which is the defect this
+                // switch replaced: `insert` returned `Void`, so "it did not throw" was read as
+                // "it landed in the app in front" even under `PasteBehaviour.copyToClipboardOnly`,
+                // which posts no ⌘V at all.
+                switch delivery {
+                case .pastedIntoFrontmostApp:
+                    // The refined text, which is what `inserter` was handed and therefore what
+                    // landed -- not the raw transcript, and not a boolean "it worked".
+                    complete(insertedCharacters: text.count)
+                    outcome = .inserted
+                    landed = text.count
+                case .copiedToClipboard:
+                    copied(characters: text.count)
+                    outcome = .copiedToClipboard
+                    // The count is deliberately NOT moved into `insertedCharacters`. That column
+                    // means what its name says -- how much reached the target application -- and
+                    // nothing did. Nothing is lost by saying so: the text itself is in the row
+                    // beside it, which is what a re-paste is recovered from.
+                    landed = 0
+                }
+            }
+
             await archive(
-                text.isEmpty ? .nothingHeard : .inserted,
+                outcome,
                 audio: wav,
                 rawTranscript: storedTranscript(transcript),
                 correctedText: storedCorrection(corrected, of: transcript),
                 refinedText: storedRefinement(text, of: corrected),
-                insertedCharacters: text.count
+                insertedCharacters: landed
             )
         } catch {
             // Spec §9: the dictation is never lost -- keep the text for recovery.
@@ -513,6 +599,16 @@ public actor DictationSession {
     /// free again. A consumer that only cares about the second keeps working unchanged.
     private func complete(insertedCharacters: Int) {
         transition(to: .completed(insertedCharacters: insertedCharacters))
+        transition(to: .idle)
+    }
+
+    /// The dictation is over and its text is on the clipboard rather than in an application.
+    ///
+    /// Its own two-line function beside `complete(insertedCharacters:)` rather than a parameter on
+    /// it, for the reason the state is its own case: the two say different things, and a call site
+    /// choosing between them by passing a flag is a call site that can pass the wrong one.
+    private func copied(characters: Int) {
+        transition(to: .copiedToClipboard(characters: characters))
         transition(to: .idle)
     }
 

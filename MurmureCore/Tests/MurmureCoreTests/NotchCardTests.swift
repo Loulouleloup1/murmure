@@ -15,7 +15,8 @@ private let everyPhase: [NotchPhase] = [
     .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
     .preparingModel(.loading),
     .transcribing, .refining, .inserting,
-    .completed(insertedCharacters: 47), .nothingHeard, .cancelled,
+    .completed(insertedCharacters: 47), .copiedToClipboard(characters: 47), .nothingHeard,
+    .cancelled,
     .failed(message: "paste refused", recoveredText: "bonjour"), .alert(message: "no hotkey"),
 ]
 
@@ -122,6 +123,19 @@ final class NotchCardTests: XCTestCase {
     func testACancellationIsDrawnAtTheSameSizeAsASilence() {
         XCTAssertEqual(
             NotchCard.drawingPieceWidth(for: .cancelled, contentWidth: contentWidth),
+            NotchCard.drawingPieceWidth(for: .nothingHeard, contentWidth: contentWidth))
+    }
+
+    /// **The clipboard delivery draws the quiet mark too, so it has to draw it at the quiet
+    /// mark's size** -- the cancellation's argument one phase over, and it earns its own line for
+    /// that argument's reason: it is excluded from the comparison above only because it is the
+    /// same width, and this is what says so. A phase merely skipped there would fall through to
+    /// the `default` arm and be drawn at half the card, which is two dim marks a third of the card
+    /// apart with nothing between them.
+    func testAClipboardDeliveryIsDrawnAtTheSameSizeAsASilence() {
+        XCTAssertEqual(
+            NotchCard.drawingPieceWidth(for: .copiedToClipboard(characters: 47),
+                                        contentWidth: contentWidth),
             NotchCard.drawingPieceWidth(for: .nothingHeard, contentWidth: contentWidth))
     }
 
@@ -242,6 +256,40 @@ final class NotchCardTests: XCTestCase {
             NotchCard.symbolName(for: .completed(insertedCharacters: 1)))
     }
 
+    /// **Green is the card's claim that the words are under the cursor, and a clipboard delivery
+    /// has no right to it.** `PasteBehaviour.copyToClipboardOnly` posts no ⌘V: the sentence is on
+    /// the clipboard and nothing reached the application in front, which is the same statement
+    /// about the target that the silence and the cancellation make -- so it takes their tint, the
+    /// one that means an absence legible AS an absence.
+    ///
+    /// Nor is it orange. Nothing went wrong; this is a box Louis ticked doing what he ticked it
+    /// for, and an exclamation triangle after every dictation of a day's work is a warning he
+    /// stops reading.
+    func testAClipboardDeliveryIsNeitherGreenNorOrange() {
+        XCTAssertEqual(NotchCard.tint(for: .copiedToClipboard(characters: 47)), .muted)
+        XCTAssertNotEqual(
+            NotchCard.tint(for: .copiedToClipboard(characters: 47)),
+            NotchCard.tint(for: .completed(insertedCharacters: 47)))
+        XCTAssertNotEqual(
+            NotchCard.tint(for: .copiedToClipboard(characters: 47)),
+            NotchCard.tint(for: .failed(message: "boom", recoveredText: nil)))
+    }
+
+    /// **And the glyph is where it stops being a silence**, exactly as the cancellation's does.
+    /// It shares the tint and the mark with `nothingHeard`, so the glyph carries the whole of the
+    /// difference and it is read first: a microphone that heard nothing is not a sentence sitting
+    /// on the clipboard one keystroke away. It is not the checkmark either, which would say the
+    /// text had landed.
+    func testAClipboardDeliveryWearsNeitherTheSilencesGlyphNorTheCheckmark() {
+        XCTAssertNotEqual(
+            NotchCard.symbolName(for: .copiedToClipboard(characters: 47)),
+            NotchCard.symbolName(for: .nothingHeard))
+        XCTAssertNotEqual(
+            NotchCard.symbolName(for: .copiedToClipboard(characters: 47)),
+            NotchCard.symbolName(for: .completed(insertedCharacters: 47)))
+        XCTAssertFalse(NotchCard.symbolName(for: .copiedToClipboard(characters: 47)).isEmpty)
+    }
+
     /// The insertion must not repaint the card on its way past: it lasts one CGEvent round-trip.
     func testAnInsertionLooksExactlyLikeTheTranscriptionItFollows() {
         XCTAssertEqual(NotchCard.tint(for: .inserting), NotchCard.tint(for: .transcribing))
@@ -334,7 +382,8 @@ private func isRefining(_ phase: NotchPhase) -> Bool {
     if case .refining = phase { true } else { false }
 }
 
-/// The phases drawn as the dim, still mark: the silence, and now the cancellation.
+/// The phases drawn as the dim, still mark: the silence, the cancellation, and the clipboard
+/// delivery.
 ///
 /// **Enumerated by hand rather than asked of `NotchAppearance.mark(for:)`**, for the reason
 /// `drawsOneTimelineRow` gives one helper up: the widths below are what the card decides ABOUT
@@ -342,7 +391,7 @@ private func isRefining(_ phase: NotchPhase) -> Bool {
 /// phase added later has to be placed on one side of this line by hand, in as many words.
 private func isQuiet(_ phase: NotchPhase) -> Bool {
     switch phase {
-    case .nothingHeard, .cancelled: true
+    case .nothingHeard, .cancelled, .copiedToClipboard: true
     default: false
     }
 }

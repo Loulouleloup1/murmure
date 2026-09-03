@@ -13,6 +13,16 @@ import GRDB
 public enum DictationOutcome: String, Codable, Equatable, Sendable, CaseIterable {
     /// Text was produced and inserted into the target application.
     case inserted = "inserted"
+    /// Text was produced and put on the CLIPBOARD, reaching no application at all: the paste
+    /// behaviour was ``PasteBehaviour/copyToClipboardOnly``, which posts no ⌘V by design.
+    ///
+    /// **Not `inserted`, and the archive is where that distinction is worth the most.** The reason
+    /// this table keeps the text is so a paste that did not arrive can be recovered; a row saying
+    /// `inserted` for a dictation that reached nothing would be false in exactly the place it is
+    /// consulted. Not `failed` either -- nothing went wrong, this is a setting doing what it was
+    /// ticked for, and a failure would put an incident in the history for every dictation of a
+    /// day's work.
+    case copiedToClipboard = "copiedToClipboard"
     /// The recording carried no speech, so there was nothing to insert.
     case nothingHeard = "nothingHeard"
     /// Something in the pipeline failed; `failureMessage` says what.

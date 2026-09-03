@@ -276,6 +276,33 @@ public struct HistoryStore: Sendable {
         }
     }
 
+    /// How many dictations still have text that `clearText` would take.
+    ///
+    /// **Not the number of rows**, and the difference is the whole reason this counts what it
+    /// counts: the 30-day sweep leaves rows behind with their text nulled, so an archive of 1 469
+    /// dictations can hold 200 with anything left to lose. `HistoryClearing`'s dialog puts this
+    /// number in a sentence -- "the raw and refined text of N dictations" -- and a row count there
+    /// would overstate the damage by everything the app had already deleted on its own.
+    ///
+    /// It is also what makes the button disable itself rather than open a dialog about nothing:
+    /// `HistoryClearing.confirmation(dictationCount:)` says a caller with nothing to delete does
+    /// exactly that.
+    ///
+    /// The predicate is `clearText`'s own, spelled the same way, so the count and the delete
+    /// cannot come to disagree about what "has text" means.
+    public func countWithText() throws -> Int {
+        try dbQueue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*) FROM dictation
+                    WHERE rawTranscript IS NOT NULL OR correctedText IS NOT NULL
+                       OR refinedText IS NOT NULL
+                    """
+            ) ?? 0
+        }
+    }
+
     public func record(id: Int64) throws -> HistoryRecord? {
         try dbQueue.read { db in try HistoryRecord.fetchOne(db, key: id) }
     }

@@ -2,15 +2,18 @@ import XCTest
 @testable import MurmureCore
 
 final class ModePreferenceTests: XCTestCase {
-    private var suiteName: String!
-    private var defaults: UserDefaults!
+    /// In memory, never a `UserDefaults(suiteName:)`. The suite-per-test pattern this file used
+    /// to carry could not be cleaned up: `cfprefsd` owns the domain and flushes an empty plist
+    /// back into `~/Library/Preferences` after the `tearDown` has deleted it, which is why 31 of
+    /// them were found in Louis's home directory. `EphemeralDefaults` removes the domain from the
+    /// picture rather than racing it, so there is nothing to tear down.
+    private var defaults: EphemeralDefaults!
     private var directory: URL!
 
-    /// A suite of its own per test, removed afterwards. Nothing here may reach `.standard`, which
-    /// is the real application's own preferences domain.
+    /// The defaults need no tearing down -- `EphemeralDefaults` registers no domain. The modes
+    /// folder still does: it is a real directory, in `NSTemporaryDirectory()`.
     override func setUpWithError() throws {
-        suiteName = "ModePreferenceTests-\(UUID().uuidString)"
-        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults = EphemeralDefaults()
 
         // Same rule for the modes folder as `ModeStoreTests`: a temporary directory, never
         // `~/Library/Application Support/Murmure/modes`.
@@ -19,40 +22,8 @@ final class ModePreferenceTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
-    /// Emptying the domain is not enough: `cfprefsd` leaves the suite's (now empty) plist behind
-    /// in `~/Library/Preferences`, one per test per run, in Louis's own home directory. The file
-    /// goes too. Only ever this test's own UUID-named file.
     override func tearDownWithError() throws {
-        defaults.removePersistentDomain(forName: suiteName)
-        // `synchronize()` is the barrier that makes the deletion below stick: without it
-        // `cfprefsd` flushes the emptied domain back to disk AFTER the file is gone, and recreates
-        // it. Measured -- 6 files survived two runs before this line.
-        defaults.synchronize()
-        defaults.removeSuite(named: suiteName)
-        let plist = try FileManager.default.url(
-            for: .libraryDirectory, in: .userDomainMask, appropriateFor: nil, create: false
-        ).appendingPathComponent("Preferences/\(suiteName!).plist")
-        try? FileManager.default.removeItem(at: plist)
-
         try? FileManager.default.removeItem(at: directory)
-    }
-
-    /// The safety net for the same litter. `cfprefsd` writes asynchronously, so a flush can still
-    /// land after the deletion above and recreate the file; measured, it does under load. This
-    /// sweeps whatever is left once the class is done, and it only ever matches this class's own
-    /// prefix.
-    override class func tearDown() {
-        guard let preferences = try? FileManager.default.url(
-            for: .libraryDirectory, in: .userDomainMask, appropriateFor: nil, create: false
-        ).appendingPathComponent("Preferences"),
-            let leftovers = try? FileManager.default.contentsOfDirectory(
-                atPath: preferences.path)
-        else { return }
-
-        for name in leftovers
-        where name.hasPrefix("ModePreferenceTests-") && name.hasSuffix(".plist") {
-            try? FileManager.default.removeItem(at: preferences.appendingPathComponent(name))
-        }
     }
 
     // MARK: - The choice itself
@@ -70,7 +41,7 @@ final class ModePreferenceTests: XCTestCase {
     func testTheChosenModeIsReadBackByAFreshPreference() throws {
         ModePreference(defaults: defaults).selectedKey = "prompt"
 
-        let reopened = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let reopened = defaults.reopened()
         XCTAssertEqual(ModePreference(defaults: reopened).selectedKey, "prompt")
     }
 
@@ -83,7 +54,7 @@ final class ModePreferenceTests: XCTestCase {
 
         preference.selectedKey = nil
 
-        let reopened = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let reopened = defaults.reopened()
         XCTAssertNil(ModePreference(defaults: reopened).selectedKey)
         // Automatic is the absence of an entry, not an entry holding "". Without this line, a
         // version that stored "" would pass anyway -- the getter reads "" back as nil -- and the

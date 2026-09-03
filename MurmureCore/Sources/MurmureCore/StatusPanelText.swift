@@ -69,6 +69,16 @@ public enum StatusPanelText {
         // cursor is the sentence he said or three characters of it.
         case .completed(let characters):
             characters == 1 ? "Inserted 1 character" : "Inserted \(characters) characters"
+        // **"Copied", never "Inserted", and that word is the whole of this case.** Under
+        // `PasteBehaviour.copyToClipboardOnly` no ⌘V is posted, so nothing reached the application
+        // Louis is looking at: "Inserted 42 characters" would be the panel confirming a paste that
+        // did not happen, on the one surface he can see one. Nor is it "Nothing heard" -- the
+        // sentence exists, it is on the clipboard, and it is one keystroke away.
+        //
+        // The count stays for the completion's reason, unchanged: it is what tells him this is the
+        // sentence he just spoke and not the previous dictation still on the clipboard.
+        case .copiedToClipboard(let characters):
+            characters == 1 ? "Copied 1 character" : "Copied \(characters) characters"
         // Deliberately shares no wording with the completion above. This phase is the one the
         // panel exists to make legible -- a dictation that ran, took the same time, made the same
         // noises and pasted nothing -- and if it read as a small success Louis would go looking

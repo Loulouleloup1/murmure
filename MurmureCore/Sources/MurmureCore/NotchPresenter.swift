@@ -68,7 +68,12 @@ public enum NotchPresenter {
         // sound and pastes nothing, so this surface is the ONLY evidence the press was received --
         // exactly the position `nothingHeard` argues from. A green flash corroborates text Louis
         // can already see; these two are sole witnesses, and a sole witness has to stay longer.
-        case .nothingHeard, .cancelled: nothingHeardDwell
+        // **The clipboard delivery takes the silence's dwell for the silence's argument, not the
+        // completion's.** A green flash corroborates text Louis can already see; here nothing
+        // appeared anywhere on screen -- the text is on the clipboard, and this sentence is the
+        // only evidence of it there is. A sole witness has to stay longer, which is the whole of
+        // the ordering between these two numbers.
+        case .nothingHeard, .cancelled, .copiedToClipboard: nothingHeardDwell
         case .failed, .alert: failureDwell
         // The preparation joins the phases with no timer, and it is the one that would suffer most
         // from inheriting one: a 1.6 GB download is minutes long, and a dwell would retract the
@@ -127,6 +132,11 @@ public enum NotchPresenter {
         // nothing.
         case .completed(let inserted):
             inserted > 0 ? .completed(insertedCharacters: inserted) : .nothingHeard
+        // No `> 0` reading here, unlike the two `.completed` branches: the session only ever emits
+        // this state for a non-empty text -- an empty one is `.nothingHeard` whatever the paste
+        // behaviour is (lot 4 D8) -- so there is no zero to turn into a second meaning.
+        case .copiedToClipboard(let characters):
+            .copiedToClipboard(characters: characters)
         case .failed(let message, let recoveredText):
             .failed(message: message, recoveredText: recoveredText)
         case .idle:
@@ -135,6 +145,13 @@ public enum NotchPresenter {
             switch previous {
             case .completed(let inserted):
                 inserted > 0 ? .completed(insertedCharacters: inserted) : .nothingHeard
+            // The fourth phase that survives its own `.idle`, and it joined the list for the
+            // reason the three above it did: `copied(characters:)` emits it and `.idle` in the
+            // same breath, so a reducer reading only `current` would retract the notch in the
+            // instant it was told where the text had gone -- and that sentence is the only place
+            // Louis is told the text is on the clipboard rather than under his cursor.
+            case .copiedToClipboard(let characters):
+                .copiedToClipboard(characters: characters)
             // The third phase that survives its own `.idle`, and it joined the list the moment the
             // cancel stopped going straight to idle: `cancel()` emits `.cancelled` and `.idle` in
             // the same breath, so a reducer reading only `current` would retract the notch in the

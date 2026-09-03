@@ -110,9 +110,19 @@ private struct FakeVocabulary: VocabularyProviding {
 private final class SpyInserter: TextInserter, @unchecked Sendable {
     var inserted: [String] = []
     var error: Error?
-    func insert(_ text: String) async throws {
+
+    /// Where this inserter claims the text went.
+    ///
+    /// Defaults to the paste, which is what `PasteInserter` does under the shipped
+    /// `PasteBehaviour.pasteIntoFrontmostApp` -- so every test written before the destination was
+    /// a question keeps running the dictation it was written about, and only the tests that set
+    /// this are about the other one.
+    var delivery: InsertionDelivery = .pastedIntoFrontmostApp
+
+    func insert(_ text: String) async throws -> InsertionDelivery {
         if let error { throw error }
         inserted.append(text)
+        return delivery
     }
 }
 
@@ -1495,6 +1505,194 @@ final class DictationSessionTests: XCTestCase {
             recording.records.last?.refinedText,
             "the refiner changed nothing beyond the vocabulary's own correction")
     }
+
+    /// **A broken archive must not cost a dictation** -- spec §9's rule for the refiner, one layer
+    /// down, and the reason `DictationController` holds its `HistoryStore` as an optional.
+    ///
+    /// The store is opened against a real file that is not a database, so the nil below is
+    /// SQLite's answer and not one this test chose. The double is shaped exactly like the app's
+    /// `DictationArchive`: no store, nothing written, nothing said. A double that threw instead
+    /// would be proving something about a shape the app does not have.
+    func testABrokenArchiveDoesNotCostADictation() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("BrokenArchiveTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("murmure.sqlite")
+        try Data("this is not a database, it is a sentence".utf8).write(to: databaseURL)
+        XCTAssertThrowsError(try HistoryStore(databaseURL: databaseURL)) { error in
+            XCTAssertTrue(error is HistoryStoreError, "\(error)")
+        }
+
+        let archive = BrokenArchive(store: try? HistoryStore(databaseURL: databaseURL))
+        let inserter = SpyInserter()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("on relance le pipeline demain matin")),
+            inserter: inserter, refiner: SpyRefiner(),
+            recording: archive, vocabulary: FakeVocabulary(), onStateChange: { _ in }
+        )
+        await session.toggle() // start
+        await session.toggle() // stop + pipeline
+
+        // The dictation came out the far end: transcribed, and pasted into the target app.
+        XCTAssertEqual(inserter.inserted, ["on relance le pipeline demain matin"])
+        let finalState = await session.state
+        XCTAssertEqual(finalState, .idle)
+        // What it cost is exactly the row, and nothing else.
+        XCTAssertEqual(archive.rowsWritten, 0, "there was no archive to write to")
+    }
+
+    // MARK: - Where the text actually went
+
+    /// **The defect, as the three lies it told at once.** `PasteBehaviour.copyToClipboardOnly`
+    /// puts the transcript on the clipboard and posts no ⌘V, and `insert` returns normally from
+    /// that path -- so a session reading "it did not throw" as "it landed" sounded the
+    /// confirmation cue, wrote `.inserted` into the archive, and put "Inserted 15 characters" on
+    /// screen for a dictation that had reached no application at all.
+    ///
+    /// The archive one is the worst of the three and is why this is a correctness bug rather than
+    /// a cosmetic one: the reason a row keeps its text is so a paste that did not arrive can be
+    /// recovered, and a row claiming `.inserted` is false in the one place it exists to be
+    /// trusted.
+    ///
+    /// One dictation is run end to end and all three surfaces are read off it, rather than three
+    /// tests asserting three functions return a new enum case: what has to be true is that a
+    /// SESSION says the same thing three times, and a per-function test would still pass with the
+    /// session wired to the wrong one.
+    func testACopyOnlyDictationTellsAllThreeSurfacesTheTextWasNotPasted() async {
+        let states = StateLog()
+        let recording = SpyRecording()
+        let inserter = SpyInserter()
+        inserter.delivery = .copiedToClipboard
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("bonjour murmure")),
+            inserter: inserter, refiner: SpyRefiner(), recording: recording,
+            vocabulary: FakeVocabulary(), onStateChange: { states.append($0) }
+        )
+
+        await session.toggle()
+        await session.toggle()
+
+        // The text really was handed over -- this is a delivered dictation, not a refused one.
+        XCTAssertEqual(inserter.inserted, ["bonjour murmure"])
+
+        // 1. The archive.
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.outcome, .copiedToClipboard)
+        XCTAssertNotEqual(row.outcome, .inserted, "nothing reached the application in front")
+        XCTAssertEqual(row.insertedCharacters, 0, "the count is what LANDED, and nothing did")
+        // The dictation is still fully recoverable from the row, which is the whole point of it.
+        XCTAssertEqual(row.rawTranscript, "bonjour murmure")
+        XCTAssertNil(row.failureMessage, "a setting doing its job is not a failure")
+
+        // 2. The sound. Driven through the real `CueFeedback`, not through `FeedbackPolicy`
+        // directly: what has to be silent is this dictation, and the states it emitted are what
+        // the app hands the player.
+        let player = SpyPlayer()
+        let feedback = CueFeedback(player: player)
+        for state in states.values { feedback.apply(state) }
+        XCTAssertEqual(
+            player.played, [.recordingStarted],
+            "the insertion cue means the words are under the cursor, and they are not")
+
+        // 3. The sentence on screen, composed the way the app composes it: every state change
+        // through `NotchPresenter.phase(previous:current:)`, then the phase through the panel.
+        let labels = phaseLabels(for: states.values)
+        XCTAssertTrue(
+            labels.contains("Copied 15 characters"), "got \(labels)")
+        XCTAssertFalse(
+            labels.contains(where: { $0.hasPrefix("Inserted") }),
+            "the panel claimed an insertion: \(labels)")
+        XCTAssertFalse(
+            labels.contains("Nothing heard"),
+            "the microphone got everything -- that sentence sends Louis to check hardware")
+    }
+
+    /// The control for the test above, and the reason it is not a tautology: the SAME dictation
+    /// with the shipped paste behaviour has to still say "inserted" in all three places. Without
+    /// this, a correction that simply stopped ever announcing an insertion would pass.
+    func testTheSameDictationPastedNormallyStillSaysInsertedInAllThreePlaces() async {
+        let states = StateLog()
+        let recording = SpyRecording()
+        let inserter = SpyInserter() // defaults to the paste
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("bonjour murmure")),
+            inserter: inserter, refiner: SpyRefiner(), recording: recording,
+            vocabulary: FakeVocabulary(), onStateChange: { states.append($0) }
+        )
+
+        await session.toggle()
+        await session.toggle()
+
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.outcome, .inserted)
+        XCTAssertEqual(row.insertedCharacters, 15)
+
+        let player = SpyPlayer()
+        let feedback = CueFeedback(player: player)
+        for state in states.values { feedback.apply(state) }
+        XCTAssertEqual(player.played, [.recordingStarted, .textInserted])
+
+        XCTAssertTrue(
+            phaseLabels(for: states.values).contains("Inserted 15 characters"),
+            "got \(phaseLabels(for: states.values))")
+    }
+
+    /// Emptiness outranks the delivery, and the ordering is deliberate (lot 4 D8: what is stored
+    /// is decided by whether there was text to insert). `PasteInserter` returns
+    /// `.copiedToClipboard` from its empty-transcript guard because nothing was pasted there
+    /// either -- and a session that read the outcome off the delivery instead would archive a
+    /// silence as a clipboard delivery, offering a re-paste of nothing.
+    func testASilenceIsStillNothingHeardHoweverTheInserterAnswers() async {
+        let states = StateLog()
+        let recording = SpyRecording()
+        let inserter = SpyInserter()
+        inserter.delivery = .copiedToClipboard
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("")),
+            inserter: inserter, refiner: SpyRefiner(), recording: recording,
+            vocabulary: FakeVocabulary(), onStateChange: { states.append($0) }
+        )
+
+        await session.toggle()
+        await session.toggle()
+
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.outcome, .nothingHeard)
+        XCTAssertEqual(row.insertedCharacters, 0)
+        XCTAssertTrue(states.values.contains(.completed(insertedCharacters: 0)), "got \(states.values)")
+        XCTAssertFalse(
+            states.values.contains(.copiedToClipboard(characters: 0)),
+            "there was nothing to put on a clipboard")
+    }
+
+    /// Every sentence the panel would show for this run of state changes, composed the way the app
+    /// composes it -- `NotchPresenter.phase(previous:current:)` fed each change in order, because
+    /// a completion is emitted with its own `.idle` and only that function keeps it on screen.
+    private func phaseLabels(for states: [DictationSession.State]) -> [String] {
+        var previous = DictationSession.State.idle
+        var labels: [String] = []
+        for state in states {
+            labels.append(
+                StatusPanelText.label(for: NotchPresenter.phase(previous: previous, current: state)))
+            previous = state
+        }
+        return labels
+    }
+}
+
+/// Records what it was asked to play. A copy of `CueFeedbackTests`'s own spy rather than a shared
+/// one, which is what every other double in this file is: the suites are read one at a time.
+private final class SpyPlayer: CuePlaying {
+    private(set) var played: [FeedbackCue] = []
+
+    func play(_ cue: FeedbackCue) {
+        played.append(cue)
+    }
 }
 
 private final class StateLog: @unchecked Sendable {
@@ -1572,5 +1770,29 @@ private actor GatedRefiner: DictationRefining {
     func finish() {
         for continuation in parked { continuation.resume() }
         parked = []
+    }
+}
+
+/// The app's `DictationArchive` in the one state this file tests it in: `store` is nil because
+/// `murmure.sqlite` refused to open, so there is nowhere to write a row and none is written. The
+/// real one logs and moves on for the same reason -- an error raised at the end of a dictation
+/// that otherwise worked perfectly is about an archive Louis was not thinking about.
+private final class BrokenArchive: DictationRecording, @unchecked Sendable {
+    private let store: HistoryStore?
+    private let lock = NSLock()
+    private var written = 0
+
+    init(store: HistoryStore?) {
+        self.store = store
+    }
+
+    var rowsWritten: Int { lock.withLock { written } }
+
+    func targetForNewDictation() async -> DictationTarget { .unknown }
+
+    func record(_ dictation: HistoryRecord) async {
+        guard let store else { return }
+        guard (try? store.insert(dictation)) != nil else { return }
+        lock.withLock { written += 1 }
     }
 }

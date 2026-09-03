@@ -29,6 +29,16 @@ final class CueFeedbackTests: XCTestCase {
         XCTAssertNil(FeedbackPolicy.cue(for: .completed(insertedCharacters: 0)))
     }
 
+    /// **The same distinction, one destination over, and the reason it is worth its own test:
+    /// here there IS text and it is a real dictation -- it simply did not reach the application in
+    /// front.** The one cue there is means "text reached the application under the cursor"; under
+    /// `PasteBehaviour.copyToClipboardOnly` it did not, and Louis dictates without looking, so a
+    /// confirmation would be the whole of what he knows about the outcome and it would be wrong.
+    /// He would carry on typing over a paste that never happened.
+    func testAClipboardDeliveryIsSilentEvenThoughItCarriedText() {
+        XCTAssertNil(FeedbackPolicy.cue(for: .copiedToClipboard(characters: 42)))
+    }
+
     /// A failure never makes the sound that means "speak now". A microphone that refused, a
     /// transcription that threw and a paste that was blocked all arrive here.
     func testAFailureIsSilent() {
@@ -148,5 +158,58 @@ final class CueFeedbackTests: XCTestCase {
         // Then
         XCTAssertEqual(
             player.played, [.recordingStarted, .textInserted, .recordingStarted, .textInserted])
+    }
+
+    // MARK: - The General pane's two switches
+
+    /// A cue the user has switched off makes no sound, and the OTHER one still does. Switching
+    /// off the confirmation must not cost the start cue, which is the one that stops Louis
+    /// speaking into a microphone that is not recording yet.
+    func testASwitchedOffCueIsSilentAndTheOtherIsNot() {
+        // Given
+        let player = SpyPlayer()
+        let feedback = CueFeedback(player: player, isEnabled: { $0 != .textInserted })
+
+        // When
+        feedback.apply(.recording)
+        feedback.apply(.completed(insertedCharacters: 7))
+
+        // Then
+        XCTAssertEqual(player.played, [.recordingStarted])
+    }
+
+    /// The answer is read at the moment the sound would play, not captured when the feedback was
+    /// built -- so a toggle flipped between two dictations takes effect on the next one rather
+    /// than at the next launch.
+    func testFlippingTheSwitchBetweenTwoDictationsTakesEffectOnTheSecond() {
+        // Given
+        let player = SpyPlayer()
+        var soundsAreOn = true
+        let feedback = CueFeedback(player: player, isEnabled: { _ in soundsAreOn })
+
+        // When
+        feedback.apply(.recording)
+        soundsAreOn = false
+        feedback.apply(.recording)
+
+        // Then
+        XCTAssertEqual(player.played, [.recordingStarted])
+    }
+
+    /// Silencing a cue is a filter, never a second policy: a state that earns no cue at all is
+    /// still silent when everything is switched on, which is where `FeedbackPolicy` stays in
+    /// charge of the question "which cue does this state earn".
+    func testSwitchingEverythingOnDoesNotInventCuesForSilentStates() {
+        // Given
+        let player = SpyPlayer()
+        let feedback = CueFeedback(player: player, isEnabled: { _ in true })
+
+        // When
+        feedback.apply(.completed(insertedCharacters: 0))
+        feedback.apply(.failed(message: "mic start failed", recoveredText: nil))
+        feedback.apply(.cancelled)
+
+        // Then
+        XCTAssertTrue(player.played.isEmpty)
     }
 }

@@ -527,8 +527,11 @@ private struct CancelFakeVocabulary: VocabularyProviding {
 
 private final class CancelSpyInserter: TextInserter, @unchecked Sendable {
     var error: Error?
-    func insert(_ text: String) async throws {
+    func insert(_ text: String) async throws -> InsertionDelivery {
         if let error { throw error }
+        // None of this file's tests are about where the text went; the paste is what the shipped
+        // default does, so these dictations run the sequence they were written against.
+        return .pastedIntoFrontmostApp
     }
 }
 

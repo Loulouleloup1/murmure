@@ -17,8 +17,8 @@ struct VocabularyPaneView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             inputRow
-            if let problem = model.problem {
-                problemRow(problem)
+            if let banner = model.banner {
+                problemRow(banner)
             }
             if !droppedEntries.isEmpty {
                 capNotice
@@ -124,7 +124,7 @@ struct VocabularyPaneView: View {
             .padding(.vertical, 4)
         }
         .background(Color(role: .paneBackground))
-        .overlay { if model.entries.isEmpty { emptyList } }
+        .overlay { if let message = model.emptyListMessage { emptyList(message) } }
     }
 
     /// Left column = the term; a replacement, when there is one, follows an arrow chip in a second
@@ -174,12 +174,18 @@ struct VocabularyPaneView: View {
         .onHover { hovering in hoveredTerm = hovering ? entry.term : nil }
     }
 
-    /// T9 owns the full empty-state treatment (plan §6); this is the sentence it needs until then,
-    /// the same provisional shape `HistoryPaneView.emptyList` uses.
-    private var emptyList: some View {
-        Text("No vocabulary yet.")
+    /// An empty list is two different events -- no file yet, or a file that will not parse -- and
+    /// **which sentence that is is not decided here.** It is `VocabularyEmptyState`, in
+    /// `MurmureCore`, where the parse failure can be produced by writing a real broken file.
+    ///
+    /// Centred and measured, like `HistoryPaneView`'s: both sentences run to two lines, and one of
+    /// them names a file.
+    private func emptyList(_ message: String) -> some View {
+        Text(message)
             .font(.system(size: 12, design: .rounded))
             .foregroundStyle(Color(role: .secondaryText))
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 420)
             .padding(24)
     }
 }

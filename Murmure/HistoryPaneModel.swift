@@ -24,13 +24,15 @@ final class HistoryPaneModel: ObservableObject {
     }
 
     @Published private(set) var groups: [HistoryDateGroup] = []
-    /// Something was typed that cannot be searched for -- punctuation, a stray bracket. Distinct
-    /// from "no results", because the pane says different things about them, and never the same
-    /// thing as an empty field (`HistoryQuery`).
-    @Published private(set) var unsearchable = false
-    /// The database would not open, or a read failed. The window is where T9 will put this
-    /// properly; until then it is at least held rather than dropped.
+    /// A re-refinement that could not run, a delete that failed, a WAV that would not play, a read
+    /// the store refused. Everything that goes wrong AFTER the archive opened -- the archive not
+    /// opening at all is `archiveFailure`, which is a different sentence and outranks this one.
     @Published private(set) var problem: String?
+
+    /// Why `murmure.sqlite` would not open, when it would not. Fixed at launch: the store is
+    /// opened once by `DictationController` and never reopened, so this cannot change while the
+    /// window is up.
+    private let archiveFailure: HistoryStoreError?
 
     @Published var selectedID: Int64?
     /// Which text the detail pane is showing. Reset whenever the selection moves, because a lens
@@ -60,10 +62,12 @@ final class HistoryPaneModel: ObservableObject {
 
     init(
         store: HistoryStore?,
+        archiveFailure: HistoryStoreError?,
         recordings: URL,
         reRefine: @escaping (String, Mode) async -> ReRefinement
     ) {
         self.store = store
+        self.archiveFailure = archiveFailure
         self.recordings = recordings
         self.reRefine = reRefine
     }
@@ -85,14 +89,39 @@ final class HistoryPaneModel: ObservableObject {
 
     var isEmpty: Bool { groups.isEmpty }
 
+    /// The one sentence an empty list shows, or nil when there is a list to show.
+    ///
+    /// Everything it decides is decided in `HistoryEmptyState` and tested there -- which of the
+    /// four conditions this is, which of them outranks which, and how the orphaned recordings are
+    /// counted. What is left here is the transient failures, which outrank nothing and come first
+    /// only because they are the most recent thing that happened: a read that threw is why this
+    /// list is empty, and it may not be reported as an archive that has never held a row.
+    ///
+    /// **The orphan count is read HERE, on every draw, and never stored.** The plan wrote 98 on
+    /// 2026-09-01 and the folder held 200 two days later; a count taken at launch would be a
+    /// number that goes stale on a machine that is left running.
+    var emptyListMessage: String? {
+        guard isEmpty else { return nil }
+        if let problem { return problem }
+        return HistoryEmptyState.current(
+            archiveFailure: archiveFailure,
+            query: HistoryQuery(typed: searchField),
+            hasRows: false,
+            orphanedRecordings: {
+                HistoryEmptyState.orphanedRecordingCount(in: self.recordings)
+            })?.description
+    }
+
     /// Re-reads the history under the current query.
     ///
     /// `Date()` and `Calendar.current` are read HERE and handed down, which is the whole reason
     /// `HistoryGrouping` takes them: the grouping is pure, and this is the one place in the app
     /// that is allowed to ask what day it is.
     func reload() {
+        // No store is not a failure to report here: `archiveFailure` carries the words, and
+        // `emptyListMessage` is what says them. Setting `problem` as well would show the same
+        // news twice, in two different wordings.
         guard let store else {
-            problem = "The history database could not be opened."
             groups = []
             return
         }
@@ -100,13 +129,12 @@ final class HistoryPaneModel: ObservableObject {
             let records: [HistoryRecord]
             switch HistoryQuery(typed: searchField) {
             case .unfiltered:
-                unsearchable = false
                 records = try store.page(limit: HistoryLayout.pageSize)
             case .tokens(let query):
-                unsearchable = false
                 records = try store.search(query, limit: HistoryLayout.pageSize)
+            // The store is deliberately not asked: a pattern with no tokens in it would match
+            // everything, which reads as a search that failed (`HistoryQuery`).
             case .unsearchable:
-                unsearchable = true
                 records = []
             }
             groups = HistoryGrouping.groups(
@@ -145,11 +173,11 @@ final class HistoryPaneModel: ObservableObject {
 
     // MARK: - The audio
 
+    /// Asked again on every draw rather than cached with the row: the purge runs at launch and the
+    /// Finder is one keystroke away, so a WAV can go while the pane is on screen. `HistoryAudioFile`
+    /// is where the rule lives, and where deleting a real file under a real row is a test.
     func audioURL(for record: HistoryRecord) -> URL? {
-        guard let url = record.audioURL(inRecordings: recordings),
-              FileManager.default.fileExists(atPath: url.path)
-        else { return nil }
-        return url
+        HistoryAudioFile.url(for: record, inRecordings: recordings)
     }
 
     /// Reveals the WAV in the Finder. Nil-guarded at the call site as well: the audio is purged

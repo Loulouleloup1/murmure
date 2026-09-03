@@ -57,7 +57,11 @@ actor WhisperKitEngine {
     /// The Hugging Face repository the variant above lives in. Same default WhisperKit uses; it
     /// is spelled out here because the cached-folder check below has to resolve the exact same
     /// local path WhisperKit would have downloaded into.
-    private static let modelRepo = "argmaxinc/whisperkit-coreml"
+    ///
+    /// Not private, so the Models pane describes THIS repository rather than a second copy of the
+    /// string: a table that named a repository the engine does not download from would be a table
+    /// about a model nobody has.
+    static let modelRepo = "argmaxinc/whisperkit-coreml"
 
     private var loading: Task<LoadedModel, Error>?
 
@@ -365,12 +369,15 @@ actor WhisperKitEngine {
     /// interrupted first download, and the caller must go back to the Hub. This is a cheap
     /// pre-filter, not a validation: a bundle can exist and still be corrupt, which is why the
     /// caller also treats a failed load as "go to the Hub".
+    ///
+    /// The list comes from `ModelInventory` rather than being spelled here, for the reason the
+    /// path does: the Models pane decides whether a model reads as installed with the same
+    /// constant, and two literals in two modules are two rules that can drift apart silently.
     private static func cachedModelFolder(in modelStore: URL) -> URL? {
         let folder = HubApiWrapper(downloadBase: modelStore)
             .localRepoLocation(HubApiWrapper.Repo(id: modelRepo, type: .models))
             .appending(path: dictationModel)
-        let required = ["MelSpectrogram.mlmodelc", "AudioEncoder.mlmodelc", "TextDecoder.mlmodelc"]
-        let complete = required.allSatisfy {
+        let complete = ModelInventory.requiredBundles.allSatisfy {
             FileManager.default.fileExists(atPath: folder.appending(path: $0).path)
         }
         return complete ? folder : nil

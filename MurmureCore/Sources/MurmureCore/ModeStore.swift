@@ -21,6 +21,25 @@ public enum ModeLoadProblem: Equatable, CustomStringConvertible {
     }
 }
 
+/// Why an edited mode was not written. Distinct from `ModeValidationError`, which is about the
+/// mode; these two are about the folder, and neither is fixable by changing a field.
+public enum ModeWriteProblem: Error, Equatable, CustomStringConvertible {
+    case fileChangedOnDisk(key: String)
+    case keyAlreadyInUse(key: String)
+
+    public var description: String {
+        switch self {
+        case .fileChangedOnDisk(let key):
+            """
+            \(key).json was edited outside Murmure while this mode was open. Nothing was written. \
+            Close the editor and open it again to see the file as it is now.
+            """
+        case .keyAlreadyInUse(let key):
+            "another mode already uses the file name \(key).json. Pick a different key."
+        }
+    }
+}
+
 /// Reads and writes `modes/*.json` (spec §7).
 public struct ModeStore {
     private let directory: URL
@@ -67,6 +86,87 @@ public struct ModeStore {
         try mode.validate()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Self.encoder.encode(mode).write(to: fileURL(for: mode.key), options: .atomic)
+    }
+
+    // MARK: - Editing
+
+    /// When a mode's file was last written, or nil if there is none.
+    ///
+    /// Read at the moment the editor opens a mode and handed back on save (``ModeDraft``). The
+    /// pane re-reads the folder every time it appears, the way `DictationController.refreshModes()`
+    /// already does, but "appears" is not "is on screen": the window can sit open on this pane for
+    /// an hour while the same file is edited in a text editor.
+    public func modificationDate(forKey key: String) -> Date? {
+        try? FileManager.default
+            .attributesOfItem(atPath: fileURL(for: key).path)[.modificationDate] as? Date
+    }
+
+    /// Writes an edited mode, moving its file if its key changed.
+    ///
+    /// Three refusals, in the order they can be told apart:
+    ///
+    /// 1. the mode is invalid — `Mode.validate()`, naming the field;
+    /// 2. the file changed under the editor since it was opened;
+    /// 3. the destination file belongs to another mode.
+    ///
+    /// Only then is anything written. The new file is written **before** the old one is removed:
+    /// a failure between the two leaves two files, which `loadAll()` shows as two modes and which
+    /// is repairable; the other order loses the mode outright.
+    public func save(_ draft: ModeDraft) throws {
+        try draft.mode.validate()
+
+        // A file that is *gone* is not a conflict. The guard is here to keep an edit made in a
+        // text editor from being overwritten, and a deleted file has no edit to lose -- while
+        // refusing would strand whatever is in the editor with nowhere left to put it. A file that
+        // appeared where there was none still counts, which is the case that matters: `loadAll()`
+        // stands the built-in `Voice` in when `voice.json` is missing, so that mode can be opened
+        // with no file behind it and someone else may write one meanwhile.
+        if let previousKey = draft.previousKey,
+           let onDisk = modificationDate(forKey: previousKey),
+           onDisk != draft.previousModifiedAt {
+            throw ModeWriteProblem.fileChangedOnDisk(key: previousKey)
+        }
+
+        let destination = fileURL(for: draft.mode.key)
+        // Also what refuses a rename that only changes the key's case. The volume is very likely
+        // case-insensitive, so `Voice.json` and `voice.json` are one file: allowing it would write
+        // the mode and then delete it under its old name, which is the same file. Refusing costs
+        // a rename nobody needs; the alternative loses the mode.
+        if draft.mode.key != draft.previousKey,
+           FileManager.default.fileExists(atPath: destination.path) {
+            throw ModeWriteProblem.keyAlreadyInUse(key: draft.mode.key)
+        }
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Self.encoder.encode(draft.mode).write(to: destination, options: .atomic)
+
+        if draft.movesItsFile, let previousKey = draft.previousKey {
+            try FileManager.default.removeItem(at: fileURL(for: previousKey))
+        }
+    }
+
+    /// Removes a mode's file.
+    ///
+    /// Takes the **draft**, not a key, so it carries the same modification date `save(_ draft:)`
+    /// checks — and refuses on the same `fileChangedOnDisk`. The asymmetry that would otherwise
+    /// exist is the wrong way round: the reversible path would be guarded and the irreversible one
+    /// not, so opening the editor, correcting `prompt.json` by hand, coming back and pressing
+    /// Delete would destroy that correction without a word, where pressing Save would have been
+    /// refused.
+    ///
+    /// A file that is **already gone** is not an error: the outcome asked for is the outcome that
+    /// holds, and reporting a failure for it would make the pane complain about having nothing
+    /// left to do. What that leaves is `removeItem` throwing only for a real refusal, which is
+    /// then shown.
+    public func delete(_ draft: ModeDraft) throws {
+        guard let key = draft.previousKey else { return }
+
+        let url = fileURL(for: key)
+        guard let onDisk = modificationDate(forKey: key) else { return }
+        if onDisk != draft.previousModifiedAt {
+            throw ModeWriteProblem.fileChangedOnDisk(key: key)
+        }
+        try FileManager.default.removeItem(at: url)
     }
 
     private func fileURL(for key: String) -> URL {

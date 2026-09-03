@@ -52,4 +52,18 @@ public enum WindowLayout {
 
     /// The large-surface tier of §2.3 (14–16 pt): the panel the detail pane's transcript sits on.
     public static let surfaceCornerRadius: CGFloat = 14
+
+    /// The three fixed columns of the Models table (design notes §1.1). The name column takes
+    /// whatever is left, which is what makes the table a table rather than four labels in a row.
+    ///
+    /// `type` is a glyph and needs no more than its own tile; `size` holds "1.6 GB" and has to
+    /// stay wide enough for the longest thing ``ModelSize`` prints; `action` is one button.
+    public static let modelsColumns: (type: CGFloat, size: CGFloat, action: CGFloat) =
+        (type: 44, size: 96, action: 44)
+
+    /// The narrowest the model-name column may get before the table stops being readable. The
+    /// test beside it is the one that matters: sidebar + this + the three fixed columns has to
+    /// fit inside `minimumSize.width`, or the table's last column falls off the smallest window
+    /// the app can be resized to.
+    public static let modelsNameMinimum: CGFloat = 200
 }

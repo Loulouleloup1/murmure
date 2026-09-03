@@ -2,17 +2,36 @@ import AppKit
 import MurmureCore
 import SwiftUI
 
-/// The window: a sidebar of six sections, and a pane that is empty in this task.
+/// The window: a sidebar of six sections, and the pane each of them opens.
 ///
-/// This is the frame, not the contents. T5 fills History, T6 Vocabulary, T7 Modes, T8 the three
-/// machinery sections and T9 every empty and broken state — so what is worth getting right here is
-/// what all five of them will copy: where the colours come from, where the measurements come from,
-/// and what a section header is.
+/// This is the frame; the contents are the six pane views. What it was worth getting right here is
+/// what all six copy: where the colours come from, where the measurements come from, and what a
+/// section header is.
+///
+/// **Five of the six pane models are handed in rather than built here**, and the reason is the same
+/// for all five: each needs something only `MurmureApp` has — the archive the controller opened,
+/// the `AppSettings` a dictation actually reads, or the controller itself, which the modes editor
+/// has to be able to tell that the folder changed. Vocabulary is the one exception and says why
+/// below.
 struct MainWindowView: View {
     @ObservedObject var controller: WindowController
     /// History's own state, built once in `MurmureApp` because it owns a database connection and
     /// a search query that must survive the window being closed and reopened.
     @ObservedObject var history: HistoryPaneModel
+    /// The modes editor. Built in `MurmureApp` because its `didChangeModes` has to reach
+    /// `DictationController` and `AppState`, neither of which a `@StateObject` initialiser in a
+    /// view can see: a property initialiser cannot read `self`, so an editor built here could only
+    /// have been given the no-op default — an editor that saves a renamed mode and leaves the menu
+    /// offering the old list, with nothing anywhere to say so.
+    @ObservedObject var modes: ModesPaneModel
+    /// The models table. Built in `MurmureApp` for the same reason: the language half of the table
+    /// is derived from the modes `AppState` holds, and it is read on every appearance rather than
+    /// captured once.
+    @ObservedObject var models: ModelsPaneModel
+    /// General and Advanced, built in `MurmureApp` so the settings they write are the ones a
+    /// dictation reads and the archive they clear is the one the controller opened.
+    @ObservedObject var general: GeneralPaneModel
+    @ObservedObject var advanced: AdvancedPaneModel
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
@@ -121,8 +140,9 @@ struct MainWindowView: View {
     private var header: some View {
         HStack(spacing: 6) {
             // For a LIST section the header *is* the search field (design notes §1.4), which is
-            // why History has no other place to put one and no page title above it. Models gets
-            // the same slot in T8.
+            // why History has no other place to put one and no page title above it. History is the
+            // only one: Models shipped without a search field on the argument `ModelsPaneView`
+            // makes — a search over three rows is a control that can only ever hide two of them.
             if controller.section == .history {
                 HistorySearchField(text: $history.searchField)
             }
@@ -143,14 +163,26 @@ struct MainWindowView: View {
         }
     }
 
+    /// **No `default`, and that absence is the point of this switch.**
+    ///
+    /// It had one, and four of the six sections fell into it: Modes, Models, General and Advanced
+    /// were fully built and fully tested, and clicking any of them showed `Color.clear`. Nothing
+    /// protested — not the compiler, which had been given a case that matched everything, and not
+    /// the test bundle, which covers `MurmureCore` and never the wiring.
+    ///
+    /// So this switch is written the way `WindowSection`'s own three are, for the reason its
+    /// doc comment gives about them: a seventh section must **fail to compile** here until someone
+    /// has decided what it shows. That is the only mechanism in this file that can catch a pane
+    /// nobody connected, because there is no test that can.
     @ViewBuilder
     private var pane: some View {
         switch controller.section {
         case .history: HistoryPaneView(model: history)
+        case .modes: ModesPaneView(model: modes)
         case .vocabulary: VocabularyPaneView(model: vocabulary)
-        // Empty on purpose. This task builds the frame; the contents are T5 through T9, and an
-        // invented placeholder in each of five panes is five things to delete.
-        default: Color.clear
+        case .models: ModelsPaneView(model: models)
+        case .general: GeneralPaneView(model: general)
+        case .advanced: AdvancedPaneView(model: advanced)
         }
     }
 

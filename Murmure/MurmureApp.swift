@@ -49,6 +49,29 @@ struct MurmureApp: App {
     /// would throw away Louis's search every time SwiftUI rebuilt the scene.
     @StateObject private var historyModel: HistoryPaneModel
 
+    /// The modes editor's state. A `StateObject` for the reason the others are, and built here
+    /// rather than in the view for one it does not share: its `didChangeModes` has to reach both
+    /// `DictationController` and `AppState`, and a `@StateObject` initialiser inside
+    /// `MainWindowView` cannot read `self` to get at either.
+    @StateObject private var modesModel: ModesPaneModel
+
+    /// The models table's state. Built here because the language half of the table is derived from
+    /// the modes `AppState` holds, and that list changes while the app runs.
+    @StateObject private var modelsModel: ModelsPaneModel
+
+    /// General's state. A `StateObject` for the reason the others are: an `App` struct is
+    /// re-created, and a plain stored object would be a new one every time SwiftUI rebuilt the
+    /// scene — which for this one would mean re-reading `SMAppService` on every redraw.
+    ///
+    /// Built here rather than in the view because it shares the settings object with the dictation
+    /// pipeline: the two sound switches and the paste behaviour have to be the ones a dictation
+    /// reads, not a second reader of the same keys.
+    @StateObject private var generalModel: GeneralPaneModel
+
+    /// Advanced's state. Built here for History's reason as well: its two erasure buttons act on
+    /// the archive the controller opened, and §5.4 rule 3 allows exactly one connection to it.
+    @StateObject private var advancedModel: AdvancedPaneModel
+
     init() {
         // Named once, here, and handed to both. `AppState` takes it for the reason its own init
         // gives -- a test must never write into the preferences of the application Louis is using
@@ -84,7 +107,11 @@ struct MurmureApp: App {
         // wrapper here (reading a `@StateObject` from `init` is unsupported).
         _appState = StateObject(wrappedValue: state)
         _windowController = StateObject(wrappedValue: WindowController(defaults: defaults))
-        let controller = DictationController(appState: state)
+        // The fourth thing built on the one domain chosen above. `AppSettings` is a value type
+        // over that `UserDefaults`, so handing the same one to the controller and to the two panes
+        // is handing them one store rather than three readers of the same keys.
+        let settings = AppSettings(defaults: defaults)
+        let controller = DictationController(appState: state, settings: settings)
         self.controller = controller
         // The archive is opened once, by the controller, and READ here (§5.4 rule 3): one
         // connection, one place that knows the real path. A second `HistoryStore` on the same
@@ -92,10 +119,59 @@ struct MurmureApp: App {
         _historyModel = StateObject(
             wrappedValue: HistoryPaneModel(
                 store: controller.history,
+                archiveFailure: controller.historyFailure,
                 recordings: controller.recordingsDirectory,
                 reRefine: { transcript, mode in
                     await controller.reRefine(transcript, with: mode)
                 }))
+        // `Storage.url()` and not `directory()`: the PURE path, for the reason the Advanced pane
+        // below is given the same one. `ModeStore.save` creates `modes/` before it writes into it,
+        // and the controller above has already created it on every launch that can reach
+        // Application Support — so nothing about building this pane needs to.
+        //
+        // **`didChangeModes` is what makes the editor's Save reach the rest of the app**, and a
+        // model built with the no-op default would look identical, compile identically and leave
+        // the menu offering the list from before the edit.
+        _modesModel = StateObject(
+            wrappedValue: ModesPaneModel(supportFolder: Storage.url()) { renamed in
+                // The rename first, so the stored selection has already followed the key by the
+                // time the list it is checked against is replaced. `ModePreference.selection` is
+                // the rule; this is only the moment it is applied, and it is applied HERE because
+                // the editor is the only thing in the process that knows the old key became the
+                // new one.
+                if let renamed {
+                    state.followModeRename(from: renamed.from, to: renamed.to)
+                }
+                // Every write, rename or not: a mode created, deleted or merely renamed in the
+                // window has to reach the menu and the next dictation without a restart.
+                controller.refreshModes()
+            })
+        // The models folder, PURE: this pane walks it to report what is installed, and a settings
+        // pane that created `models/` would be answering a question nobody asked. `WhisperKitEngine`
+        // is what creates it, because it is what downloads into it.
+        //
+        // The language rows are a closure over `AppState`, not a snapshot: `refreshModes()` above
+        // and the menu both write that list, and a table built from a copy of it would stop
+        // agreeing with the modes the moment one was edited.
+        _modelsModel = StateObject(
+            wrappedValue: ModelsPaneModel(
+                store: Storage.url(subfolder: "models"),
+                speech: [ModelsPaneModel.dictationModel],
+                language: { ModelInventory.languageModels(in: state.availableModes) }))
+        _generalModel = StateObject(wrappedValue: GeneralPaneModel(settings: settings))
+        // The same store the controller opened and the same recordings folder it resolved — read
+        // here rather than resolved again, so the pane's Delete All Recordings and the retention
+        // sweep cannot end up pointing at two different directories.
+        //
+        // `Storage.url()` is the PURE one: nothing about building a settings pane may create
+        // `Application Support/Murmure`, and the three reveal buttons report an absent folder
+        // rather than making one.
+        _advancedModel = StateObject(
+            wrappedValue: AdvancedPaneModel(
+                settings: settings,
+                store: controller.history,
+                recordings: controller.recordingsDirectory,
+                supportFolder: Storage.url()))
     }
 
     var body: some Scene {
@@ -194,7 +270,9 @@ struct MurmureApp: App {
         // Named for the application rather than "Settings", because five of its six sections are
         // settings and the sixth -- History -- is the reason it gets opened (D3).
         Window("Murmure", id: WindowController.windowID) {
-            MainWindowView(controller: windowController, history: historyModel)
+            MainWindowView(
+                controller: windowController, history: historyModel, modes: modesModel,
+                models: modelsModel, general: generalModel, advanced: advancedModel)
                 .environmentObject(appState)
         }
         .defaultSize(

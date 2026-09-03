@@ -50,6 +50,20 @@ public enum NotchPhase: Equatable {
     case inserting
     /// The dictation inserted text, and this is how much. Never zero -- that is `nothingHeard`.
     case completed(insertedCharacters: Int)
+    /// The dictation produced text and it went to the CLIPBOARD, reaching no application:
+    /// ``PasteBehaviour/copyToClipboardOnly`` posts no ⌘V by design.
+    ///
+    /// **This type's founding argument for a third time.** It is not `completed`: that phase means
+    /// the words are under the cursor, and reading it here would have Louis carry on typing over a
+    /// paste that never happened. It is not `nothingHeard`: the microphone got everything and the
+    /// text is one ⌘V away, so that sentence would send him to check hardware that is fine. And it
+    /// is not `failed`: nothing went wrong, and an exclamation triangle after every dictation of a
+    /// day's work is a warning about a box he ticked himself.
+    ///
+    /// It carries the count for `completed`'s reason -- it is how he tells this dictation from the
+    /// one before it -- and never zero: an empty transcript is `nothingHeard` whatever the paste
+    /// behaviour is (`DictationSession`, lot 4 D8).
+    case copiedToClipboard(characters: Int)
     /// The dictation ran and inserted nothing: an empty recording, or a transcript Whisper
     /// returned empty. Deliberately NOT a failure (nothing went wrong) and deliberately not a
     /// success (nothing was pasted). A green flash here would be a lie.

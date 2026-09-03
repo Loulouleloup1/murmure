@@ -80,6 +80,15 @@ final class HistoryRowTests: XCTestCase {
         XCTAssertEqual(
             HistoryRow.preview(for: record(outcome: .nothingHeard)), "Nothing heard")
         XCTAssertEqual(HistoryRow.preview(for: record(outcome: .cancelled)), "Cancelled")
+        // The clipboard delivery is the same "worked, then the purge took the text" story as
+        // `inserted` above, and it deliberately does not say "Text cleared": once the text is gone
+        // the only thing left worth saying about the row is the one way it differed from an
+        // insertion, which is that nothing ever reached an application.
+        XCTAssertEqual(
+            HistoryRow.preview(for: record(outcome: .copiedToClipboard)), "Copied to clipboard")
+        XCTAssertNotEqual(
+            HistoryRow.preview(for: record(outcome: .copiedToClipboard)),
+            HistoryRow.preview(for: record(outcome: .inserted)))
     }
 
     /// A failed dictation shows the message the notch showed, which is the whole reason §5.2 gave

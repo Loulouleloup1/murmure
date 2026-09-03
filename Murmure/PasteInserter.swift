@@ -60,7 +60,19 @@ final class PasteInserter {
     /// decide. A call site that genuinely does not care writes `{ _ in }` and means it.
     private let onClipboardOutcome: (PasteboardSnapshot.RestoreOutcome) -> Void
 
-    init(onClipboardOutcome: @escaping (PasteboardSnapshot.RestoreOutcome) -> Void) {
+    /// The Advanced pane's two rows. Held rather than read once at construction, because this
+    /// object is built at launch and lives for the process: a plan captured here would be the
+    /// answer from before Louis had ever opened the window.
+    ///
+    /// Turned into an `InsertionPlan` exactly once per insertion, at the top of ``insert(_:)`` --
+    /// see the note there about the 300 ms the two questions are asked across.
+    private let settings: AppSettings
+
+    init(
+        settings: AppSettings,
+        onClipboardOutcome: @escaping (PasteboardSnapshot.RestoreOutcome) -> Void
+    ) {
+        self.settings = settings
         self.onClipboardOutcome = onClipboardOutcome
     }
 
@@ -81,20 +93,45 @@ final class PasteInserter {
     /// A layout that moves V (Dvorak) would need the key code derived at runtime instead.
     private static let virtualKeyV = CGKeyCode(kVK_ANSI_V)
 
-    func insert(_ text: String) async throws {
+    /// Answers where the text went. **Not `Void`, and that return type is the point:** under
+    /// `PasteBehaviour.copyToClipboardOnly` this method completes normally having posted no ⌘V at
+    /// all, so "it did not throw" used to be read by `DictationSession` as "it landed in the app in
+    /// front" -- a confirmation sound, a status line and a history row all saying `inserted` about
+    /// a dictation that reached nothing.
+    func insert(_ text: String) async throws -> InsertionDelivery {
         // An empty transcript is a real outcome, not an error (ruling L11: WhisperKit returns
         // empty even for real speech). Pasting nothing would still clear and rewrite the
         // clipboard for no reason.
+        //
+        // `.copiedToClipboard` is the true half of what just happened -- no keystroke was posted --
+        // and the false half, that nothing was copied either, has no case here on purpose: the
+        // caller decides `nothingHeard` from the text itself before it ever reads this
+        // (`DictationSession`, lot 4 D8), so a fourth case would be a distinction with no consumer.
         guard !text.isEmpty else {
             logger.info("insert skipped -- empty transcript")
-            return
+            return .copiedToClipboard
         }
-        // Checked first, and before the clipboard is touched: without this permission
-        // `CGEvent.post` does exactly nothing and reports nothing -- the silent failure this
-        // whole class exists to avoid.
-        guard AXIsProcessTrusted() else { throw InsertError.accessibilityDenied }
-        let target = try Self.frontmostTarget()
-        let (keyDown, keyUp) = try Self.makePasteEvents()
+        // **Read ONCE, here, and both answers come from this one reading.** The keystroke is
+        // decided on the next line and the hand-back 300 ms later; consulting `settings` twice
+        // across that gap would let a toggle flipped in between produce a dictation that pasted
+        // and never gave the clipboard back.
+        let plan = InsertionPlan(settings)
+
+        // Everything below is the pasting path and only the pasting path.
+        // `PasteBehaviour.copyToClipboardOnly` is not a degraded paste: it is the answer for the
+        // applications where a synthetic ⌘V lands in the wrong field, and skipping the check is
+        // half its value -- it is the only behaviour that needs no Accessibility permission at
+        // all, so a denied one must not fail an insertion that was never going to press a key.
+        var keystroke: (down: CGEvent, up: CGEvent)?
+        var target: NSRunningApplication?
+        if plan.pastesIntoFrontmostApp {
+            // Checked first, and before the clipboard is touched: without this permission
+            // `CGEvent.post` does exactly nothing and reports nothing -- the silent failure this
+            // whole class exists to avoid.
+            guard AXIsProcessTrusted() else { throw InsertError.accessibilityDenied }
+            target = try Self.frontmostTarget()
+            keystroke = try Self.makePasteEvents()
+        }
 
         // The whole capture/clear/write sequence belongs to `PasteboardSnapshot.borrow`, not here:
         // assembled by hand it leaves a gap between the capture and the clear in which a third
@@ -118,19 +155,43 @@ final class PasteInserter {
         // in there widens it for nothing.
         warnAboutUnreadableTypes(borrowed.droppedTypes)
 
-        logger.info("pasting \(text.count) characters into \(target.localizedName ?? "?", privacy: .public)")
-        keyDown.post(tap: .cgAnnotatedSessionEventTap)
-        keyUp.post(tap: .cgAnnotatedSessionEventTap)
+        if let keystroke {
+            logger.info("pasting \(text.count) characters into \(target?.localizedName ?? "?", privacy: .public)")
+            keystroke.down.post(tap: .cgAnnotatedSessionEventTap)
+            keystroke.up.post(tap: .cgAnnotatedSessionEventTap)
 
-        do {
-            try await Task.sleep(for: Self.pasteWindow)
-        } catch {
-            // Cancellation must not leave the transcript sitting on the user's clipboard;
-            // hand it back immediately instead.
-            logger.notice("paste window interrupted -- restoring the clipboard now")
+            do {
+                try await Task.sleep(for: Self.pasteWindow)
+            } catch {
+                // Cancellation must not leave the transcript sitting on the user's clipboard;
+                // hand it back immediately instead.
+                logger.notice("paste window interrupted -- restoring the clipboard now")
+            }
+        } else {
+            // No keystroke, so no window to wait out: the delivery is already complete. The line
+            // is here rather than absent because a dictation that produced no visible paste is
+            // exactly the thing somebody reads the log to explain.
+            logger.info(
+                "copied \(text.count, privacy: .public) characters -- paste behaviour is copy-only, no ⌘V posted"
+            )
         }
 
-        report(borrowed.handBack(), from: .pasteWindow)
+        // **Through the plan, and there is no `if` here on purpose.** `handBack(_:)` is the
+        // overload that owns the branch (`InsertionPlan`, in MurmureCore, where it is tested
+        // against a real pasteboard); the bare `handBack()` is unconditional and reaching for it
+        // is how the clipboard setting would quietly stop meaning anything.
+        //
+        // nil is "kept, because that is what was asked" and is deliberately not reported: it
+        // feeds `AppState.clipboardWarning`, and a notice after every dictation about a box Louis
+        // ticked himself is the notice he stops reading.
+        if let outcome = borrowed.handBack(plan) {
+            report(outcome, from: .pasteWindow)
+        }
+
+        // Read off `plan`, which is the same single reading of the settings the keystroke was
+        // decided from 300 ms ago -- not `settings` again, and not `keystroke != nil`, either of
+        // which would let the answer describe a different insertion from the one that just ran.
+        return plan.pastesIntoFrontmostApp ? .pastedIntoFrontmostApp : .copiedToClipboard
     }
 
     /// Which hand-back is being reported. `.declinedPasteboardChanged` is the same fact told from

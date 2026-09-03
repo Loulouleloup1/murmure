@@ -173,10 +173,11 @@ final class HistoryStoreTests: XCTestCase {
     /// `String(describing:)`.
     func testTheOutcomeRawValuesAreTheOnesWrittenToDisk() {
         XCTAssertEqual(DictationOutcome.inserted.rawValue, "inserted")
+        XCTAssertEqual(DictationOutcome.copiedToClipboard.rawValue, "copiedToClipboard")
         XCTAssertEqual(DictationOutcome.nothingHeard.rawValue, "nothingHeard")
         XCTAssertEqual(DictationOutcome.failed.rawValue, "failed")
         XCTAssertEqual(DictationOutcome.cancelled.rawValue, "cancelled")
-        XCTAssertEqual(DictationOutcome.allCases.count, 4)
+        XCTAssertEqual(DictationOutcome.allCases.count, 5)
     }
 
     func testEveryOutcomeRoundTripsThroughTheDatabase() throws {

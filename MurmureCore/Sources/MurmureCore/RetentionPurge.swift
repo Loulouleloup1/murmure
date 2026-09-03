@@ -89,11 +89,66 @@ public enum RetentionPurge {
         now: Date,
         fileManager: FileManager = .default
     ) throws -> RetentionPurgeReport {
-        var report = RetentionPurgeReport()
-        let audioCutoff = now.addingTimeInterval(-audioLifetime)
+        try sweep(
+            store: store, recordings: recordings,
+            audioCutoff: now.addingTimeInterval(-audioLifetime),
+            textCutoff: now.addingTimeInterval(-textLifetime),
+            fileManager: fileManager)
+    }
 
-        report.textRowsCleared = try store.clearText(
-            startedBefore: now.addingTimeInterval(-textLifetime))
+    /// One of the Advanced pane's two buttons, carried out.
+    ///
+    /// **The same sweep, with one of the two clocks wound forward to `now` and the other wound
+    /// back out of reach.** That is not a convenience, it is `HistoryClearing`'s own claim made
+    /// structural: those buttons "run the same two sweeps with no cutoff, so a button can never
+    /// produce an outcome the app does not already produce on its own". A second implementation
+    /// here -- a `deleteEverything` that listed the folder itself -- is exactly how the button and
+    /// the automatic sweep would come to disagree about symlinks, about non-`.wav` files, or about
+    /// a row that still pins its audio.
+    ///
+    /// `.distantPast` for the half that is not being cleared, and it is genuinely inert rather
+    /// than merely small: `clearText(startedBefore: .distantPast)` matches no row, `clearAudio`
+    /// detaches none, and `modified < .distantPast` is false for every file that exists. So
+    /// "delete the recordings" cannot cost a word of text, and vice versa -- which is what both
+    /// summaries promise out loud.
+    ///
+    /// `now` is passed in for the reason every other date in this file is: it is the one input a
+    /// test cannot otherwise vary. It is also the honest cutoff -- "everything that exists as of
+    /// the click" -- rather than `.distantFuture`, which would additionally claim the recording
+    /// that a dictation started after the click has not written yet.
+    public static func clearNow(
+        _ action: HistoryClearing,
+        store: HistoryStore,
+        recordings: URL,
+        now: Date,
+        fileManager: FileManager = .default
+    ) throws -> RetentionPurgeReport {
+        // Written without a `default`, like every other exhaustive switch here: a third clearing
+        // action must not inherit a pair of cutoffs, because inheriting the wrong one deletes
+        // something nobody asked about.
+        let (audioCutoff, textCutoff): (Date, Date) = switch action {
+        case .recordings: (now, .distantPast)
+        case .transcripts: (.distantPast, now)
+        }
+        return try sweep(
+            store: store, recordings: recordings,
+            audioCutoff: audioCutoff, textCutoff: textCutoff, fileManager: fileManager)
+    }
+
+    /// The pass itself, with both cutoffs given rather than derived.
+    ///
+    /// Split out so the retention timer and the two buttons are one body of code with two callers,
+    /// which is the whole of `clearNow`'s argument above.
+    private static func sweep(
+        store: HistoryStore,
+        recordings: URL,
+        audioCutoff: Date,
+        textCutoff: Date,
+        fileManager: FileManager
+    ) throws -> RetentionPurgeReport {
+        var report = RetentionPurgeReport()
+
+        report.textRowsCleared = try store.clearText(startedBefore: textCutoff)
         let detached = Set(try store.clearAudio(startedBefore: audioCutoff))
         // Read AFTER the detach, and that ordering is the safe one rather than the tidy one: this
         // set can only ever GAIN entries between here and the sweep below -- a dictation that

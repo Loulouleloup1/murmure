@@ -12,7 +12,8 @@ final class StatusPanelTextTests: XCTestCase {
             .preparingModel(.downloading(ModelDownload(expectedBytes: 1_638_467_188))),
             .preparingModel(.loading),
             .transcribing, .refining, .inserting,
-            .completed(insertedCharacters: 42), .nothingHeard, .cancelled,
+            .completed(insertedCharacters: 42), .copiedToClipboard(characters: 42),
+            .nothingHeard, .cancelled,
             .failed(message: "clipboard lost", recoveredText: nil),
             .alert(message: "Accessibility is off"),
         ]
@@ -49,6 +50,38 @@ final class StatusPanelTextTests: XCTestCase {
         XCTAssertFalse(
             cancelled.localizedCaseInsensitiveContains("inserted"),
             "a cancellation must not borrow the completion's verb")
+    }
+
+    /// **The sentence that used to be a lie.** Under `PasteBehaviour.copyToClipboardOnly` no ⌘V is
+    /// posted, so nothing reaches the application Louis is looking at -- and on a display with no
+    /// cutout this line is most of the interface, so "Inserted 42 characters" would be the panel
+    /// confirming a paste that did not happen, in the one place he can see one.
+    ///
+    /// It may not borrow the silence's words either: the microphone got everything and the
+    /// sentence is one keystroke away, so "Nothing heard" would send him to check hardware that is
+    /// fine and away from a clipboard that is holding his text.
+    func testAClipboardDeliveryBorrowsNeitherTheCompletionsVerbNorTheSilencesWords() {
+        let copied = StatusPanelText.label(for: .copiedToClipboard(characters: 42))
+        XCTAssertFalse(
+            copied.localizedCaseInsensitiveContains("inserted"),
+            "the panel claimed a paste that was never posted")
+        XCTAssertFalse(
+            copied.localizedCaseInsensitiveContains("nothing"),
+            "the microphone heard everything")
+        XCTAssertNotEqual(copied, StatusPanelText.label(for: .completed(insertedCharacters: 42)))
+        XCTAssertNotEqual(copied, StatusPanelText.label(for: .nothingHeard))
+    }
+
+    /// It carries the count for the completion's reason, one destination over: it is what tells
+    /// Louis this is the sentence he just spoke and not the previous dictation still sitting on
+    /// the clipboard. Singular pinned beside the plural, as the completion's is.
+    func testAClipboardDeliveryCarriesItsCount() {
+        XCTAssertEqual(
+            StatusPanelText.label(for: .copiedToClipboard(characters: 1)), "Copied 1 character")
+        XCTAssertEqual(
+            StatusPanelText.label(for: .copiedToClipboard(characters: 2)), "Copied 2 characters")
+        XCTAssertTrue(
+            StatusPanelText.label(for: .copiedToClipboard(characters: 137)).contains("137"))
     }
 
     /// The count, not just the fact. It is what says whether the sentence under the cursor is the

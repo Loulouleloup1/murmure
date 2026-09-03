@@ -56,7 +56,7 @@ struct HistoryPaneView: View {
             .padding(.vertical, 14)
         }
         .background(Color(role: .paneBackground))
-        .overlay { if model.isEmpty { emptyList } }
+        .overlay { if let message = model.emptyListMessage { emptyList(message) } }
     }
 
     /// Two lines: one truncated line of transcript, then date · time with the duration at the
@@ -104,21 +104,20 @@ struct HistoryPaneView: View {
         .buttonStyle(.plain)
     }
 
-    /// The list has nothing in it, which is three different events. T9 owns the full treatment;
-    /// this is the sentence each of them needs in the meantime.
-    private var emptyList: some View {
-        Text(
-            model.problem
-                ?? (model.unsearchable
-                    ? "Nothing in that to search for."
-                    : (model.searchField.isEmpty
-                        ? "No dictations yet."
-                        : "No dictation matches that."))
-        )
-        .font(.system(size: 12, design: .rounded))
-        .foregroundStyle(Color(role: .secondaryText))
-        .multilineTextAlignment(.center)
-        .padding(24)
+    /// The list has nothing in it, which is four different events and one of them is an archive
+    /// that would not open. **Which sentence that is, is not decided here** -- it is
+    /// `HistoryEmptyState`, in `MurmureCore`, where the four can be walked by a test. This view
+    /// draws the sentence and no more.
+    ///
+    /// Kept narrow: these run to two lines, and a wrapped sentence centred across a 900 pt pane
+    /// is a sentence nobody's eye tracks back to the start of.
+    private func emptyList(_ message: String) -> some View {
+        Text(message)
+            .font(.system(size: 12, design: .rounded))
+            .foregroundStyle(Color(role: .secondaryText))
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: HistoryLayout.listWidth.ideal - 48)
+            .padding(24)
     }
 
     // MARK: - The detail

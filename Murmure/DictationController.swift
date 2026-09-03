@@ -59,6 +59,10 @@ final class DictationController {
     /// writes a row per dictation, and the History pane, which is the reason the window exists.
     /// Nil when it could not be opened -- a broken archive must not cost a dictation.
     let history: HistoryStore?
+    /// Why it could not be opened, when it could not. Kept beside the nil above rather than
+    /// logged and dropped: the log line is for whoever is reading Console, and the History pane
+    /// needs the words to say what happened (`HistoryEmptyState.archiveUnusable`).
+    let historyFailure: HistoryStoreError?
     /// Where the WAVs are. The PURE `Storage.url`, never `directory`: this is the path History
     /// resolves a row's `audioFilename` against, and nothing about opening a window should create
     /// a folder. `AudioRecorder` is what creates it, because it is what writes into it.
@@ -77,8 +81,19 @@ final class DictationController {
     let transcriptionProgress = DecodeProgressBox()
     private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "dictation")
 
-    init(appState: AppState) {
+    /// The General and Advanced panes' answers, and the reason this is a parameter rather than an
+    /// `AppSettings(defaults: .standard)` built in here: the domain is chosen once, in
+    /// `MurmureApp.init`, beside `AppState` and `WindowController`. Three objects reading three
+    /// domains they each picked is how a setting written by the window ends up not being the one
+    /// a dictation reads.
+    ///
+    /// Held as well as used below because the two panes are built from it (`MurmureApp`), so the
+    /// window and the dictation pipeline are looking at one store.
+    let settings: AppSettings
+
+    init(appState: AppState, settings: AppSettings) {
         self.appState = appState
+        self.settings = settings
 
         // The waveform's one box: the recorder writes into it from the audio thread, the notch's
         // wings read it while a dictation records. Built here because it is the only place that
@@ -105,7 +120,12 @@ final class DictationController {
 
         // Task 6 made `onClipboardOutcome` a REQUIRED init parameter with no default, precisely so
         // this line cannot forget to decide. `PasteInserter()` no longer compiles.
-        let inserter = PasteInserter { outcome in
+        //
+        // `settings:` is required with no default, like `onClipboardOutcome` above it and for the
+        // same ruling: the Advanced pane's paste behaviour and clipboard restore are read here or
+        // they are read nowhere, and an inserter that could be built without them would be two
+        // switches quietly doing nothing.
+        let inserter = PasteInserter(settings: settings) { outcome in
             Task { @MainActor in appState.noteClipboard(outcome) }
         }
         self.inserter = inserter
@@ -138,9 +158,23 @@ final class DictationController {
         // already say everything it says, so a missing file must not cost Louis a dictation. It
         // still has to be SAID, or a bundle that shipped without its sounds would go mute with
         // nothing anywhere admitting why.
-        let feedback = CueFeedback(player: CuePlayer { [log] problem in
-            log.error("cue unavailable: \(problem, privacy: .public)")
-        })
+        //
+        // **`isEnabled:` is passed, and leaving it out is the whole hazard of the General pane.**
+        // `CueFeedback.init` defaults it to `{ _ in true }` so the sixty call sites that do not
+        // care need not opt in -- which means an omission here compiles, runs, and gives Louis two
+        // sound switches that flip, persist, read back correctly and change nothing, with no error
+        // and no warning anywhere. `SoundSettingsWiringTests` is that composition under test.
+        //
+        // The METHOD and not its result: `settings.isSoundEnabled` is a closure asked at the
+        // moment a sound would play, so a switch flipped in the window an hour after launch takes
+        // effect on the next dictation without this object being rebuilt. Passing
+        // `settings.isSoundEnabled(.recordingStarted)` instead would compile and freeze the answer
+        // at launch.
+        let feedback = CueFeedback(
+            player: CuePlayer { [log] problem in
+                log.error("cue unavailable: \(problem, privacy: .public)")
+            },
+            isEnabled: settings.isSoundEnabled)
         self.feedback = feedback
 
         // `modes/`, never the `Murmure/` folder above it: `recordings/` and the Whisper models
@@ -200,15 +234,27 @@ final class DictationController {
         // Said once here rather than once per row -- a broken database would otherwise log a line
         // per dictation for ever. The window that will show it to Louis is T9's, not this task's.
         let history: HistoryStore?
+        let historyFailure: HistoryStoreError?
         do {
             let folder = try Storage.directory()
             history = try HistoryStore(
                 databaseURL: folder.appendingPathComponent("murmure.sqlite"))
+            historyFailure = nil
         } catch {
             history = nil
+            // Two things throw here and only one of them is already a `HistoryStoreError`:
+            // creating `Application Support/Murmure` can fail before the store is ever built.
+            // Both are the same news to the pane -- there is no archive -- so the second is
+            // dressed as the first, against the path the store WOULD have used
+            // (`Storage.url()` is the pure one and reaches the disk for nothing).
+            historyFailure = error as? HistoryStoreError
+                ?? .databaseUnusable(
+                    path: Storage.url().appendingPathComponent("murmure.sqlite").path,
+                    message: error.localizedDescription)
             log.error("history unavailable: \(error.localizedDescription, privacy: .public)")
         }
         self.history = history
+        self.historyFailure = historyFailure
 
         // The first dictation on a machine spends minutes inside `transcribe` fetching and loading
         // the model, and until now the session had no state for that and the surfaces no word: the
@@ -325,6 +371,10 @@ final class DictationController {
                 // two; the surface that shows a completion is the notch, which holds it on
                 // purpose. What lot 1's menu did is exactly what it keeps doing.
                 case .completed: .idle
+                // Like `.completed` above, and for its reason exactly: emitted and immediately
+                // followed by `.idle`. The surface that says where the text went is the notch,
+                // which holds this phase on screen for as long as a silence (`NotchPresenter`).
+                case .copiedToClipboard: .idle
                 // Like `.completed`, and for its reason: it is emitted and immediately followed
                 // by `.idle`, so a symbol of its own would be a flicker of a frame or two. The
                 // surface that shows a cancellation is the notch, which holds it on purpose.
@@ -609,7 +659,12 @@ final class DictationController {
         _ text: String, inserter: PasteInserter, appState: AppState, log: Logger
     ) async {
         do {
-            try await inserter.insert(text)
+            // The delivery is deliberately dropped, and only here. A re-paste under
+            // `copyToClipboardOnly` puts the transcript back on the clipboard, which is what the
+            // button is for under that setting -- there is no dictation being announced, no sound
+            // and no history row, so there is nothing for the answer to correct. `DictationSession`
+            // is where it is read, because that is where it was being guessed.
+            _ = try await inserter.insert(text)
         } catch {
             log.error("re-paste failed: \(error.localizedDescription, privacy: .public)")
             appState.lastFailureMessage = MenuText.repasteFailed(error.localizedDescription)

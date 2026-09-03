@@ -48,4 +48,25 @@ public struct ModePreference {
             defaults.set(newValue, forKey: Self.storageKey)
         }
     }
+
+    /// The selection after a mode's key was renamed: it follows the rename, and only when it named
+    /// the key that moved.
+    ///
+    /// The key is the file name, so renaming it in the editor leaves a stored selection pointing
+    /// at nothing. `ModeSelection.resolve` already survives that — it falls through to the
+    /// remaining rules and reports `unknownManualSelection`, which `ModeSelectionTests` pins — so
+    /// nothing breaks. What happens instead is worse to *watch*: Louis renames a key and the mode
+    /// he had ticked silently becomes another one, with the explanation in a log.
+    ///
+    /// Here rather than in the editor because the condition is about this value and not about the
+    /// rename: the caller would have to read the selection to decide, which is asking it to know
+    /// what this type is for. Pure and static for the same reason `ModeSelection.resolve` is —
+    /// the caller holds an in-memory copy of the selection as well as the stored one, and a
+    /// function that wrote through `defaults` would update one of the two and leave the other
+    /// saying yesterday's key.
+    public static func selection(
+        _ current: String?, following rename: (from: String, to: String)
+    ) -> String? {
+        current == rename.from ? rename.to : current
+    }
 }

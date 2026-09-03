@@ -37,4 +37,17 @@ final class WindowLayoutTests: XCTestCase {
         // a different mark: §2.3's chip tier is a *chip*.
         XCTAssertLessThan(WindowLayout.chipCornerRadius, WindowLayout.sidebarTileSize / 2)
     }
+
+    /// The whole Models table has to fit inside the smallest window the app can be resized to.
+    /// A table whose action column falls off the right edge is a table with no delete button, and
+    /// the window is resizable precisely so that this can happen.
+    func testTheModelsTableFitsInsideTheSmallestWindow() {
+        let columns = WindowLayout.modelsColumns
+        let table = WindowLayout.modelsNameMinimum + columns.type + columns.size + columns.action
+
+        XCTAssertLessThanOrEqual(
+            WindowLayout.sidebarWidth.ideal + table, WindowLayout.minimumSize.width)
+        // The name is the column being read; none of the other three may outgrow it.
+        XCTAssertGreaterThan(WindowLayout.modelsNameMinimum, columns.size)
+    }
 }

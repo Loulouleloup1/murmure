@@ -134,7 +134,10 @@ public enum NotchCard {
         // dim marks a third of the card apart with nothing between them -- the exact failure
         // `silentHalfFraction` was measured to prevent, re-introduced by a phase that merely
         // forgot to be named.
-        case .nothingHeard, .cancelled:
+        // The clipboard delivery is drawn as the quiet mark too (`NotchAppearance.mark(for:)`),
+        // so it belongs in this list for the reason the cancellation does: falling through to the
+        // `default` would draw one quiet mark at a full half.
+        case .nothingHeard, .cancelled, .copiedToClipboard:
             return content * silentHalfFraction
         case .refining:
             return content * refiningHalfFraction
@@ -187,7 +190,10 @@ public enum NotchCard {
         // about the target application: nothing got there, and an absence has to be legible AS an
         // absence. What separates them is the glyph and the sentence, never the colour -- and it
         // is deliberately not `.warning`, which would read as something having gone wrong.
-        case .nothingHeard, .cancelled: .muted
+        // The clipboard delivery makes that same statement about the target application --
+        // nothing got there -- so it takes the same colour, and takes it INSTEAD of `.success`.
+        // Green is the only green in the interface and it means the words are under the cursor.
+        case .nothingHeard, .cancelled, .copiedToClipboard: .muted
         case .failed, .alert: .warning
         }
     }
@@ -228,6 +234,12 @@ public enum NotchCard {
         // because that is the pair it is actually opposed to: a dictation that landed, and one
         // Louis stopped. A second `mic.slash` would say the microphone failed him.
         case .cancelled: "xmark.circle.fill"
+        // **The one place the clipboard delivery stops being a silence**, which is the position
+        // the cancellation argues from one line up: it shares the tint and the mark, so the glyph
+        // carries the whole difference and it is read before the sentence is. A clipboard is the
+        // literal answer to the only question Louis has here -- where did my text go -- and it is
+        // neither the checkmark (nothing landed) nor a `mic.slash` (the microphone was fine).
+        case .copiedToClipboard: "doc.on.clipboard"
         case .failed, .alert: "exclamationmark.triangle.fill"
         }
     }

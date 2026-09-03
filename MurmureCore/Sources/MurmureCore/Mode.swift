@@ -174,7 +174,11 @@ public enum ModeValidationError: Error, Equatable, CustomStringConvertible {
 extension Mode {
     /// The `key` doubles as the file name, so it is restricted to characters that cannot escape
     /// the modes folder or collide with the `.json` suffix.
-    private static let filenameSafeCharacters = CharacterSet(
+    ///
+    /// Not `private`, so `Mode.availableKey(basedOn:avoiding:)` can *build* a key out of the same
+    /// set this refuses one for. Two definitions of "safe" would let the editor generate a key its
+    /// own validator rejects.
+    static let filenameSafeCharacters = CharacterSet(
         charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
 
     /// The first field that is wrong, or nil. Separate from `validate()` because `ModeStore` needs

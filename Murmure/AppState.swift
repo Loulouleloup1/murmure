@@ -127,6 +127,22 @@ final class AppState: ObservableObject {
             set: { isOn in if isOn { self.manualModeKey = key } })
     }
 
+    /// A mode's key was renamed in the Modes pane; the selection follows it if it was the one
+    /// named.
+    ///
+    /// The key is the file name, so renaming it leaves a stored selection pointing at nothing.
+    /// `ModeSelection.resolve` already survives that -- it falls through to the remaining rules
+    /// and reports `unknownManualSelection` -- so this is not a repair. It is what stops the mode
+    /// Louis had ticked from silently becoming another one the moment he renames a file, with the
+    /// explanation only in a log.
+    ///
+    /// The rule itself is `ModePreference.selection(_:following:)`, in the package, where it is
+    /// tested; the assignment below is what persists it, through `manualModeKey`'s own `didSet`.
+    func followModeRename(from oldKey: String, to newKey: String) {
+        manualModeKey = ModePreference.selection(
+            manualModeKey, following: (from: oldKey, to: newKey))
+    }
+
     var menuBarSymbol: String {
         switch status {
         case .idle: "waveform"

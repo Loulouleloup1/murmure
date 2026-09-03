@@ -170,7 +170,8 @@ final class NotchPresenterTests: XCTestCase {
     /// phase that answered nil here would leave a black band with nothing behind it.
     func testEveryPhaseThatEndsADictationRetractsOnATimer() {
         for phase: NotchPhase in [
-            .completed(insertedCharacters: 9), .nothingHeard, .cancelled,
+            .completed(insertedCharacters: 9), .copiedToClipboard(characters: 9), .nothingHeard,
+            .cancelled,
             .failed(message: "boom", recoveredText: nil), .alert(message: "revoked"),
         ] {
             XCTAssertNotNil(NotchPresenter.dwell(for: phase), "\(phase) would never leave")
@@ -212,6 +213,23 @@ final class NotchPresenterTests: XCTestCase {
             NotchPresenter.dwell(for: .cancelled), NotchPresenter.dwell(for: .nothingHeard))
         XCTAssertGreaterThan(
             NotchPresenter.dwell(for: .cancelled) ?? 0,
+            NotchPresenter.dwell(for: .completed(insertedCharacters: 1)) ?? 0)
+    }
+
+    /// **The third sole witness.** Under `PasteBehaviour.copyToClipboardOnly` nothing appears
+    /// anywhere on screen -- no text under the cursor, no application touched -- so this sentence
+    /// is the only evidence there is that the dictation went where it went. A green flash
+    /// corroborates text Louis can already see; this corroborates nothing, so it stays as long as
+    /// a silence does.
+    ///
+    /// Pinned as an equality to the silence rather than as a digit of its own, for the reason the
+    /// cancellation's is: the argument is the same argument.
+    func testAClipboardDeliveryStaysAsLongAsASilence() {
+        XCTAssertEqual(
+            NotchPresenter.dwell(for: .copiedToClipboard(characters: 9)),
+            NotchPresenter.dwell(for: .nothingHeard))
+        XCTAssertGreaterThan(
+            NotchPresenter.dwell(for: .copiedToClipboard(characters: 9)) ?? 0,
             NotchPresenter.dwell(for: .completed(insertedCharacters: 1)) ?? 0)
     }
 

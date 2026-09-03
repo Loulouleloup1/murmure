@@ -57,7 +57,7 @@ public enum CancelHotkeyPolicy {
 
         // Nothing is running. `.cancelled` in particular is the state the cancel itself produces,
         // so answering `true` here would re-take the key on the way out of taking it.
-        case .idle, .completed, .cancelled, .failed: false
+        case .idle, .completed, .copiedToClipboard, .cancelled, .failed: false
         }
     }
 }

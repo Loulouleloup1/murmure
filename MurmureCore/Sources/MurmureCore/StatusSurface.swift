@@ -184,7 +184,11 @@ public enum StatusSurfaceChoice {
         // `.cancelled` keeps it for `.completed`'s reason, one gesture later: it and the `.idle`
         // behind it both draw the `.cancelled` phase, so a release keyed on the first would
         // re-resolve a display under a mark that is already on screen.
-        case .recording, .transcribing, .refining, .inserting, .completed, .cancelled: true
+        // `.copiedToClipboard` joins `.completed` for its reason exactly: it is emitted with an
+        // `.idle` in the same breath and both draw the same phase, so the display it resolved has
+        // to outlive it or the sentence would be re-placed under itself.
+        case .recording, .transcribing, .refining, .inserting, .completed, .copiedToClipboard,
+             .cancelled: true
         case .idle, .failed: false
         }
     }

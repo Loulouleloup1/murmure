@@ -88,7 +88,11 @@ public enum NotchAppearance {
         // It is the same statement about the drawing -- nothing is happening any more, and
         // nothing reached the target -- and what separates the two is the glyph and the sentence,
         // which is the same split `preparingModel` makes against `transcribing`.
-        case .nothingHeard, .cancelled: .quiet
+        // The clipboard delivery joins them for the same statement, exactly as written above:
+        // the dictation ran and NOTHING reached the target application. `.success` would be the
+        // green of a paste that landed, on a dictation that pasted nothing -- the one drawing
+        // Louis reads without looking, saying the opposite of what happened.
+        case .nothingHeard, .cancelled, .copiedToClipboard: .quiet
         case .failed, .alert: .warning
         }
     }

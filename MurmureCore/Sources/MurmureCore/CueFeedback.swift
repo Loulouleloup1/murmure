@@ -52,6 +52,21 @@ public enum FeedbackPolicy {
         // landed somewhere when they had not, which is worse than saying nothing.
         case .completed(let insertedCharacters): insertedCharacters > 0 ? .textInserted : nil
 
+        // **Silent, and it is the same decision `.completed(0)` gets one line up.** The one cue
+        // there is means "text reached the application under the cursor" -- that is what its own
+        // documentation says it is for, and it is what Louis has learnt it means after hearing it
+        // dozens of times a day. Under `copyToClipboardOnly` nothing reached any application: the
+        // sentence is on the clipboard waiting for a ⌘V he has to press. Playing the confirmation
+        // would tell him the dictation had landed, which is the exact belief that makes him carry
+        // on typing over a paste that never happened.
+        //
+        // A cue of its own would be the honest alternative and is deliberately not added here: the
+        // list is short on purpose (see `FeedbackCue`), a new sound fires on every dictation of a
+        // day's work for anyone using this behaviour, and it has not been asked for. The notch and
+        // the panel say it out loud in words, which is what `nothingHeard` and `failed` already
+        // rely on.
+        case .copiedToClipboard: nil
+
         // `.idle` is silent even though it arrives immediately after every `.completed`
         // (`DictationSession.complete(insertedCharacters:)` emits both in the same breath). The
         // notch deliberately does the opposite -- `NotchPresenter.phase` KEEPS a completion on
@@ -71,15 +86,28 @@ public enum FeedbackPolicy {
 /// makes no start sound -- and, just as importantly, that a successful one makes exactly one.
 public final class CueFeedback {
     private let player: any CuePlaying
+    private let isEnabled: (FeedbackCue) -> Bool
 
-    public init(player: any CuePlaying) {
+    /// `isEnabled` is the General pane's two switches, as a question rather than as two stored
+    /// booleans: the app passes `settings.isSoundEnabled` and the answer is read at the moment
+    /// the sound would play, so a toggle flipped between two dictations takes effect on the next
+    /// one without anything having to be rebuilt. It defaults to "yes" so that the sixty call
+    /// sites a test writes do not each have to opt in, and because that is what T11 shipped.
+    ///
+    /// It is a filter on top of `FeedbackPolicy` and never a second policy: the decision of WHICH
+    /// cue a state earns stays in one place, and this only says whether that cue is audible.
+    public init(
+        player: any CuePlaying,
+        isEnabled: @escaping (FeedbackCue) -> Bool = { _ in true }
+    ) {
         self.player = player
+        self.isEnabled = isEnabled
     }
 
     /// The session changed state. The only entry point, and the same shape as the notch's and the
     /// panel's, so the three surfaces are driven from one place by three identical lines.
     public func apply(_ state: DictationSession.State) {
-        guard let cue = FeedbackPolicy.cue(for: state) else { return }
+        guard let cue = FeedbackPolicy.cue(for: state), isEnabled(cue) else { return }
         player.play(cue)
     }
 }
