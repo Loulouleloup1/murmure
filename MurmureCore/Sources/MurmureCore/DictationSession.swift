@@ -11,7 +11,11 @@ public protocol Recorder {
 }
 
 public protocol Transcriber {
-    func transcribe(wav: URL) async throws -> String
+    /// `language` and `initialPrompt` both come from the mode active when the recording started
+    /// (`activeMode.stt.language`, `VocabularyPrompt.build(from:)`) -- the engine has no notion of
+    /// a mode or a vocabulary of its own, it only ever does what it is told
+    /// (`Murmure/WhisperKitEngine.swift`: it translates, it does not decide).
+    func transcribe(wav: URL, language: String, initialPrompt: String?) async throws -> String
 }
 
 public protocol TextInserter {
@@ -95,6 +99,21 @@ public protocol DictationRecording: Sendable {
     func record(_ dictation: HistoryRecord) async
 }
 
+/// Louis's hand-edited vocabulary (spec §5), read fresh for every dictation.
+///
+/// No default, for the same reason `DictationRefining` and `DictationRecording` have none: a
+/// "no vocabulary" default would compile at every call site and quietly turn the feature off --
+/// ruling L7's failure mode again. `Murmure` builds the real one from `VocabularyStore`; the
+/// tests use a fake that hands back a fixed list.
+public protocol VocabularyProviding: Sendable {
+    /// Called once per dictation, from the transcription step -- **never twice for the same
+    /// dictation**, because the same list has to feed both `VocabularyPrompt.build(from:)` and
+    /// `VocabularyReplacement.apply(to:using:)`. Reading it once and sharing the snapshot is what
+    /// keeps the prompt and the replacement from ever disagreeing about which entries were active,
+    /// even if `vocabulary.json` changes while the pipeline is running.
+    func vocabulary() async -> [VocabularyEntry]
+}
+
 /// One dictation end-to-end: idle → recording → transcribing → [refining] → inserting →
 /// completed → idle, or failed. `refining` only when the resolved mode has an LLM; `Voice` runs
 /// lot 1's sequence unchanged.
@@ -141,6 +160,7 @@ public actor DictationSession {
     private let inserter: TextInserter
     private let refiner: any DictationRefining
     private let recording: any DictationRecording
+    private let vocabulary: any VocabularyProviding
     private let now: @Sendable () -> Date
     private let onStateChange: @Sendable (State) -> Void
 
@@ -169,13 +189,15 @@ public actor DictationSession {
     /// fact: a refinement ran and changed nothing (D6).
     private var refinementSeconds: Double?
 
-    /// `now` has a default where `refiner` and `recording` deliberately do not, and the difference
-    /// is ruling L7's own test: a seam left out here cannot fail silently, because there is only
-    /// one right answer in production and it is the default. It exists so that the three durations
-    /// above are assertable to the millisecond in a test rather than to "greater than zero".
+    /// `now` has a default where `refiner`, `recording` and `vocabulary` deliberately do not, and
+    /// the difference is ruling L7's own test: a seam left out here cannot fail silently, because
+    /// there is only one right answer in production and it is the default. It exists so that the
+    /// three durations above are assertable to the millisecond in a test rather than to
+    /// "greater than zero".
     public init(
         recorder: Recorder, transcriber: Transcriber, inserter: TextInserter,
         refiner: any DictationRefining, recording: any DictationRecording,
+        vocabulary: any VocabularyProviding,
         // A closure literal rather than `Date.init`, which is not `@Sendable` and warns here.
         now: @escaping @Sendable () -> Date = { Date() },
         onStateChange: @escaping @Sendable (State) -> Void
@@ -185,6 +207,7 @@ public actor DictationSession {
         self.inserter = inserter
         self.refiner = refiner
         self.recording = recording
+        self.vocabulary = vocabulary
         self.now = now
         self.onStateChange = onStateChange
     }
@@ -330,10 +353,19 @@ public actor DictationSession {
         }
 
         transition(to: .transcribing)
+        // Read once, ahead of the timer below and of the transcriber call: this is the single
+        // snapshot both halves of the vocabulary step share, so the prompt Whisper hears and the
+        // replacement applied to what it returns can never disagree about which entries were
+        // active for this dictation -- even if `vocabulary.json` changes mid-recording. Excluded
+        // from `transcriptionSeconds` for the same reason mode resolution is excluded from
+        // `recordedSeconds`: it is Murmure's own overhead, not time spent inside the transcriber.
+        let entries = await vocabulary.vocabulary()
+        let prompt = VocabularyPrompt.build(from: entries)
         let transcriptionStarted = now()
         let transcript: String
         do {
-            transcript = try await transcriber.transcribe(wav: wav)
+            transcript = try await transcriber.transcribe(
+                wav: wav, language: activeMode.stt.language, initialPrompt: prompt)
         } catch {
             transcriptionSeconds = now().timeIntervalSince(transcriptionStarted)
             let message = "transcription failed: \(error.localizedDescription)"
@@ -343,11 +375,15 @@ public actor DictationSession {
         }
         transcriptionSeconds = now().timeIntervalSince(transcriptionStarted)
 
+        // The vocabulary's find→replace pass runs on the model's raw output, before the refiner
+        // (spec §4.5): `corrected`, not `transcript`, is what `refined()` below is handed.
+        let corrected = VocabularyReplacement.apply(to: transcript, using: entries)
+
         // The refined text, not the raw one, is what gets inserted -- so it is also what a
         // "paste the last transcript again" has to offer. Both are kept from here on: the archive
         // stores them side by side (D6), so the raw transcript survives a refinement rather than
         // being replaced by it.
-        let text = await refined(transcript)
+        let text = await refined(corrected)
         lastTranscript = text
 
         transition(to: .inserting)
@@ -365,7 +401,8 @@ public actor DictationSession {
                 text.isEmpty ? .nothingHeard : .inserted,
                 audio: wav,
                 rawTranscript: storedTranscript(transcript),
-                refinedText: storedRefinement(text, of: transcript),
+                correctedText: storedCorrection(corrected, of: transcript),
+                refinedText: storedRefinement(text, of: corrected),
                 insertedCharacters: text.count
             )
         } catch {
@@ -380,7 +417,8 @@ public actor DictationSession {
                 .failed,
                 audio: wav,
                 rawTranscript: storedTranscript(transcript),
-                refinedText: storedRefinement(text, of: transcript),
+                correctedText: storedCorrection(corrected, of: transcript),
+                refinedText: storedRefinement(text, of: corrected),
                 failureMessage: message
             )
         }
@@ -395,7 +433,22 @@ public actor DictationSession {
         transcript.isEmpty ? nil : transcript
     }
 
-    /// What goes in `refinedText` (D6): what the refinement CHANGED, or nothing at all.
+    /// What goes in `correctedText`: what the vocabulary's find→replace pass CHANGED, or nothing
+    /// at all -- the same NULL-means-no-second-version shape `storedRefinement` uses one column
+    /// over, and for the identical reason: no vocabulary, or none of it matched, must not read
+    /// back any differently from a row written before this column existed.
+    private func storedCorrection(_ corrected: String, of transcript: String) -> String? {
+        corrected == transcript ? nil : corrected
+    }
+
+    /// What goes in `refinedText` (D6): what the refiner itself CHANGED, or nothing at all.
+    ///
+    /// Compared against `corrected` -- what the refiner was actually handed -- never against
+    /// `rawTranscript`. Comparing against the raw transcript used to call a dictation "refined"
+    /// the moment the VOCABULARY changed a word, even in a mode where the refiner echoed its
+    /// input untouched: `HistoryDetail`'s Raw/Refined switch would then show two different panes
+    /// for a difference the LLM never made -- in `Prompt` as much as in any other refining mode,
+    /// not only in `Voice`, which has no refiner to blame it on at all.
     ///
     /// Two cases collapse into NULL here, and both are the same statement -- *there is no second
     /// version of this text to show*. No refiner ran, or one ran and gave back what it was given:
@@ -411,8 +464,8 @@ public actor DictationSession {
     /// The two answer different questions: that one asks whether the model did its job, this one
     /// asks whether the archive holds two different texts. A trailing newline the model added is
     /// genuinely what was pasted, and this is the record of what was pasted.
-    private func storedRefinement(_ text: String, of transcript: String) -> String? {
-        guard refinementSeconds != nil, text != transcript else { return nil }
+    private func storedRefinement(_ text: String, of corrected: String) -> String? {
+        guard refinementSeconds != nil, text != corrected else { return nil }
         return text
     }
 
@@ -422,6 +475,7 @@ public actor DictationSession {
         _ outcome: DictationOutcome,
         audio: URL? = nil,
         rawTranscript: String? = nil,
+        correctedText: String? = nil,
         refinedText: String? = nil,
         insertedCharacters: Int = 0,
         failureMessage: String? = nil
@@ -437,6 +491,7 @@ public actor DictationSession {
             // refiner did not run this time", and the reason both columns exist.
             llmModel: activeMode.llm.enabled ? activeMode.llm.model : nil,
             rawTranscript: rawTranscript,
+            correctedText: correctedText,
             refinedText: refinedText,
             insertedCharacters: insertedCharacters,
             targetBundleID: target.bundleID,

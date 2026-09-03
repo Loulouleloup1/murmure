@@ -51,6 +51,7 @@ final class HistoryStoreTests: XCTestCase {
     private func voiceRecord(
         startedAt: String = "2026-09-01T14:42:03.123Z",
         raw: String? = "il faut brancher le connecteur sur le endpoint de staging",
+        corrected: String? = nil,
         refined: String? = nil,
         audioFilename: String? = nil,
         outcome: DictationOutcome = .inserted
@@ -63,6 +64,7 @@ final class HistoryStoreTests: XCTestCase {
             modeName: "Voice",
             sttModel: "large-v3-turbo",
             rawTranscript: raw,
+            correctedText: corrected,
             refinedText: refined,
             insertedCharacters: raw?.count ?? 0,
             audioFilename: audioFilename
@@ -82,6 +84,7 @@ final class HistoryStoreTests: XCTestCase {
             sttModel: "large-v3-turbo",
             llmModel: "gemma3:12b",
             rawTranscript: "réponds au client que le connecteur est déployé sur la prod",
+            correctedText: "réponds au client que le Connecteur est déployé sur la prod",
             refinedText: "Bonjour, le connecteur est déployé en production.",
             insertedCharacters: 48,
             targetBundleID: "com.apple.mail",
@@ -105,6 +108,8 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(read.llmModel, "gemma3:12b")
         XCTAssertEqual(read.rawTranscript,
                        "réponds au client que le connecteur est déployé sur la prod")
+        XCTAssertEqual(read.correctedText,
+                       "réponds au client que le Connecteur est déployé sur la prod")
         XCTAssertEqual(read.refinedText, "Bonjour, le connecteur est déployé en production.")
         XCTAssertEqual(read.insertedCharacters, 48)
         XCTAssertEqual(read.targetBundleID, "com.apple.mail")
@@ -134,6 +139,7 @@ final class HistoryStoreTests: XCTestCase {
 
         XCTAssertNil(read.llmModel)
         XCTAssertNil(read.rawTranscript)
+        XCTAssertNil(read.correctedText)
         XCTAssertNil(read.refinedText)
         XCTAssertNil(read.targetBundleID)
         XCTAssertNil(read.targetAppName)
@@ -400,6 +406,22 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(hits.first?.refinedText?.contains("rapprochement"), false)
     }
 
+    /// `correctedText` is indexed exactly like the other two -- Louis searching his history is
+    /// looking for what he actually wrote, which in a no-refiner mode is the vocabulary-corrected
+    /// text, not the model's mis-hearing.
+    func testSearchFindsATermThatAppearsOnlyInTheCorrectedText() throws {
+        let store = try makeStore()
+        _ = try store.insert(voiceRecord(
+            raw: "open cloud code now",
+            corrected: "open Claude Code now"
+        ))
+
+        let hits = try store.search("Claude", limit: 10)
+
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertEqual(hits.first?.rawTranscript?.contains("Claude"), false)
+    }
+
     func testSearchFindsAnEnglishTechnicalTermInAFrenchSentence() throws {
         let store = try makeStore()
         try seedSearchCorpus(store)
@@ -630,6 +652,104 @@ final class HistoryStoreTests: XCTestCase {
         }
 
         XCTAssertEqual(triggers.count, 3, triggers.description)
+    }
+
+    /// `v2-correctedText` is additive on top of `v1-dictation`, never a rewrite of it -- a
+    /// registered migration is immutable the moment it has shipped. This is the same schema
+    /// assertion the empty-file test above makes, extended to the column that migration adds.
+    func testTheMigrationAddsTheCorrectedTextColumn() throws {
+        _ = try makeStore()
+
+        let columns = try inspect { db in try db.columns(in: "dictation").map(\.name) }
+
+        XCTAssertTrue(columns.contains("correctedText"), columns.description)
+    }
+
+    /// FTS5 gives an external-content table no `ALTER TABLE ... ADD COLUMN`, so `v2-correctedText`
+    /// drops and recreates `dictation_fts` rather than altering it -- this is the assertion that
+    /// the recreation actually declared the new column, not merely that the table still exists.
+    func testTheFullTextTableIncludesCorrectedText() throws {
+        _ = try makeStore()
+
+        let sql = try XCTUnwrap(try inspect { db in
+            try String.fetchOne(db, sql: "SELECT sql FROM sqlite_master WHERE name = 'dictation_fts'")
+        })
+
+        XCTAssertTrue(sql.contains("correctedText"), sql)
+    }
+
+    /// **The migration Louis's real archive will run.** `v1-dictation` is applied by hand here,
+    /// exactly as it shipped, with no `correctedText` column and no knowledge that it will ever
+    /// exist -- imitating the file already on his disk rather than the `HistoryRecord` type as it
+    /// reads today. Opening it through `HistoryStore` must then apply `v2-correctedText` on top,
+    /// keep the row already there, drop `correctedText` in as NULL rather than lose the row, and
+    /// leave the pre-existing text findable through the rebuilt index -- not only text written
+    /// after the migration.
+    func testAnExistingV1OnlyDatabaseMigratesToV2AndKeepsReadingAndSearching() throws {
+        var v1Only = DatabaseMigrator()
+        v1Only.registerMigration("v1-dictation") { db in
+            try db.create(table: "dictation") { t in
+                t.primaryKey("id", .integer)
+                t.column("startedAt", .text).notNull()
+                t.column("durationSeconds", .double).notNull()
+                t.column("outcome", .text).notNull()
+                t.column("modeKey", .text).notNull()
+                t.column("modeName", .text).notNull()
+                t.column("sttModel", .text).notNull()
+                t.column("llmModel", .text)
+                t.column("rawTranscript", .text)
+                t.column("refinedText", .text)
+                t.column("insertedCharacters", .integer).notNull()
+                t.column("targetBundleID", .text)
+                t.column("targetAppName", .text)
+                t.column("audioFilename", .text)
+                t.column("transcriptionSeconds", .double)
+                t.column("refinementSeconds", .double)
+                t.column("failureMessage", .text)
+            }
+            try db.execute(sql: "CREATE INDEX dictation_startedAt ON dictation(startedAt DESC)")
+            try db.create(virtualTable: "dictation_fts", using: FTS5()) { t in
+                t.tokenizer = .unicode61(diacritics: .remove)
+                t.synchronize(withTable: "dictation")
+                t.column("rawTranscript")
+                t.column("refinedText")
+            }
+        }
+        let seedQueue = try DatabaseQueue(path: databaseURL.path)
+        try v1Only.migrate(seedQueue)
+        // Raw SQL, deliberately, rather than `HistoryRecord(...).insert(db)`: that type already
+        // carries `correctedText`, and inserting through it would write a column this v1-only
+        // table does not have -- which is precisely the bug this test exists to rule out for the
+        // other direction (a real v1 file, opened by today's code).
+        try seedQueue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO dictation
+                        (startedAt, durationSeconds, outcome, modeKey, modeName, sttModel,
+                         rawTranscript, insertedCharacters)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                arguments: ["2026-08-01T10:00:00.000Z", 12.0, "inserted", "voice", "Voice",
+                            "large-v3-turbo", "le xylophone du connecteur", 27]
+            )
+        }
+        let oldID = try XCTUnwrap(
+            try seedQueue.read { db in try Int64.fetchOne(db, sql: "SELECT id FROM dictation") })
+
+        let store = try makeStore()
+
+        let read = try XCTUnwrap(try store.record(id: oldID))
+        XCTAssertEqual(read.rawTranscript, "le xylophone du connecteur")
+        XCTAssertNil(read.correctedText, "a row written before this column existed has nothing")
+        XCTAssertEqual(try store.search("xylophone", limit: 10).map(\.id), [oldID],
+                       "the rebuilt index must still find text written before the migration")
+
+        // And the column is genuinely usable afterwards, not merely present.
+        var withCorrection = read
+        withCorrection.correctedText = "le Claude Code du connecteur"
+        XCTAssertTrue(try store.update(withCorrection))
+        XCTAssertEqual(try store.record(id: oldID)?.correctedText, "le Claude Code du connecteur")
+        XCTAssertEqual(try store.search("Claude", limit: 10).map(\.id), [oldID])
     }
 
     func testTheStartedAtIndexIsDescending() throws {
@@ -892,6 +1012,43 @@ final class HistoryStoreTests: XCTestCase {
 
         XCTAssertNil(try store.record(id: old)?.rawTranscript)
         XCTAssertNotNil(try store.record(id: fresh)?.rawTranscript)
+    }
+
+    /// The gap the retention purge would otherwise leave open: `correctedText` is dictated content
+    /// exactly like the other two, and a purge that cleared only `rawTranscript`/`refinedText`
+    /// would let a corrected transcript outlive the 30-day promise Louis approved.
+    func testClearTextAlsoClearsCorrectedText() throws {
+        let store = try makeStore()
+        let id = try XCTUnwrap(try store.insert(voiceRecord(
+            startedAt: "2026-08-01T10:00:00.000Z",
+            raw: "open cloud code now",
+            corrected: "open Claude Code now"
+        )).id)
+
+        XCTAssertEqual(try store.clearText(startedBefore: at("2026-09-01T00:00:00.000Z")), 1)
+
+        let read = try XCTUnwrap(try store.record(id: id))
+        XCTAssertNil(read.rawTranscript)
+        XCTAssertNil(read.correctedText)
+        XCTAssertNil(read.refinedText)
+    }
+
+    /// The index has to forget it too, by the same rule
+    /// `testTheIndexForgetsTheTextThatClearTextRemoved` pins for the other two columns -- a
+    /// missing trigger column would leave a purged correction findable by a word the row no
+    /// longer contains.
+    func testTheIndexForgetsTheCorrectedTextThatClearTextRemoved() throws {
+        let store = try makeStore()
+        let id = try XCTUnwrap(try store.insert(voiceRecord(
+            startedAt: "2026-08-01T10:00:00.000Z",
+            raw: "open cloud code now",
+            corrected: "open Claude Code now"
+        )).id)
+        XCTAssertEqual(try store.search("Claude", limit: 10).map(\.id), [id])
+
+        _ = try store.clearText(startedBefore: at("2026-09-01T00:00:00.000Z"))
+
+        XCTAssertEqual(try store.search("Claude", limit: 10), [])
     }
 
     func testClearTextRunTwiceReportsNothingLeftToClear() throws {

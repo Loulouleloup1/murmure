@@ -59,32 +59,6 @@ actor WhisperKitEngine {
     /// local path WhisperKit would have downloaded into.
     private static let modelRepo = "argmaxinc/whisperkit-coreml"
 
-    /// Whisper's language token has to be decided before the first text token. WhisperKit's
-    /// default `DecodingOptions()` leaves `language` nil AND `detectLanguage` false (it is
-    /// derived as `!usePrefillPrompt`), and the decoder then prefills `<|en|>` -- French audio
-    /// would be decoded as English and come back as plausible-looking garbage with no error
-    /// raised anywhere. So the token must be set deliberately, one way or the other.
-    ///
-    /// It is PINNED to French rather than detected. `detectLanguage: true` shipped first, to match
-    /// the spec's per-mode `"language": "auto"` default (§5) instead of hard-coding a language --
-    /// but measured across the whole real corpus (1 449 dictations, 17.1 h) that is a defect, not a
-    /// feature: WhisperKit 1.1.0 re-evaluates the language PER WINDOW and again on every
-    /// temperature fallback, so a single dictation can switch mid-way. It produced 9 non-Latin
-    /// transcripts out of 1 449 plus Spanish switches that no count catches, and those outputs are
-    /// every one of the cases where Superwhisper beat us in the head-to-head arbitration.
-    /// Pinning removed 100 % of them (11/11, over 3 runs x 100 files), improved the median WER
-    /// slightly, and halved run-to-run instability.
-    ///
-    /// The obvious objection -- that this breaks English dictation -- does not apply: Louis
-    /// dictates French with occasional English technical terms, never full English. The ~2 %
-    /// measured as "English" IS the misdetection, not a population to protect. Whisper keeps
-    /// English technical terms verbatim inside a French-decoded transcript; that is what the
-    /// corpus shows.
-    ///
-    /// Lot 2 owes this a per-mode `stt.language` seam (spec §5), so a future English mode can
-    /// override it. Until that mode exists, "auto" is a measured regression.
-    private static let decodeOptions = DecodingOptions(language: "fr")
-
     private var loading: Task<LoadedModel, Error>?
 
     /// Where "how far into the audio has the decoder got" is left for the interface to pull.
@@ -138,7 +112,34 @@ actor WhisperKitEngine {
     /// of silence followed by 3.1 s of speech passes it while making the model fabricate a
     /// `"Thank you."` for each of the 22 silent windows in between. See
     /// `SpeechGate.framesWorthDecoding`.
-    func transcribe(wav: URL) async throws -> String {
+    ///
+    /// **`language` is never left to detection.** Whisper's language token has to be decided
+    /// before the first text token: WhisperKit's default `DecodingOptions()` leaves `language` nil
+    /// AND `detectLanguage` false (it is derived as `!usePrefillPrompt`), and the decoder then
+    /// prefills `<|en|>` -- French audio would be decoded as English and come back as
+    /// plausible-looking garbage with no error raised anywhere.
+    ///
+    /// Every real mode today still resolves to `"fr"` (`Mode.defaultLanguage`), and that default
+    /// is measured, not assumed: across the whole real corpus (1 449 dictations, 17.1 h),
+    /// `detectLanguage: true` re-evaluates the language PER WINDOW and again on every temperature
+    /// fallback, so a single dictation can switch mid-way. It produced 9 non-Latin transcripts out
+    /// of 1 449 plus Spanish switches that no count catches, and those outputs are every one of
+    /// the cases where Superwhisper beat us in the head-to-head arbitration. Pinning removed
+    /// 100 % of them (11/11, over 3 runs x 100 files), improved the median WER slightly, and
+    /// halved run-to-run instability. Louis dictates French with occasional English technical
+    /// terms, never full English -- the ~2 % measured as "English" IS the misdetection, not a
+    /// population to protect, and Whisper keeps English technical terms verbatim inside a
+    /// French-decoded transcript regardless.
+    ///
+    /// So `language` arrives as a parameter rather than as `"auto"` or a compiled-in constant: it
+    /// is `activeMode.stt.language`, the per-mode seam this comment used to say lot 2 owed. A
+    /// future mode that sets `"language": "en"` gets what it asked for instead of a re-run of the
+    /// measurement above.
+    ///
+    /// `initialPrompt`, when not nil, is `VocabularyPrompt.build(from:)`'s output verbatim -- this
+    /// method does not interpret it, per this file's own rule that it translates and does not
+    /// decide.
+    func transcribe(wav: URL, language: String, initialPrompt: String?) async throws -> String {
         // Here rather than beside the WhisperKit call: everything between the two -- reading the
         // file, measuring it for silence, and on the first dictation of a session loading the
         // model, 112 s measured cold -- happens while the interface is already showing
@@ -186,7 +187,7 @@ actor WhisperKitEngine {
         let results: [TranscriptionResult]
         do {
             results = try await model.transcribe(
-                audio: audio, options: Self.decodeOptions, reporting: progress)
+                audio: audio, language: language, initialPrompt: initialPrompt, reporting: progress)
         } catch {
             logger.error("transcription failed: \(error.localizedDescription, privacy: .public)")
             throw Failure.transcriptionFailed(error)
@@ -589,13 +590,36 @@ private final class LoadedModel: @unchecked Sendable {
     ///
     /// `finish()` only on the success path. A transcription that threw has not reached the end of
     /// the audio, and saying it did would be the one thing this whole mechanism exists not to do.
+    ///
+    /// `initialPrompt` is encoded here rather than in `WhisperKitEngine`, for the same isolation
+    /// reason as `kit.progress` above: the tokenizer lives on `kit`, which does not cross the
+    /// boundary either.
     func transcribe(
-        audio: [Float], options: DecodingOptions, reporting box: DecodeProgressBox
+        audio: [Float], language: String, initialPrompt: String?, reporting box: DecodeProgressBox
     ) async throws -> [TranscriptionResult] {
         box.follow(kit.progress)
+        let options = DecodingOptions(
+            language: language, promptTokens: promptTokens(for: initialPrompt))
         let results = try await kit.transcribe(audioArray: audio, decodeOptions: options)
         box.finish()
         return results
+    }
+
+    /// `initialPrompt`, tokenized the way `benchmark/vocabprobe/Sources/vocabprobe/main.swift:152`
+    /// measured it -- `tokenizer.encode(text:)`, with the special tokens it prepends filtered back
+    /// out, fed to `DecodingOptions.promptTokens`.
+    ///
+    /// The filter is load-bearing, not defensive. `encode` always prepends its own special tokens
+    /// (`<|startoftranscript|>` and friends); feeding those back in as PROMPT tokens is a
+    /// different, unmeasured input to the decoder -- not the recipe
+    /// `docs/benchmarks/2026-09-vocabulary-prompt.md` ran. `specialTokenBegin` is the exact cutoff
+    /// `vocabprobe` used.
+    ///
+    /// `nil` for no prompt, or when the loaded model has no tokenizer to encode it with.
+    private func promptTokens(for initialPrompt: String?) -> [Int]? {
+        guard let initialPrompt, let tokenizer = kit.tokenizer else { return nil }
+        return tokenizer.encode(text: initialPrompt)
+            .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
     }
 }
 

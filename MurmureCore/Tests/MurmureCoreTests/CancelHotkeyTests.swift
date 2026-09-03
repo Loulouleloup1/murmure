@@ -381,7 +381,8 @@ final class CancelHotkeyTests: XCTestCase {
         let session = DictationSession(
             recorder: recorder, transcriber: CancelFakeTranscriber(result: .success("")),
             inserter: CancelSpyInserter(), refiner: CancelSpyRefiner(),
-            recording: CancelSpyRecording(), onStateChange: { hotkey.apply(hotkey.stamp($0)) })
+            recording: CancelSpyRecording(), vocabulary: CancelFakeVocabulary(),
+            onStateChange: { hotkey.apply(hotkey.stamp($0)) })
 
         // When
         await session.toggle()
@@ -463,6 +464,7 @@ private struct DictationPath {
             inserter: inserter,
             refiner: CancelSpyRefiner(),
             recording: CancelSpyRecording(),
+            vocabulary: CancelFakeVocabulary(),
             onStateChange: onStateChange)
     }
 }
@@ -512,7 +514,15 @@ private final class CancelFakeRecorder: Recorder {
 
 private struct CancelFakeTranscriber: Transcriber {
     let result: Result<String, Error>
-    func transcribe(wav: URL) async throws -> String { try result.get() }
+    func transcribe(wav: URL, language: String, initialPrompt: String?) async throws -> String {
+        try result.get()
+    }
+}
+
+/// A vocabulary that never has anything to say, which is all this file's tests need: none of
+/// them are about the vocabulary step.
+private struct CancelFakeVocabulary: VocabularyProviding {
+    func vocabulary() async -> [VocabularyEntry] { [] }
 }
 
 private final class CancelSpyInserter: TextInserter, @unchecked Sendable {

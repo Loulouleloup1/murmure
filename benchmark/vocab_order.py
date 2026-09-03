@@ -55,6 +55,24 @@ Stage 4 -- `n03rs`, `n10rs`:
   the same at a realistic list size. This is the prompt the feature would actually
   build, so it is the one that has to be measured rather than extrapolated.
 
+Stage 5 -- `n03sf`:
+  A review of the shipping code found the flaw the earlier arms hid. The ordering rule keeps the
+  worst-heard terms last and lets a bias-only entry absorb the first slot -- but a user adds a
+  word to the vocabulary BECAUSE it comes out wrong, so in the normal case EVERY entry carries a
+  correction and there is no bias-only entry to sacrifice. The alphabetically-first correction
+  lands in the slot measured at 49/60 for `Claude Code` and 1/10 for `WeeFin`.
+
+  So: can a filler word bought for the purpose absorb it? `n03sf` is `n03s` with one word
+  prepended -- `Murmure`, which is in the vocabulary, has zero repairable occurrences in this
+  corpus, and therefore cannot repair anything itself. It costs ~2 tokens.
+
+  Prediction, written before the run: `Claude Code` rises from 49 toward the 55-58 it reaches when
+  something else is in front of it. If it does, the prompt builder always prepends a sacrificial
+  word and the ordering rule stops depending on the user happening to own a bias-only entry. If it
+  does not, the filler is 2 tokens for nothing and the honest answer is to document the weakness
+  rather than paper over it. The echo count for this arm decides a second question: whether a word
+  injected for structural reasons starts appearing in transcripts that never contained it.
+
 Usage:  vocab_order.py <out.json> <meta.json> [arm ...]
 """
 
@@ -81,6 +99,8 @@ ARMS = {
     # Stage 4. Both effects at once: the leading space AND the mangled terms last.
     "n03rs": " " + prompt_string(list(reversed(ORDER[:3]))),
     "n10rs": " " + prompt_string(list(reversed(ORDER[:10]))),
+    # Stage 5. A filler word bought purely to absorb the first-position penalty.
+    "n03sf": " " + prompt_string(["Murmure"] + ORDER[:3]),
 }
 
 

@@ -294,9 +294,21 @@ Four points that are decisions and not defaults:
 - **`remove_diacritics 2`.** Louis dictates French. Searching for `cle` must find `clé`, and
   searching `réglé` must find `regle`. This is one tokenizer option and it is the difference between
   a search that works and one that requires the right accent.
-- **`rawTranscript` is stored post-replacement**, because that is what the refiner was handed and
-  therefore what the mode actually saw (§4.5). If Louis ever wants the pre-replacement text, that is
-  a second column and a decision to take deliberately — not a thing to leave ambiguous.
+- **`rawTranscript` is stored PRE-replacement — this reverses the decision that stood here**, and
+  the second column it called for is the one that was taken: `correctedText`, NULL unless the
+  vocabulary changed something. The reversal, on the day T6 was built:
+  - a column named `rawTranscript` holding post-processed text is a lie in the schema, which is the
+    defect class this lot spent its review budget removing;
+  - the argument that stood here — "what the refiner was handed" — is about what the LENS shows,
+    and the lens shows it without the column lying: `text(.raw, of:)` reads
+    `correctedText ?? rawTranscript`;
+  - and the argument this section could not weigh, because Vocabulary did not exist when it was
+    written: the archive is the corpus a future mining step reads to DERIVE vocabulary entries
+    (§ retention, tier 3). Baking the fix into `rawTranscript` erases the evidence of the
+    mis-hearing that justified the entry, which is the one thing that corpus is for.
+
+  Both texts are purged on the 30-day text tier; `correctedText` is in the FTS index, because a
+  search of one's own history is a search for what one actually wrote.
 - **`failureMessage`** exists so that a failed dictation is a readable row rather than a row that
   merely says it failed. Lot 3 T6 already keeps the message and the recovered text alive in
   `AppState`; this is where they stop evaporating.

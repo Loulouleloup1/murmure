@@ -5,7 +5,9 @@ import Foundation
 /// Two, not the doc corpus's `Voice / Segments / AI`: `Segments` needs WhisperKit's per-segment
 /// timings, which nothing stores and the spec never asked for.
 public enum HistoryLens: String, Equatable, Sendable, CaseIterable {
-    /// What Whisper heard, after the vocabulary replacements (§5.2).
+    /// What Whisper heard, vocabulary-corrected when a correction changed anything
+    /// (`correctedText ?? rawTranscript`, `HistoryDetail.text(_:of:)`) -- never the model's own
+    /// pre-correction output once a correction exists to show instead.
     case raw
     /// What the mode's refiner made of it, which is what was pasted.
     case refined
@@ -67,7 +69,9 @@ public enum HistoryDetail {
     /// refiner shows **no switch at all**, and a control that cannot be operated is a control that
     /// has to be explained.
     public static func lenses(for record: HistoryRecord) -> [HistoryLens] {
-        guard let refined = record.refinedText, let raw = record.rawTranscript else { return [] }
+        guard let refined = record.refinedText,
+              let raw = record.correctedText ?? record.rawTranscript
+        else { return [] }
         let differs =
             refined.trimmingCharacters(in: .whitespacesAndNewlines)
             != raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -87,7 +91,9 @@ public enum HistoryDetail {
     /// has cleared.
     public static func text(_ lens: HistoryLens, of record: HistoryRecord) -> String? {
         switch lens {
-        case .raw: record.rawTranscript
+        // `correctedText` when the vocabulary changed anything, `rawTranscript` otherwise --
+        // never the model's pre-correction output once there is a corrected version to show.
+        case .raw: record.correctedText ?? record.rawTranscript
         case .refined: record.refinedText
         }
     }

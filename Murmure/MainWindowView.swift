@@ -147,36 +147,27 @@ struct MainWindowView: View {
     private var pane: some View {
         switch controller.section {
         case .history: HistoryPaneView(model: history)
-        case .vocabulary: pasteProbePane
+        case .vocabulary: VocabularyPaneView(model: vocabulary)
         // Empty on purpose. This task builds the frame; the contents are T5 through T9, and an
         // invented placeholder in each of five panes is five things to delete.
         default: Color.clear
         }
     }
 
-    // MARK: - The temporary field, and why it exists
+    // MARK: - Vocabulary
 
-    @State private var pasteProbe = ""
+    /// Built here rather than in `MurmureApp`: unlike History it owns no long-lived connection, so
+    /// there is nothing to lose by scoping it to the view that shows it.
+    @StateObject private var vocabulary = VocabularyPaneModel(fileURL: Self.vocabularyFileURL())
 
-    /// **TEMPORARY — delete in T6.** This is the only text field in the window, and it is here
-    /// solely so that T1's third eye-gate can be run at all: whether ⌘V works in a text field in
-    /// an accessory app on macOS 26 is a fact about our own app that cannot be settled without
-    /// launching it (plan §8), and it is what Q-B1 and D2 exist to answer.
-    ///
-    /// It sits in Vocabulary because that is where T6 puts the real input row, so deleting this is
-    /// a deletion and not a hole. Nothing reads `pasteProbe`; it is a place for the paste to land.
-    private var pasteProbePane: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Temporary — T1's ⌘V gate. Paste here, then delete this pane in T6.")
-                .font(.system(size: 12, design: .rounded))
-                .foregroundStyle(Color(role: .secondaryText))
-            TextField("⌘V", text: $pasteProbe)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 13, design: .rounded))
-                .frame(maxWidth: 420)
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    /// `Storage.directory()` creates `Application Support/Murmure` before the store's first save
+    /// needs it there (§5.4) -- the same reason `HistoryStore`'s path is resolved through it rather
+    /// than the pure, non-creating `Storage.url()`. A creation failure falls back to the uncreated
+    /// path rather than losing the location entirely: the model's own `problem` still catches the
+    /// write failing against it, which is where a failure this unlikely belongs.
+    private static func vocabularyFileURL() -> URL {
+        (try? Storage.directory()).map { $0.appendingPathComponent("vocabulary.json") }
+            ?? Storage.url().appendingPathComponent("vocabulary.json")
     }
 }
 

@@ -107,6 +107,43 @@ public struct HistoryStore: Sendable {
             }
         }
 
+        // Additive, on a database that may already hold Louis's real rows: never edit
+        // `v1-dictation`, a registered migration is immutable the moment it has shipped.
+        migrator.registerMigration("v2-correctedText") { db in
+            try db.alter(table: "dictation") { t in
+                t.add(column: "correctedText", .text)
+            }
+
+            // FTS5 has no `ALTER TABLE ... ADD COLUMN` for an external-content table, so the
+            // index is dropped and rebuilt rather than altered. `correctedText` is made
+            // searchable here for the same reason `rawTranscript`/`refinedText` already are:
+            // Louis searching his history is looking for what he actually wrote, which in a
+            // no-refiner mode is the corrected text, not the model's pre-correction output.
+            // The three `synchronize` triggers are found by name rather than hard-coded: GRDB
+            // does not document what it calls them, and a wrong guess would leave a stale
+            // trigger pointing at a table that no longer exists.
+            let triggerNames = try String.fetchAll(
+                db,
+                sql: "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'dictation'"
+            )
+            for name in triggerNames {
+                try db.execute(sql: "DROP TRIGGER \"\(name)\"")
+            }
+            try db.execute(sql: "DROP TABLE dictation_fts")
+
+            try db.create(virtualTable: "dictation_fts", using: FTS5()) { t in
+                t.tokenizer = .unicode61(diacritics: .remove)
+                t.synchronize(withTable: "dictation")
+                t.column("rawTranscript")
+                t.column("refinedText")
+                t.column("correctedText")
+            }
+            // Repopulates the new index from `dictation` -- FTS5's own command for exactly this
+            // -- so rows written before this migration are searchable again rather than only
+            // rows inserted after it.
+            try db.execute(sql: "INSERT INTO dictation_fts(dictation_fts) VALUES('rebuild')")
+        }
+
         return migrator
     }
 
@@ -169,15 +206,21 @@ public struct HistoryStore: Sendable {
     /// Leaves `audioFilename` alone -- audio expires on its own, shorter clock -- and leaves
     /// `failureMessage` alone, which is Murmure's own words about a failure, not dictated content.
     ///
+    /// `correctedText` is dictated content exactly like the other two -- it is Louis's own words,
+    /// vocabulary-corrected -- and clearing only `rawTranscript`/`refinedText` would leave it
+    /// outliving the 30-day promise this method exists to keep.
+    ///
     /// Returns the number of rows whose text was cleared.
     @discardableResult
     public func clearText(startedBefore cutoff: Date) throws -> Int {
         try dbQueue.write { db in
             try db.execute(
                 sql: """
-                    UPDATE dictation SET rawTranscript = NULL, refinedText = NULL
+                    UPDATE dictation
+                    SET rawTranscript = NULL, correctedText = NULL, refinedText = NULL
                     WHERE startedAt < ?
-                      AND (rawTranscript IS NOT NULL OR refinedText IS NOT NULL)
+                      AND (rawTranscript IS NOT NULL OR correctedText IS NOT NULL
+                           OR refinedText IS NOT NULL)
                     """,
                 arguments: [HistoryTimestamp.string(from: cutoff)]
             )

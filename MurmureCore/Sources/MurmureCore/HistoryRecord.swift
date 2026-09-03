@@ -76,10 +76,29 @@ public struct HistoryRecord: Codable, Equatable, Sendable {
     public var sttModel: String
     /// `nil` when the mode had no refiner.
     public var llmModel: String?
-    /// The transcript **after** the vocabulary replacements, because that is what the refiner was
-    /// handed and therefore what the mode actually saw (§5.2). `nil` when nothing was transcribed.
+    /// What the model produced, exactly -- before the vocabulary step ever touches it. `nil` when
+    /// nothing was transcribed.
+    ///
+    /// **Always the model's own output, never post-processed.** The original plan for this schema
+    /// (lot 4 §5.2) called this column post-replacement, on the reasoning that it is what the
+    /// refiner was handed; that reasoning is right about what a LENS should show
+    /// (`correctedText`, below, and `HistoryDetail.text(_:of:)`) and wrong about what this COLUMN
+    /// should hold. A column named `rawTranscript` that stores corrected text is a lie in the
+    /// schema, and this is the corpus a future vocabulary-mining step reads: baking the fix in
+    /// here would erase the evidence of the mis-hearing that justified writing the vocabulary
+    /// entry in the first place. Reversed deliberately when `Vocabulary` was built -- the plan
+    /// could not have weighed that argument before the type it depends on existed.
     public var rawTranscript: String?
-    /// `nil` when no refinement ran -- never a copy of `rawTranscript` (D6). A copy would make a
+    /// What the vocabulary's find→replace pass produced from `rawTranscript`, when it changed
+    /// anything. `nil` when nothing was corrected -- no vocabulary, none of it matched, or the row
+    /// was written before this column existed, which reads the same way: nothing to show.
+    ///
+    /// This, not `rawTranscript`, is what the refiner is handed (spec §4.5) and what a no-refiner
+    /// mode actually pastes -- `HistoryDetail.text(.raw, of:)` reads `correctedText ??
+    /// rawTranscript` for exactly that reason, and "Process again" re-refines the same fallback
+    /// rather than the model's pre-correction output.
+    public var correctedText: String?
+    /// `nil` when no refinement ran -- never a copy of `correctedText` (D6). A copy would make a
     /// mode that never refines indistinguishable, after the fact, from a refiner that returned its
     /// input unchanged, which is the documented failure mode of a too-small model.
     public var refinedText: String?
@@ -107,6 +126,7 @@ public struct HistoryRecord: Codable, Equatable, Sendable {
         sttModel: String,
         llmModel: String? = nil,
         rawTranscript: String? = nil,
+        correctedText: String? = nil,
         refinedText: String? = nil,
         insertedCharacters: Int = 0,
         targetBundleID: String? = nil,
@@ -125,6 +145,7 @@ public struct HistoryRecord: Codable, Equatable, Sendable {
         self.sttModel = sttModel
         self.llmModel = llmModel
         self.rawTranscript = rawTranscript
+        self.correctedText = correctedText
         self.refinedText = refinedText
         self.insertedCharacters = insertedCharacters
         self.targetBundleID = targetBundleID

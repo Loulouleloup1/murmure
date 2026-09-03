@@ -29,6 +29,7 @@ RESULTS = [
     "results-vocab-dose4.local.jsonl",
     "results-vocab-dose5.local.jsonl",
     "results-vocab-dose6.local.jsonl",
+    "results-vocab-dose7.local.jsonl",
 ]
 
 # Reading order, not alphabetical: forward arms, then the same reversed, then the same
@@ -37,7 +38,7 @@ ORDER = [
     "n01", "n03", "n05", "n10", "n20", "n30",
     "n03r", "n10r", "n20r", "n30r",
     "n01s", "n03s",
-    "n03rs", "n10rs",
+    "n03rs", "n10rs", "n03sf",
     "terms", "termsB", "n35f", "unrelated", "overflow",
 ]
 

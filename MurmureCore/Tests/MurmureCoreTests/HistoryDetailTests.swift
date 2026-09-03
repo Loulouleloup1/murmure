@@ -14,6 +14,7 @@ final class HistoryDetailTests: XCTestCase {
 
     private func record(
         raw: String? = "euh il faut brancher le connecteur",
+        corrected: String? = nil,
         refined: String? = nil,
         llmModel: String? = nil,
         outcome: DictationOutcome = .inserted,
@@ -30,7 +31,7 @@ final class HistoryDetailTests: XCTestCase {
             startedAt: HistoryTimestamp.date(from: "2026-09-01T12:42:03.123Z") ?? .distantPast,
             durationSeconds: 38, outcome: outcome, modeKey: modeKey, modeName: modeName,
             sttModel: "large-v3-turbo", llmModel: llmModel, rawTranscript: raw,
-            refinedText: refined, insertedCharacters: insertedCharacters,
+            correctedText: corrected, refinedText: refined, insertedCharacters: insertedCharacters,
             targetBundleID: bundleID, targetAppName: appName,
             transcriptionSeconds: transcriptionSeconds, refinementSeconds: refinementSeconds,
             failureMessage: failure)
@@ -110,6 +111,48 @@ final class HistoryDetailTests: XCTestCase {
     func testALensOverATextThatIsNotThereAnswersNothing() {
         XCTAssertNil(HistoryDetail.text(.refined, of: record()))
         XCTAssertNil(HistoryDetail.text(.raw, of: record(raw: nil)))
+    }
+
+    // MARK: - correctedText: the Raw lens shows the vocabulary correction when there is one
+
+    /// `rawTranscript` stays the model's own output forever; the Raw lens shows the corrected
+    /// version once there is one, because that is what a no-refiner mode actually pasted.
+    func testTheRawLensShowsTheCorrectedTextWhenThereIsOne() {
+        let corrected = record(raw: "open cloud code now", corrected: "open Claude Code now")
+
+        XCTAssertEqual(HistoryDetail.text(.raw, of: corrected), "open Claude Code now")
+        XCTAssertEqual(corrected.rawTranscript, "open cloud code now",
+                       "the column itself must stay untouched by what the lens shows")
+    }
+
+    /// The fallback half of the same rule: nothing was corrected (no vocabulary, or a row written
+    /// before this column existed), so the Raw lens falls back to the model's own output.
+    func testTheRawLensFallsBackToTheRawTranscriptWhenNothingWasCorrected() {
+        XCTAssertEqual(HistoryDetail.text(.raw, of: record()), "euh il faut brancher le connecteur")
+    }
+
+    /// **The bug found while wiring the vocabulary seam, not only in `Voice`.** A vocabulary
+    /// correction changes the text the refiner is handed; if the refiner then echoes that
+    /// corrected text back unchanged, comparing against the model's raw output would call this
+    /// dictation "refined" for a difference the LLM never made. Comparing against what the
+    /// vocabulary produced is what keeps the switch honest.
+    func testLensesAreNotOfferedWhenOnlyTheVocabularyChangedTheText() {
+        let vocabularyOnly = record(
+            raw: "open cloud code now", corrected: "open Claude Code now",
+            refined: "open Claude Code now", llmModel: "s1-mini", refinementSeconds: 0.38)
+
+        XCTAssertEqual(HistoryDetail.lenses(for: vocabularyOnly), [],
+                       "the refiner echoed what it was handed -- nothing of ITS doing to show")
+    }
+
+    /// The other half: the refiner DID change something beyond the vocabulary's own correction,
+    /// so there genuinely are two different texts and the switch belongs on screen.
+    func testLensesAreOfferedWhenTheRefinerChangesTheCorrectedTextFurther() {
+        let refinedFurther = record(
+            raw: "open cloud code now", corrected: "open Claude Code now",
+            refined: "Open Claude Code now.", llmModel: "s1-mini", refinementSeconds: 0.38)
+
+        XCTAssertEqual(HistoryDetail.lenses(for: refinedFurther), [.raw, .refined])
     }
 
     // MARK: - Process again (D12)

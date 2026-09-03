@@ -235,7 +235,12 @@ final class HistoryPaneModel: ObservableObject {
         modes.filter(\.llm.enabled)
     }
 
-    /// Re-refines the stored RAW transcript through the chosen mode and writes the result back.
+    /// Re-refines the CORRECTED transcript through the chosen mode and writes the result back.
+    ///
+    /// `HistoryDetail.text(.raw, of:)`, not `record.rawTranscript` directly: re-refining the
+    /// model's pre-correction output would silently undo whatever the vocabulary fixed, feeding
+    /// the mis-hearing straight back to the LLM the same way it would have reached it on the
+    /// original dictation, before the vocabulary entry that was written specifically to catch it.
     ///
     /// **Re-refine only, never re-transcribe** (D12): re-transcribing needs the WAV, which the
     /// retention policy deletes after three days, so the expensive variant is the one that stops
@@ -247,14 +252,15 @@ final class HistoryPaneModel: ObservableObject {
     /// mode the dictation originally ran under is forgotten, which is the right way round -- the
     /// text is the row, and the mode is a fact about the text.
     func processAgain(with mode: Mode) async {
-        guard let store, var record = selected, let raw = record.rawTranscript,
+        guard let store, var record = selected,
+              let text = HistoryDetail.text(.raw, of: record),
               HistoryDetail.canProcessAgain(record)
         else { return }
 
         isProcessing = true
         defer { isProcessing = false }
 
-        let outcome = await reRefine(raw, mode)
+        let outcome = await reRefine(text, mode)
         // The refinement did not happen and the raw transcript came back in its place. Rewriting
         // the row now would record a refinement by a model that never answered.
         if let notice = outcome.notice {

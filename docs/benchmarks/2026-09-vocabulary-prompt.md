@@ -5,16 +5,16 @@ Date : 2026-09-02/03 · Corpus : 109 dictées réelles sélectionnées dans
 **jamais commitées** · Résultats : `benchmark/results-vocab-*.local.jsonl`, **jamais
 commités** · Harnais : `benchmark/vocabprobe/` (SwiftPM) + `benchmark/vocab_*.py`,
 commités · Modèle : `large-v3-turbo`, `DecodingOptions(language: "fr")`, `promptTokens`
-seule variable · **2 180 décodages, 20 bras.**
+seule variable · **2 289 décodages, 21 bras.**
 
 La question : la moitié « recognizer » de la fonctionnalité Vocabulaire — donner à Whisper
 la liste des termes que Louis prononce (`Claude Code`, `Trucost`, `WeeFin`) pour qu'il les
 écrive correctement — vaut-elle d'être construite, et sous quelle forme ?
 
-**Réponse : oui, et elle tient en un caractère.** Une liste de trois termes précédée d'une
-**espace** répare 86 des 106 occurrences abîmées pour 11 tokens et 1,9 % de mots perdus.
-La même liste sans l'espace en répare 52. Une liste de trente termes n'en répare pas
-davantage — elle coûte simplement cinq fois plus cher.
+**Réponse : oui, et elle tient en deux détails d'écriture.** Une liste de trois termes précédée
+d'une **espace** et d'un **mot sacrificiel** répare 92 des 106 occurrences abîmées pour 15
+tokens et 2,2 % de mots perdus. La même liste sans ces deux détails en répare 52. Une liste de
+trente termes n'en répare pas davantage — elle coûte simplement sept fois plus cher.
 
 ---
 
@@ -75,6 +75,7 @@ connue, le bras produit l'orthographe correcte. Opportunités : `CC` 60, `TC` 35
 | `n01s` | ` Claude Code.` | **4** | 4 | 50 | 0 | 0 | 50 | −2,3 % | 0,981 | 0 |
 | **`n03s`** | **les 3 + espace initiale** | **11** | 11 | 49 | 27 | 10 | **86** | **−1,9 %** | 0,981 | 0 |
 | `n03rs` | les 3, inversés + espace | 11 | 11 | 58 | 30 | 1 | **89** | −2,2 % | 0,976 | 1 |
+| **`n03sf`** | **les 3 + espace + mot sacrificiel** | **15** | 15 | 58 | 24 | 10 | **92** | −2,2 % | 0,979 | 0 |
 | `n10rs` | les 10, inversés + espace | 35 | 35 | 57 | 22 | 10 | **89** | −3,6 % | 0,978 | 1 |
 | `terms` | 35 termes, ordre d'origine | 121 | 111 | 55 | 12 | 8 | 75 | −6,6 % | 0,919 | 0 |
 | `termsB` | réplication de `terms` | 121 | 111 | 55 | 13 | 8 | 76 | −6,8 % | 0,919 | 0 |
@@ -128,10 +129,33 @@ Donc **la position compte pour elle-même**, en plus de la tokenisation. Sur `We
 pénalité de tête est même totale et l'espace n'y change rien. Je n'ai pas de mécanisme pour
 celle-là ; elle est mesurée, pas expliquée.
 
-Conséquence de conception, elle : **la première place est une place sacrificielle.** Le bras
-`n10rs` en fait la démonstration involontaire — sa liste inversée commence par `Serena`, un
-terme qui n'a aucune réparation à offrir, et finit par `Claude Code` : 89 réparations, la
-meilleure valeur mesurée, sans rien sacrifier.
+Conséquence de conception : **la première place est une place sacrificielle**, et on peut donc
+l'acheter. Le bras `n10rs` en fait la démonstration involontaire — sa liste inversée commence par
+`Serena`, un terme sans réparation à offrir. §5 bis la fait exprès.
+
+## 5 bis. Un mot acheté pour être sacrifié — le meilleur rapport de la campagne
+
+Si la première place est perdue, il suffit de n'y rien mettre qui compte. `n03sf` est `n03s` avec
+**un seul mot ajouté devant** — `Murmure`, qui appartient au vocabulaire, n'a aucune occurrence
+abîmée dans ce corpus et ne peut donc rien réparer lui-même :
+
+| | tokens | `Claude Code` | `Trucost` | `WeeFin` | total /106 | mots |
+|---|---:|---:|---:|---:|---:|---:|
+| `n03s` | 11 | 49/60 | 27/35 | 10/10 | 86 | −1,9 % |
+| **`n03sf`** | **15** | **58/60** | 24/35 | 10/10 | **92** | −2,2 % |
+
+**Quatre tokens achètent neuf réparations sur `Claude Code`**, et le total devient le meilleur de
+toute la campagne — devant le bras à 30 termes, qui atteint 88 pour 103 tokens. Zéro régression.
+
+**Et le mot n'a pas fui** : `Murmure` apparaît dans **0 transcription sur 109**, exactement comme
+au baseline et dans `n03s`. Un mot injecté pour une raison structurelle ne se met pas à être écrit
+dans des dictées qui ne le contenaient pas.
+
+**Ce que cette mesure NE dit pas**, et qui corrige la lecture qu'on est tenté d'en faire : les bras
+de cette campagne sont des listes de mots nus — la notion de « terme corrigé » n'y existe pas. Ce
+qui est établi, c'est qu'un mot de remplissage sauve **le terme qui serait passé en tête, quel
+qu'il soit**. Rien ici ne teste l'idée de trier la liste selon qu'une entrée porte une correction
+ou non ; ce tri est une heuristique plausible, pas un résultat.
 
 ## 6. La troncature coupe par l'avant, silencieusement
 
@@ -183,6 +207,12 @@ courbe est plate. Le bon plan d'expérience est la courbe, pas la paire.
   liste d'utilisateur **par hypothèse**, pas par mesure.
 - **La pénalité de première position résiduelle (§5) n'a pas de mécanisme.** Tokens
   identiques, résultats différents. Je ne sais pas pourquoi.
+- **Le mot sacrificiel n'a été mesuré qu'une fois, à une taille, avec un mot.** `Murmure`, devant
+  trois termes. Rien ne dit qu'un autre mot vaut autant, ni que le gain tient à vingt termes, ni
+  que deux mots vaudraient mieux qu'un. Le zéro d'écho est mesuré sur ce corpus et ce mot-là.
+- **Le tri « corrigés en dernier » n'est pas mesuré du tout** (§5 bis). Les bras sont des listes
+  de mots nus. C'est une heuristique retenue parce qu'elle est gratuite et plausible, et elle doit
+  être présentée comme telle partout où elle apparaît.
 - **`Trucost` bouge sans que je sache le prédire** — 12 à 30 réparations selon les bras, sans
   loi lisible ni sur la taille ni sur la position. Seul `Claude Code` a un comportement
   propre.
@@ -199,10 +229,10 @@ courbe est plate. Le bon plan d'expérience est la courbe, pas la paire.
 
 1. **Préfixer le prompt d'une espace.** Un caractère, un token de moins, +33 réparations.
    C'est le résultat le plus rentable de toute la campagne.
-2. **Placer les termes les plus souvent corrigés en DERNIER**, au contact de l'audio — et
-   ne jamais mettre un terme de valeur en première place. La moitié « remplacement » de la
-   fonctionnalité compte déjà les corrections : cet ordre se dérive tout seul, l'utilisateur
-   n'a aucune règle à apprendre.
+2. **Puis un mot sacrificiel, toujours** (§5 bis). Quatre tokens, +6 réparations sur 106, et la
+   première place cesse de dépendre du hasard de ce que l'utilisateur a tapé. Inconditionnel : la
+   mesure ne connaît pas la notion de terme corrigé, donc rien n'autorise à ne le mettre que
+   parfois. L'utilisateur n'a aucune règle à apprendre — il ne voit pas ce mot.
 3. **Plafonner la liste bien en dessous du budget**, autour de 20 termes / 70 tokens : la
    note reste sous 3 % et la troncature silencieuse de §6 devient inatteignable. Au-delà de
    111 tokens, l'interface doit refuser ou avertir — jamais tronquer sans le dire.
@@ -224,6 +254,7 @@ benchmark/vocabprobe/.build/release/vocabprobe jobs-dose.local.json results-dose
 
 python3 benchmark/vocab_report.py floor  results-floor.local.jsonl      # le plancher d'abord
 python3 benchmark/vocab_curve.py                                        # la table de §3
+python3 benchmark/vocab_order.py jobs.local.json meta.local.json n03sf   # le mot sacrificiel, §5 bis
 benchmark/vocabprobe/.build/release/tokencount ' Claude Code, Trucost.' # les dumps de §4
 ```
 

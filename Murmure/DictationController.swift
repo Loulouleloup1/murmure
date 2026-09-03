@@ -235,12 +235,19 @@ final class DictationController {
         let cancelKey = CancelHotkey(key: escapeKey)
         self.cancelKey = cancelKey
 
+        // `vocabulary.json`, beside `modes/` (Q-NB3). The PURE `Storage.url`, not `.directory`:
+        // nothing here writes the file, and a vocabulary that was never created is simply an
+        // empty list (`VocabularyStore.loadAll()`) -- resolving the path must not create the
+        // folder before Louis's Settings window has ever asked it to.
+        let vocabularyFileURL = Storage.url().appendingPathComponent("vocabulary.json")
+
         session = DictationSession(
             recorder: AudioRecorder(levels: levels),
             transcriber: engine,
             inserter: inserter,
             refiner: ModeAwareRefinement(modesDirectory: modesDirectory, appState: appState),
-            recording: DictationArchive(store: history, appState: appState)
+            recording: DictationArchive(store: history, appState: appState),
+            vocabulary: VocabularyProvider(fileURL: vocabularyFileURL)
         ) { state in
             // **Stamped HERE, and the position of this line is the whole of the guarantee.** It
             // runs synchronously inside `DictationSession`'s actor, in the order the states are
@@ -667,6 +674,23 @@ private struct DictationArchive: DictationRecording {
         } catch {
             log.error("history row not written: \(error.localizedDescription, privacy: .public)")
         }
+    }
+}
+
+/// The app's `VocabularyProviding`: `vocabulary.json` on one side, nothing but a read on the
+/// other.
+///
+/// A fresh `VocabularyStore` per call, exactly like `ModeAwareRefinement`'s `ModeStore` and for
+/// the same reason: a hand-edit to the file is read on the very next dictation, and a store that
+/// collects its own problems per call never appends to a list that only grows.
+private struct VocabularyProvider: VocabularyProviding {
+    let fileURL: URL
+    private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "vocabulary")
+
+    func vocabulary() async -> [VocabularyEntry] {
+        VocabularyStore(fileURL: fileURL) { [log] problem in
+            log.error("vocabulary file problem: \(problem.description, privacy: .public)")
+        }.loadAll()
     }
 }
 
