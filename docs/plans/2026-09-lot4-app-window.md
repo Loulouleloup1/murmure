@@ -361,7 +361,15 @@ Three rules, and T2 exists to make them mechanical rather than remembered:
 
 ### 5.5 No backfill
 
-The 98 orphaned WAVs get no history rows. Their filenames carry a timestamp
+**Count corrected 2026-09-03: 98 was measured on 2026-09-01 and was stale by two days.** The real
+figure that day was 122 orphans (200 WAVs on disk, 78 rows in the database, 1.0 GB). The empty-state
+message therefore **counts at display time and says nothing at zero**, rather than carrying any
+number written into the source — a figure baked in here would have been wrong within 48 hours, and
+`RetentionPurge` is designed to drive it to zero anyway (Louis confirmed on 2026-09-03 that the
+purge should erase them: they carry no transcript, so nothing in the app can read, show or find
+them). The sentence is a transitional net that falls silent on its own.
+
+The orphaned WAVs get no history rows. Their filenames carry a timestamp
 (`rec-2026-08-31T18-07-26.799Z.wav`) and the files carry a duration, but **the transcript exists
 nowhere** — and design notes §1.3 is right that "the transcript is the identity of the row". A
 backfill would produce 98 rows with a date, a duration and no identity. The empty-history state says

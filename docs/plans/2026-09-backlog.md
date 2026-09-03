@@ -1,4 +1,4 @@
-# What is left, 2026-09-02
+# What is left, 2026-09-02 (updated 2026-09-03)
 
 Everything below is already argued somewhere — in a plan, a doc comment, or a spec section. This
 file exists because it was **argued in prose and never listed**, so the honest answer to "what is
@@ -42,30 +42,35 @@ Now also **measured**, which turned four of the open design questions into settl
 
 Spec §5. Highest expected gain on transcription quality of anything remaining.
 
-## 2. Four empty settings panes
+## 2. Four empty settings panes — CLOSED 2026-09-03 (`7bf06e9`)
 
-`Modes`, `Models`, `General` and `Advanced` render `Color.clear` — literally nothing
-(`MainWindowView.swift`, the `default` arm of `pane`). The frame, the sidebar, the palette and the
-window restoration are all built; only the contents are missing.
+`Modes`, `Models`, `General` and `Advanced` render. The `default:` arm of `pane` is **gone**: a
+seventh section now fails to compile until someone decides what it shows, which is the only
+mechanism that can catch an unconnected pane -- the app target has no test bundle, so no test can.
+Proven mechanically, not asserted: removing one case made the build fail with `switch must be
+exhaustive`.
 
-The consequence, and the reason this is on the list at all: **every setting is edited as JSON by
-hand today** — the hotkey, the model, a mode's instructions. `scripts/set-refiner.sh` exists
-precisely because three of those fields are correlated and editing one alone produces a mode that
-still validates and silently inserts the raw transcript.
+Settings are no longer edited as JSON by hand. `scripts/set-refiner.sh` keeps its reason to exist
+(the three correlated fields), but the Modes editor now refuses the same combinations `Mode`
+already refused, at typing time rather than at dictation time.
 
-Lot 4 T7 (Modes), T8 (Models/General/Advanced), T9 (empty and broken states). Sidebar order and the
-section-by-section content are already settled in that plan.
+**Three settings were removed rather than shipped**, because they were wired to nothing and a
+control that lies is worse than a control that is absent -- nothing signals it, not an error, not a
+warning, not a red test:
 
-## 3. `stt.language` is hardcoded
+- `simulateKeypresses`, both the per-mode switch and the global one. `PasteInserter.insert()` always
+  posts ⌘V. The field stays in `Mode` and in the modes JSON -- no file becomes invalid -- and the
+  switches come back when the typing path is actually written. It could not be written in that
+  session: it requires posting key events, which would reach whatever Louis had in front of him.
+- The microphone picker. `AudioRecorder` takes `engine.inputNode` and nothing else. Replaced by a
+  read-only line reporting the system input, which is what Murmure actually follows.
 
-`WhisperKitEngine` decodes with `DecodingOptions(language: "fr")` at a module constant, so
-**`Mode.stt.language` and `Mode.stt.model` are parsed, validated, stored and then ignored**. A mode
-saying `"language": "en"` transcribes French, silently. The code already knows: the engine carries a
-comment owing this a per-mode seam.
+Louis chose removal on both, 2026-09-03.
 
-Low priority only because Louis dictates in French. It is a defect, not a missing feature: the
-config lies about what it controls. Fixing it is also what T6 needs, since `initialPrompt` travels
-the same seam.
+## 3. `stt.language` is hardcoded — CLOSED 2026-09-03 (`80702d2`)
+
+`WhisperKitEngine.transcribe` builds `DecodingOptions` per call and honours `Mode.stt.language`.
+Blast radius when it shipped was nil: both `prompt.json` and `voice.json` declare `"fr"`.
 
 ---
 
@@ -75,9 +80,9 @@ the same seam.
   Escape shipped and supersedes its only urgent purpose.
 - **`durationSeconds` comes from `Date`.** An NTP correction mid-dictation writes a wrong duration.
   A monotonic clock fixes it; T4 declined to add an unguarded fix and said so.
-- **Two surfaces with nothing behind them**: a corrupt database is named as an error no screen
-  shows, and a row that failed to write is silent. The dictation itself still succeeds, which is the
-  right priority — but the archive is then quietly incomplete. Lot 4 T9.
+- ~~**Two surfaces with nothing behind them**~~ — done 2026-09-03. A database that will not open
+  surfaces a named error, carried out of `DictationController` rather than logged and dropped, and
+  the app still dictates: a broken archive must not cost a dictation.
 - **The default branch is `main`.** The rename happened; `origin/HEAD` points at it and no
   `master` remains on the remote. A clone made before it needs
   `git fetch --prune origin && git branch -m master main && git branch -u origin/main main`.
