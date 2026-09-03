@@ -26,6 +26,20 @@ Already decided, so this is implementation and not design:
   the only pairs available are raw transcript → the model's *own* output, which is not a human
   correction, and training on it degrades rather than improves.
 
+Now also **measured**, which turned four of the open design questions into settled ones
+(`docs/benchmarks/2026-09-vocabulary-prompt.md`, 2 180 decodes over 109 real dictations):
+
+- **The prompt must start with a space.** Without it the tokenizer cuts the first entry into
+  character fragments (`C`, `la`, `ude`) that never occur in speech. One character takes
+  `Claude Code` from 17 repairs out of 60 to 50, and costs one token LESS.
+- **Order the list with the most-corrected terms LAST**, and never put a valuable one first:
+  the first slot is sacrificial even once the space is there. The replacement half already
+  counts corrections, so the order derives itself and the user learns no rule.
+- **Cap the list around 20 terms / 70 tokens**, well under the 111-token budget. Beyond it the
+  word toll doubles, and overflow is discarded from the FRONT with no error at all -- a
+  35-term list ordered wrong repaired 0 of 106 where the same words repaired 75.
+- **A long list buys nothing**: 3 well-placed terms repair 86, 30 repair 88.
+
 Spec §5. Highest expected gain on transcription quality of anything remaining.
 
 ## 2. Four empty settings panes

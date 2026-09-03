@@ -19,6 +19,14 @@ import WhisperKit
 // nothing else.
 //
 // Usage:  tokencount '["term one","term two",...]'  [more lists...]
+//         tokencount 'raw prompt text'                [more strings...]
+//
+// An argument that does not parse as a JSON array is treated as a RAW prompt and its
+// tokens are dumped one per line. That mode exists because the decode arms turned up a
+// penalty on whatever term is placed FIRST, and the suspected cause is tokenisation:
+// BPE gives `Claude` and ` Claude` different ids, and every word in real speech arrives
+// with a leading space. Only the tokenizer can say whether the first list item is
+// spelled to the model in a form it never otherwise sees.
 
 let dictationModel = "openai_whisper-large-v3-v20240930_turbo"
 let modelRepo = "argmaxinc/whisperkit-coreml"
@@ -40,7 +48,18 @@ print("budget: \(maxPromptLen) tokens (Constants.maxTokenContext = \(Constants.m
 for arg in CommandLine.arguments.dropFirst() {
     guard let data = arg.data(using: .utf8),
           let terms = try? JSONDecoder().decode([String].self, from: data)
-    else { continue }
+    else {
+        // Raw-prompt mode. Prints id and piece so a leading-space difference is visible
+        // rather than inferred from a count.
+        let ids = tokenizer.encode(text: arg)
+            .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+        print("")
+        print("raw \(arg.debugDescription): \(ids.count) tokens")
+        for id in ids {
+            print("  \(id)\t\(tokenizer.decode(tokens: [id]).debugDescription)")
+        }
+        continue
+    }
 
     // The prompt is built exactly as `vocab_select.prompt_string` builds it, so the
     // counts below are the counts the decode arms actually paid.
