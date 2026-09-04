@@ -204,6 +204,117 @@ final class ModelInventoryTests: XCTestCase {
             removal.question.contains("openai_whisper-large-v3-v20240930_turbo"), removal.question)
     }
 
+    /// A different question, not a footnote to the same one: deleting a model a mode still names
+    /// leaves that mode falling back to Murmure's default with nothing on screen saying so, and
+    /// the confirmation is the one place that can say it before it happens.
+    func testDeletingAModelNamedByAModeWarnsAboutTheFallback() {
+        let removal = ModelInventory.removal(for: descriptor, in: store, namedByModes: ["Voice"])
+
+        XCTAssertTrue(removal.question.contains("Voice"), removal.question)
+        XCTAssertTrue(removal.question.contains("fall back"), removal.question)
+        XCTAssertTrue(removal.question.contains("names it"), removal.question)
+    }
+
+    func testDeletingAModelNamedByTwoModesUsesThePluralVerb() {
+        let removal = ModelInventory.removal(
+            for: descriptor, in: store, namedByModes: ["Voice", "Prompt"])
+
+        XCTAssertTrue(removal.question.contains("Voice, Prompt"), removal.question)
+        XCTAssertTrue(removal.question.contains("name it"), removal.question)
+    }
+
+    /// The unused-model question is unchanged when nothing names it -- the default parameter must
+    /// not silently alter the sentence every existing caller already reads.
+    func testDeletingAModelNamedByNoModeAsksTheOriginalQuestion() {
+        let removal = ModelInventory.removal(for: descriptor, in: store, namedByModes: [])
+
+        XCTAssertFalse(removal.question.contains("fall back"), removal.question)
+    }
+
+    // MARK: - Which modes name a variant
+
+    func testModesNamingReturnsOnlyTheModesThatResolveToThisVariant() {
+        let modes = [
+            mode(key: "voice", enabled: false, model: "never-run:7b", endpoint: "http://localhost:11434"),
+            mode(key: "other", enabled: true, model: "gemma4:12b", endpoint: "http://localhost:11434"),
+        ]
+        var voice = modes[0]
+        voice.stt.model = "openai_whisper-large-v3-v20240930_turbo"
+        var other = modes[1]
+        other.stt.model = "some-other-variant"
+
+        XCTAssertEqual(
+            ModelInventory.modesNaming(
+                variant: "openai_whisper-large-v3-v20240930_turbo", in: [voice, other],
+                engineDefault: "openai_whisper-large-v3-v20240930_turbo"),
+            ["voice"])
+    }
+
+    /// The common case: a mode's stored field is blank or the shipped alias, which resolves to the
+    /// engine default rather than matching literally.
+    func testModesNamingResolvesTheShippedAliasToTheEngineDefault() {
+        var mode = mode(key: "voice", enabled: false, model: "x", endpoint: "http://localhost:11434")
+        mode.stt.model = "large-v3-turbo"
+
+        XCTAssertEqual(
+            ModelInventory.modesNaming(
+                variant: "openai_whisper-large-v3-v20240930_turbo", in: [mode],
+                engineDefault: "openai_whisper-large-v3-v20240930_turbo"),
+            ["voice"])
+    }
+
+    func testModesNamingIsEmptyWhenNoModeResolvesToTheVariant() {
+        var mode = mode(key: "voice", enabled: false, model: "x", endpoint: "http://localhost:11434")
+        mode.stt.model = "a-completely-different-variant"
+
+        XCTAssertEqual(
+            ModelInventory.modesNaming(
+                variant: "openai_whisper-large-v3-v20240930_turbo", in: [mode],
+                engineDefault: "openai_whisper-large-v3-v20240930_turbo"),
+            [])
+    }
+
+    // MARK: - The first-use notice
+
+    func testAnInstalledModelThatIsNotKnownWarmCarriesTheFirstUseNotice() throws {
+        try writeCompleteModel()
+
+        let row = ModelInventory.speechRow(for: descriptor, in: store, fileManager: manager, knownWarm: false)
+
+        XCTAssertNotNil(row.firstUseNotice)
+        XCTAssertTrue(row.firstUseNotice?.contains("minutes") == true, row.firstUseNotice ?? "")
+    }
+
+    func testAnInstalledModelKnownWarmCarriesNoFirstUseNotice() throws {
+        try writeCompleteModel()
+
+        let row = ModelInventory.speechRow(for: descriptor, in: store, fileManager: manager, knownWarm: true)
+
+        XCTAssertNil(row.firstUseNotice)
+    }
+
+    /// The notice describes a wait after installing, not a wait instead of downloading -- it has
+    /// nothing to say about a model that is not there yet.
+    func testAnAbsentModelCarriesNoFirstUseNoticeEvenWhenNotKnownWarm() {
+        let row = ModelInventory.speechRow(for: descriptor, in: store, fileManager: manager, knownWarm: false)
+
+        XCTAssertNil(row.firstUseNotice)
+    }
+
+    // MARK: - The pull action
+
+    func testAnAbsentLanguageRowOffersToPull() {
+        let row = ModelRow(identifier: "gemma4:12b", kind: .language, installation: .absent)
+
+        XCTAssertEqual(row.action, .pull)
+    }
+
+    func testAnInstalledLanguageRowIsManagedElsewhereNotPull() {
+        let row = ModelRow(identifier: "gemma4:12b", kind: .language, installation: .installed(bytes: 100))
+
+        XCTAssertEqual(row.action, .managedElsewhere)
+    }
+
     // MARK: - The two halves of the table
 
     func testSpeechRowsComeFirstAndLanguageRowsAreSortedByName() {

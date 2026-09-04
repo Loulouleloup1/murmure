@@ -25,6 +25,7 @@ struct ModelsPaneView: View {
         VStack(alignment: .leading, spacing: 0) {
             columnHeaders
             table
+            addSpeechModelSection
             if model.hasLanguageRows {
                 footer
             }
@@ -107,8 +108,12 @@ struct ModelsPaneView: View {
             Text(row.name)
                 .font(.system(size: 13, design: .rounded))
                 .foregroundStyle(Color(role: .primaryText))
-            if let detail = row.detail {
-                Text(detail)
+            // A pull in progress or a pull that just failed takes over the second line -- it is
+            // the more current story about this row than the static sentence `detail` carries for
+            // the same "not installed" state. `firstUseNotice` is speech-only and `detail` is
+            // already `nil` whenever it would apply, so the three never compete for real.
+            if let secondary = model.pullStatus(for: row.identifier) ?? row.detail ?? row.firstUseNotice {
+                Text(secondary)
                     .font(.system(size: 11, design: .rounded))
                     .foregroundStyle(Color(role: .secondaryText))
                     .lineLimit(2)
@@ -137,14 +142,23 @@ struct ModelsPaneView: View {
 
     /// The single action column, doing the two jobs §1.1 describes plus Murmure's third.
     ///
-    /// **Both buttons are inert in this task, and that is deliberate rather than unfinished.**
-    /// Deleting is 1.6 GB of Louis's disk going away and downloading is 1.6 GB arriving; neither
-    /// could be exercised while this pane was written (no model may be fetched and nothing may be
-    /// removed from the real store), and an action that has never once been run is not an action
-    /// that has been verified. What the wiring needs is already decided and tested in
-    /// `MurmureCore`: `ModelInventory.removal(for:in:)` gives the two directories to remove — the
+    /// **`download` and `delete` stay inert on THIS row -- the shipped speech model's own --
+    /// deliberately rather than unfinished.** Re-downloading it from here is 1.6 GB arriving and
+    /// deleting it is 1.6 GB of Louis's disk going away; neither could be exercised while this pane
+    /// was written (no model may be fetched and nothing may be removed from the real store), and an
+    /// action that has never once been run is not an action that has been verified. What the
+    /// wiring needs is already decided and tested in `MurmureCore`:
+    /// `ModelInventory.removal(for:in:namedByModes:)` gives the two directories to remove — the
     /// variant and its `.cache` sidecars, never the repository root — and the sentence to confirm
-    /// with. Enabling this button is that call plus a confirmation, behind Louis's eye-gate.
+    /// with, including the one that warns a mode still names it. Enabling this button is that call
+    /// plus a confirmation, behind Louis's eye-gate.
+    ///
+    /// **`pull` is wired for real.** It is the one button this task could add without downloading
+    /// anything itself: asking Ollama to pull is Ollama's own multi-gigabyte transfer, on its own
+    /// disk, which this pane only ever triggers and reads progress from -- unlike the speech
+    /// download above, nothing here writes to a store this session was told not to touch.
+    /// `addSpeechModelSection` below is the other real action this task adds, on its own new
+    /// repository-picking rows rather than on this table's existing ones.
     @ViewBuilder
     private func action(_ row: ModelRow) -> some View {
         switch row.action {
@@ -156,6 +170,27 @@ struct ModelsPaneView: View {
             actionButton(
                 "trash", label: "Delete \(row.name)",
                 help: "Deleting from this pane is not wired yet.")
+        // The one language button that is real: asking Ollama to pull what it does not have.
+        // Pulling does NOT license a delete button next to it -- Ollama's store stays Ollama's,
+        // and `ollama rm` remains the only thing that removes from it (see `managedElsewhere`
+        // below, which is every OTHER language state, delete included).
+        case .pull:
+            if model.isPulling(row.identifier) {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: WindowLayout.sidebarTileSize, height: WindowLayout.sidebarTileSize)
+            } else {
+                Button {
+                    Task { await model.pull(modelIdentifier: row.identifier) }
+                } label: {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color(role: .secondaryText))
+                }
+                .buttonStyle(.plain)
+                .help("Pull \(row.name) with Ollama.")
+                .accessibilityLabel("Pull \(row.name)")
+            }
         // Ollama's store is Ollama's. `ollama pull` and `ollama rm` are the only two things that
         // move it, so this row shows the state and no button that would imply otherwise.
         case .managedElsewhere:
@@ -208,5 +243,151 @@ struct ModelsPaneView: View {
                 .fill(Color(role: .hairline))
                 .frame(height: WindowLayout.hairlineWidth)
         }
+    }
+
+    // MARK: - Adding a speech model
+
+    /// *"connecter Hugging Face ou alors mettre juste le lien de Hugging Face"* -- Louis's own two
+    /// shapes, read by `HuggingFaceRepository.parse`. Always visible, unlike `footer`: a machine
+    /// with no refining mode still has exactly one speech model, and this is the one way to add a
+    /// second without editing a mode file by hand.
+    private var addSpeechModelSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Add a speech model")
+                .font(.system(size: 11, design: .rounded))
+                .foregroundStyle(Color(role: .secondaryText))
+            HStack(spacing: 8) {
+                TextField("owner/repo or a huggingface.co link", text: $model.repositoryInput)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .rounded))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: WindowLayout.chipCornerRadius, style: .continuous)
+                            .fill(Color(role: .cardBackground))
+                    )
+                Button("List") { Task { await model.fetchSpeechModelListing() } }
+                    .buttonStyle(.plain)
+                    .disabled(model.isFetchingListing || model.repositoryInput.isEmpty)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color(role: .primaryText))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: WindowLayout.chipCornerRadius, style: .continuous)
+                            .fill(Color(role: .cardBackground))
+                    )
+                if model.isFetchingListing {
+                    Text("Asking Hugging Face...")
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(Color(role: .secondaryText))
+                }
+            }
+            if let error = model.repositoryInputError {
+                caption(error)
+            }
+            if let listing = model.listing {
+                listingRows(listing)
+            }
+            if let installError = model.installError {
+                caption(installError)
+            }
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 12)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color(role: .hairline))
+                .frame(height: WindowLayout.hairlineWidth)
+        }
+    }
+
+    /// What a repository answered, decided by `SpeechModelCatalog.fetchListing` and read here
+    /// without a second opinion on it: `.derivedVariants` gets its own explanatory caption because
+    /// it is the one case that needed research to get right (no `config.json`, listed from the
+    /// repository's own files instead -- see that type's doc comment); the other three are told as
+    /// plainly as they are named.
+    @ViewBuilder
+    private func listingRows(_ listing: SpeechModelCatalog.Listing) -> some View {
+        switch listing {
+        case .variants(let variants):
+            ForEach(variants, id: \.self) { variantRow($0) }
+        case .derivedVariants(let variants):
+            caption("This repository has no WhisperKit support file; listed from its own files instead.")
+            ForEach(variants, id: \.self) { variantRow($0) }
+        case .none:
+            caption("This repository does not look like it has a speech model Murmure could load.")
+        case .failure(let detail):
+            caption("Could not read this repository: \(detail)")
+        }
+    }
+
+    /// One offered variant: its name, what pressing Download costs, and the download itself once
+    /// it starts.
+    ///
+    /// **The size column has nothing to print, on purpose.** `WhisperKit`'s listing APIs answer
+    /// with names, never sizes, so showing one here would be a number nobody measured -- exactly
+    /// the kind of number `ModelSize.readable` exists to print honestly and never to invent. What
+    /// is shown instead is the two costs that ARE known before committing: an unmeasured but
+    /// certainly non-trivial download, and the machine-specific compile every newly installed
+    /// speech model pays once (`ModelInventory.firstUseNotice`).
+    private func variantRow(_ variant: String) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(variant)
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundStyle(Color(role: .primaryText))
+                if model.installingVariant == variant {
+                    Text(installStatus)
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(Color(role: .secondaryText))
+                } else {
+                    Text("""
+                        Size unknown before download. On a machine with limited memory, check that \
+                        it fits alongside anything else already running before installing it. \
+                        First dictation with it will also take several minutes while this Mac \
+                        compiles it.
+                        """)
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(Color(role: .secondaryText))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+            if model.installingVariant == variant {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Button("Download") { Task { await model.install(variant: variant) } }
+                    .buttonStyle(.plain)
+                    .disabled(model.installingVariant != nil)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color(role: .primaryText))
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// What `installProgress` says while a download this pane started is running -- bytes only
+    /// when a size is actually known, never a percentage computed against a number that was never
+    /// measured for this repository.
+    private var installStatus: String {
+        guard let progress = model.installProgress else { return "Starting..." }
+        switch progress {
+        case .downloading(let download):
+            return download.expectedBytes > 0
+                ? "Downloading -- \(download.percent)%" : "Downloading..."
+        case .loading:
+            return "Preparing..."
+        }
+    }
+
+    private func caption(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, design: .rounded))
+            .foregroundStyle(Color(role: .secondaryText))
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

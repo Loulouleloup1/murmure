@@ -280,6 +280,38 @@ actor WhisperKitEngine {
         _ = try await loadedKit(for: Self.dictationModel)
     }
 
+    /// Downloads a speech model the Models pane's "add a model" flow chose, into the same store
+    /// `transcribe`/`prepare` read -- reusing `downloadModel`'s stall detector and byte-progress
+    /// machinery rather than a second downloader, parameterized on an arbitrary repository so a
+    /// variant from outside ``modelRepo`` lands where ``ModelInventory`` already looks.
+    ///
+    /// A `static func`, not an instance method: nothing here touches `loaded` or this actor's own
+    /// `report` -- it only needs `Storage` and the static download machinery -- so a caller does
+    /// not need a reference to the SAME engine instance that runs dictation, and installing a model
+    /// from the Models pane cannot contend with a dictation in flight for this actor's isolation.
+    ///
+    /// Deliberately does **not** load the model afterwards: CoreML's machine-specific compile
+    /// (`prepare()`'s own doc comment, several minutes cold) must not be paid silently as a side
+    /// effect of a download the pane did not ask to also warm up. `ModelsPaneModel` is what states
+    /// that cost on screen (`ModelInventory.speechRow`'s `knownWarm` parameter); nothing here pays
+    /// it.
+    static func installSpeechModel(
+        _ descriptor: SpeechModelDescriptor,
+        reportingProgress report: @escaping @MainActor @Sendable (ModelPreparation?) -> Void
+    ) async throws -> URL {
+        let modelStore = try Storage.directory(subfolder: "models")
+        do {
+            let folder = try await downloadModel(
+                into: modelStore, variant: descriptor.variant, repo: descriptor.repository,
+                expectedBytes: descriptor.expectedBytes, report: report)
+            await report(nil)
+            return folder
+        } catch {
+            await report(nil)
+            throw error
+        }
+    }
+
     /// Which 100 ms frames of the recording carry sound, as `SpeechGate`'s thresholds were
     /// calibrated to measure it.
     ///
@@ -504,9 +536,16 @@ actor WhisperKitEngine {
     /// gap between two progress reports, which is what a dropped connection actually looks like.
     /// Without this, a flaky connection leaves the caller suspended forever and Task 7's state
     /// machine stuck in `.transcribing`, which spec §9's error table has no row for.
+    /// `repo` defaults to the dictation repository so every existing call site keeps downloading
+    /// from exactly where it always has; the "add a speech model" flow
+    /// (``installSpeechModel(_:reportingProgress:)``) is the one caller that passes another one,
+    /// reusing this same stall detector and byte-progress machinery rather than a second
+    /// downloader for a repository nobody has fetched from before.
     private static func downloadModel(
         into modelStore: URL,
         variant: String,
+        repo: String = modelRepo,
+        expectedBytes: Int64 = ModelDownload.transcriptionModelBytes,
         report: @escaping @MainActor @Sendable (ModelPreparation?) -> Void
     ) async throws -> URL {
         let lastProgress = OSAllocatedUnfairLock(initialState: Date())
@@ -516,14 +555,15 @@ actor WhisperKitEngine {
         do {
             modelFolder = try await withThrowingTaskGroup(of: URL?.self) { group in
                 group.addTask {
-                    try await announceBytesReceived(in: modelStore, report: report)
+                    try await announceBytesReceived(
+                        in: modelStore, repo: repo, expectedBytes: expectedBytes, report: report)
                 }
                 group.addTask {
                     let log = downloadProgressLogger(variant: variant)
                     return try await WhisperKit.download(
                         variant: variant,
                         downloadBase: modelStore,
-                        from: modelRepo,
+                        from: repo,
                         progressCallback: { progress in
                             lastProgress.withLock { $0 = Date() }
                             log(progress)
@@ -609,18 +649,22 @@ actor WhisperKitEngine {
     /// ones live. It holds one variant on a machine that has only ever run Murmure; a store that
     /// also held another would make this over-count, which the ceiling in `ModelDownload` bounds
     /// at 99 %.
+    /// `repo` and `expectedBytes` both default to the dictation model's own, for the same reason
+    /// `downloadModel`'s own `repo` parameter does -- see that function's doc comment.
     private static func announceBytesReceived(
         in modelStore: URL,
+        repo: String = modelRepo,
+        expectedBytes: Int64 = ModelDownload.transcriptionModelBytes,
         report: @escaping @MainActor @Sendable (ModelPreparation?) -> Void
     ) async throws -> URL? {
-        let repo = HubApiWrapper(downloadBase: modelStore)
-            .localRepoLocation(HubApiWrapper.Repo(id: modelRepo, type: .models))
-        var download = ModelDownload(expectedBytes: ModelDownload.transcriptionModelBytes)
+        let repoFolder = HubApiWrapper(downloadBase: modelStore)
+            .localRepoLocation(HubApiWrapper.Repo(id: repo, type: .models))
+        var download = ModelDownload(expectedBytes: expectedBytes)
         await report(.downloading(download))
         while true {
             try await Task.sleep(for: .seconds(byteCheckInterval))
             let shown = download
-            download.observe(receivedBytes: bytesOnDisk(in: repo))
+            download.observe(receivedBytes: bytesOnDisk(in: repoFolder))
             // Only when what Louis would READ has changed. `ModelDownload` stores the percentage it
             // shows, so this comparison is that question rather than an approximation of it -- and
             // each report it skips is a hop onto the main actor, a route through `StatusRouter` and

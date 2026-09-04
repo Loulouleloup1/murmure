@@ -152,12 +152,13 @@ final class OllamaProbeTests: XCTestCase {
     }
 
     /// Murmure never writes to Ollama's store, so no row of this family may offer a button that
-    /// implies it does -- whatever the probe answered.
+    /// implies it does -- whatever the probe answered. `.modelNotPulled` is the one exception: it
+    /// is the state a *pull* is meaningful for, and that button asks Ollama to fetch the model
+    /// rather than writing to its store directly (`testAnAbsentModelOffersToPullAndNothingElse`).
     func testNoLanguageRowEverOffersToDownloadOrDelete() {
         let outcomes: [OllamaProbe.Outcome?] = [
             nil,
             .pulled(bytes: 8_581_748_736),
-            .failed(.modelNotPulled(model: "gemma4:12b")),
             .failed(.notRunning(detail: "61 refused")),
             .failed(.timedOut(after: 4)),
         ]
@@ -167,6 +168,16 @@ final class OllamaProbeTests: XCTestCase {
             XCTAssertEqual(row.action, .managedElsewhere, "\(String(describing: outcome))")
             XCTAssertEqual(row.kind, .language)
         }
+    }
+
+    /// The one language state Murmure may act on: Ollama answered and does not have this model, so
+    /// the only thing worth pressing is a pull. Still never a delete -- there is nothing to delete.
+    func testAnAbsentModelOffersToPullAndNothingElse() {
+        let row = OllamaProbe.row(
+            for: "gemma4:12b", outcome: .failed(.modelNotPulled(model: "gemma4:12b")))
+
+        XCTAssertEqual(row.action, .pull)
+        XCTAssertEqual(row.installation, .absent)
     }
 
     /// The name column drops the registry and keeps the tag, which is `ModelDisplayName`'s rule

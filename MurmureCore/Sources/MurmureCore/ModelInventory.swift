@@ -17,13 +17,20 @@ public enum ModelKind: Equatable, Sendable {
 /// What the single action column offers on a row.
 ///
 /// Design notes §1.1: one column doing several jobs is the compression trick worth stealing —
-/// a download button when the model is missing, a delete button when it is there. The third case
-/// is Murmure's own: an Ollama model is not in Murmure's store and `ollama pull` / `ollama rm`
-/// are the only two things that move it, so a delete button on that row would be a button that
-/// lies. The remedy travels as a sentence instead (``ModelRow/detail``).
+/// a download button when the model is missing, a delete button when it is there. `pull` and
+/// `managedElsewhere` are Murmure's own: an Ollama model is not in Murmure's store, and
+/// `ollama pull` / `ollama rm` are the only two things that move it. `pull` is Murmure ASKING
+/// Ollama to run the first of those two; `managedElsewhere` is every state where even that is not
+/// offered -- neither ever offers a `delete`, which would be a button that lies about who owns the
+/// file. The remedy travels as a sentence instead (``ModelRow/detail``).
 public enum ModelAction: Equatable, Sendable {
     case download
     case delete
+    /// Ollama does not have this model yet, and the one thing Murmure may do about it is ask
+    /// Ollama to fetch it -- never write to Ollama's store directly, which is what every other
+    /// language state still offers no button for. See ``ModelRow/action`` for the one state this
+    /// applies to.
+    case pull
     /// Nothing to press: another program owns this file.
     case managedElsewhere
 }
@@ -66,16 +73,23 @@ public struct ModelRow: Equatable, Sendable, Identifiable {
     /// nothing tells us what an unpulled Ollama model would weigh without asking a registry.
     public let expectedBytes: Int64?
 
+    /// A second sentence, independent of ``detail``, for an installed speech model that has not
+    /// been proven fast on THIS Mac -- see ``ModelInventory/speechRow(for:in:fileManager:knownWarm:)``
+    /// for who sets it and why it cannot be computed from ``installation`` alone. `nil` covers both
+    /// "nothing to say" and "not applicable", the same way ``detail`` does for every other row.
+    public let firstUseNotice: String?
+
     public var id: String { identifier }
 
     public init(
         identifier: String, kind: ModelKind, installation: ModelInstallation,
-        expectedBytes: Int64? = nil
+        expectedBytes: Int64? = nil, firstUseNotice: String? = nil
     ) {
         self.identifier = identifier
         self.kind = kind
         self.installation = installation
         self.expectedBytes = expectedBytes
+        self.firstUseNotice = firstUseNotice
     }
 
     /// The name column. ``ModelDisplayName/readable(_:)`` and not a second rule: Louis asked for
@@ -98,7 +112,12 @@ public struct ModelRow: Equatable, Sendable, Identifiable {
         // A store that could not be read is not a store that is empty: offering a download would
         // be acting on an answer we do not have.
         case (.speech, .undetermined): .managedElsewhere
-        case (.language, _): .managedElsewhere
+        // The one language state Murmure may act on: Ollama has answered and does not have this
+        // model, so the only thing worth pressing is a pull -- never a delete, which stays
+        // unreachable for every other language state below.
+        case (.language, .absent): .pull
+        case (.language, .installed), (.language, .partiallyDownloaded), (.language, .undetermined):
+            .managedElsewhere
         }
     }
 
@@ -255,10 +274,15 @@ public enum ModelInventory {
     ///
     /// A variant folder with no files in it and no transfer in flight is `absent`, not partial:
     /// an empty directory is a leftover, there is nothing to resume and nothing to free.
+    /// `knownWarm` is the caller's answer to a question this function cannot ask the disk: has
+    /// THIS Mac's Neural Engine already compiled this variant. See
+    /// ``firstUseNotice(installation:knownWarm:)`` for why that has to travel in rather than be
+    /// derived here.
     public static func speechRow(
         for descriptor: SpeechModelDescriptor,
         in store: URL,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        knownWarm: Bool = false
     ) -> ModelRow {
         let variantURL = variant(for: descriptor, in: store)
         let cacheURL = cache(for: descriptor, in: store)
@@ -277,7 +301,30 @@ public enum ModelInventory {
 
         return ModelRow(
             identifier: descriptor.variant, kind: .speech, installation: installation,
-            expectedBytes: descriptor.expectedBytes)
+            expectedBytes: descriptor.expectedBytes,
+            firstUseNotice: firstUseNotice(installation: installation, knownWarm: knownWarm))
+    }
+
+    /// The sentence an installed speech model carries about the machine-specific compile it has
+    /// not been proven to have already paid -- or `nil` when it is not installed, or when the
+    /// caller already knows it is warm.
+    ///
+    /// **Why `knownWarm` is a parameter and not a computation.** Nothing under `store` says
+    /// whether this Mac's Neural Engine has already compiled a given variant: that cache is
+    /// `ANECompilerService`'s own, outside `Application Support/Murmure` and outside anything a
+    /// directory listing can read (`WhisperKitEngine.prepare()`'s own doc comment measures the
+    /// cost, not where the receipt is kept). The one variant this can be said about with any
+    /// confidence at all is the shipped default: `scripts/bootstrap.sh` runs `ModelWarmup` -- which
+    /// calls exactly that `prepare()` -- as the last thing it does, before Murmure is ever used.
+    /// Every other variant a caller names here has no such guarantee, however long it has sat on
+    /// disk, so the caller has to say which one it is rather than this function guessing from the
+    /// identifier.
+    static func firstUseNotice(installation: ModelInstallation, knownWarm: Bool) -> String? {
+        guard case .installed = installation, !knownWarm else { return nil }
+        return """
+            First dictation with this model will take several minutes while this Mac compiles it \
+            for its Neural Engine; every one after that takes a few seconds.
+            """
     }
 
     /// The two directories a delete has to remove, and the question that precedes it.
@@ -286,14 +333,45 @@ public enum ModelInventory {
     /// the cache subtree beside it. Removing only the first leaves the Hub believing every file
     /// is present with a matching commit hash, which is how a "deleted" model comes back as a
     /// store that will not re-download and will not load either.
-    public static func removal(for descriptor: SpeechModelDescriptor, in store: URL) -> ModelRemoval
-    {
-        ModelRemoval(
+    /// `namedByModes` is which modes' `stt.model` resolves to this variant (``modesNaming``),
+    /// empty when none do. It changes the question asked and not merely a footnote to it: deleting
+    /// a model nobody names costs a re-download; deleting one a mode still names leaves that mode
+    /// falling back to Murmure's shipped default at the next dictation with nothing on screen
+    /// saying so -- the difference `WhisperKitEngine.load`'s own fallback is silent about. A
+    /// confirmation that did not say which of the two this delete is would let Louis press it not
+    /// knowing a mode goes with it.
+    public static func removal(
+        for descriptor: SpeechModelDescriptor, in store: URL, namedByModes modeNames: [String] = []
+    ) -> ModelRemoval {
+        let name = ModelDisplayName.readable(descriptor.variant)
+        let size = ModelSize.readable(descriptor.expectedBytes)
+        let question: String
+        if modeNames.isEmpty {
+            question = "Delete \(name)? Murmure will download \(size) again before the next dictation."
+        } else {
+            let modes = modeNames.joined(separator: ", ")
+            let verb = modeNames.count == 1 ? "names" : "name"
+            question = """
+                Delete \(name)? \(modes) still \(verb) it -- without it, dictation there will \
+                silently fall back to Murmure's default model until you point it at another one. \
+                Murmure will download \(size) again if you reinstall it.
+                """
+        }
+        return ModelRemoval(
             directories: [variant(for: descriptor, in: store), cache(for: descriptor, in: store)],
-            question: """
-                Delete \(ModelDisplayName.readable(descriptor.variant))? Murmure will download \
-                \(ModelSize.readable(descriptor.expectedBytes)) again before the next dictation.
-                """)
+            question: question)
+    }
+
+    /// The names of the modes whose `stt.model` resolves to `variant`, in file order.
+    ///
+    /// Resolved through ``SpeechModelResolution`` rather than compared as raw strings: a mode's
+    /// stored field is very often the shipped alias (`Mode.defaultSTTModel`) or blank, and neither
+    /// is the exact folder name a row's `identifier` carries -- comparing them literally would
+    /// never catch the common case, which is exactly the one the delete confirmation exists for.
+    public static func modesNaming(variant: String, in modes: [Mode], engineDefault: String) -> [String] {
+        modes.filter {
+            SpeechModelResolution.variant(storedAs: $0.stt.model, engineDefault: engineDefault) == variant
+        }.map(\.name)
     }
 
     /// The whole table, in the order it is drawn.
