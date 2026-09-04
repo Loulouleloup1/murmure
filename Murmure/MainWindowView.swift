@@ -119,7 +119,31 @@ struct MainWindowView: View {
             header
             pane
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // `alignment: .top`, not the default `.center`. `NavigationSplitView`'s detail column can
+        // offer this composite more height than `header` + `pane` together ask for, and without a
+        // top anchor here that leftover is split above and below -- header included -- instead of
+        // landing entirely below whatever the pane draws. Models was the one pane this was
+        // reported on (design notes, Louis, 2026-09-04): its rows are few, and moving the anchor
+        // here rather than adding a frame to its own root keeps the rule in one place instead of
+        // one every future pane has to remember.
+        //
+        // Four of the other five panes already claim the full column on their own by construction,
+        // read directly off their bodies: an explicit `.frame(maxWidth: .infinity, maxHeight:
+        // .infinity)` on `HistoryPaneView`'s own `detail`, and a bare `ScrollView` as the entire
+        // body of `GeneralPaneView`, `AdvancedPaneView` and `VocabularyPaneView` (the last has a
+        // `ScrollView` too, but as the last child of a `VStack` rather than the body itself) --
+        // none of those has anything below its flexible element for `.top` to newly expose.
+        // `ModesPaneView.list`, though, has the same shape as Models' own root: its `cards`
+        // `ScrollView` is followed by a `footer`, not trailing the stack. Why that shape does not
+        // show the same margin there is not established by reading the code -- it may, or may not,
+        // and that is exactly what makes this comment reasoning rather than a settled fact.
+        //
+        // **None of this is verified by any automated test** -- `Murmure/` has no test bundle, and
+        // confirming a `NavigationSplitView` detail column's actual layout means opening the
+        // window, which an agent may not do. Settled by Louis's own eye-gate: open all six
+        // sections and confirm Models now sits flush under the header and none of the other five
+        // moved.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(role: .paneBackground))
     }
 
