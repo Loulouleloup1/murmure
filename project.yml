@@ -43,6 +43,10 @@ targets:
       base:
         ENABLE_APP_SANDBOX: NO
         CODE_SIGN_IDENTITY: "-"
+        # The catalog is generated, never hand-edited: `swift scripts/make-icon.swift` draws every
+        # size from the same accent and palette the interface uses, so the icon cannot drift from
+        # the app it names.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Murmure/Info.plist
       properties:
