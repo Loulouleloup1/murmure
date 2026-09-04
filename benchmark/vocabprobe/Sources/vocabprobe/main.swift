@@ -25,11 +25,12 @@ import WhisperKit
 // MARK: - Job description
 
 struct Job: Decodable {
-    /// A logits-bias arm, entirely separate from `prompt` -- see
-    /// `VocabularyBoostFilter.swift` and `docs/benchmarks/2026-09-vocabulary-logits-bias.md`.
-    /// Null = no filter, the plain `logitsFilters: []` WhisperKit ships with.
-    struct Boost: Decodable {
-        let terms: [String]
+    /// One boosted term with its OWN bonuses -- see `VocabularyBoostFilter.swift` and
+    /// `docs/benchmarks/2026-09-vocabulary-logits-bias.md` (round 2: bridling rules need a
+    /// per-term strength, a single pair for the whole arm cannot express "less for this
+    /// one").
+    struct BoostTerm: Decodable {
+        let term: String
         let firstTokenBonus: Double
         let continuationBonus: Double
     }
@@ -40,7 +41,8 @@ struct Job: Decodable {
         let arm: String
         /// The literal string handed to WhisperKit's tokenizer. Null = no prompt.
         let prompt: String?
-        let boost: Boost?
+        /// Null/absent = no filter, the plain `logitsFilters: []` WhisperKit ships with.
+        let boost: [BoostTerm]?
     }
 
     let tasks: [Task]
@@ -177,18 +179,17 @@ for (index, task) in job.tasks.enumerated() {
     // the built-in filters, not whatever the previous task's arm left behind.
     var boostTermCount = 0
     if let boost = task.boost {
-        let termTokens = boost.terms.map { term in
-            tokenizer.encode(text: " " + term)
+        let terms = boost.map { bt -> VocabularyBoostFilter.Term in
+            let tokens = tokenizer.encode(text: " " + bt.term)
                 .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
-        }
-        boostTermCount = termTokens.count
-        kit.textDecoder.logitsFilters = [
-            VocabularyBoostFilter(
-                termTokens: termTokens,
-                firstTokenBonus: Float(boost.firstTokenBonus),
-                continuationBonus: Float(boost.continuationBonus)
+            return VocabularyBoostFilter.Term(
+                tokens: tokens,
+                firstTokenBonus: Float(bt.firstTokenBonus),
+                continuationBonus: Float(bt.continuationBonus)
             )
-        ]
+        }
+        boostTermCount = terms.count
+        kit.textDecoder.logitsFilters = [VocabularyBoostFilter(terms: terms)]
     } else {
         kit.textDecoder.logitsFilters = []
     }

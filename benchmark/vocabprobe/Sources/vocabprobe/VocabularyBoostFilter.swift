@@ -28,19 +28,33 @@ import WhisperKit
 // it does NOT look at the audio or the encoder output, so a naive strength setting can
 // still inject a term that was never spoken -- that risk is measured, not avoided, by the
 // `boost-absent` control arm in the campaign above.
+//
+// Round 2 (`docs/benchmarks/2026-09-vocabulary-logits-bias.md`, this round's section):
+// bonuses are now PER TERM rather than one global pair for the whole filter. This is the
+// minimum change needed to test a "bridling rule" -- a term whose tokenization is a single
+// token (e.g. ` PR`) can NEVER reach the continuation branch below (`term.count - 1 == 0`,
+// so `matched` is always 0): it draws `firstTokenBonus` unconditionally, at every decode
+// step, for the entire file. A per-filter global bonus cannot express "give this term less,
+// or none" without also changing every other term; a per-term bonus can.
 final class VocabularyBoostFilter: LogitsFiltering {
-    private let termTokens: [[Int]]
-    private let firstTokenBonus: Float
-    private let continuationBonus: Float
+    /// One boosted term: its token sequence (leading space, special tokens already
+    /// filtered by the caller) and its own first-token / continuation bonuses. A term
+    /// bridled to zero strength is still carried here rather than dropped by the caller,
+    /// so the job file stays a plain list of "terms in the vocabulary pane" independent of
+    /// whatever rule decided its strength.
+    struct Term {
+        let tokens: [Int]
+        let firstTokenBonus: Float
+        let continuationBonus: Float
+    }
 
-    /// - Parameter termTokens: one token sequence per term, already encoded with a leading
-    ///   space and with special tokens filtered out (`main.swift` does both, exactly as it
-    ///   already does for `promptTokens`). Empty sequences are dropped -- they cannot match
-    ///   anything and would crash the `term[0]`/`term[matched]` lookups below.
-    init(termTokens: [[Int]], firstTokenBonus: Float, continuationBonus: Float) {
-        self.termTokens = termTokens.filter { !$0.isEmpty }
-        self.firstTokenBonus = firstTokenBonus
-        self.continuationBonus = continuationBonus
+    private let terms: [Term]
+
+    /// - Parameter terms: one entry per boosted term. Entries with an empty token
+    ///   sequence are dropped -- they cannot match anything and would crash the
+    ///   `tokens[0]`/`tokens[matched]` lookups below.
+    init(terms: [Term]) {
+        self.terms = terms.filter { !$0.tokens.isEmpty }
     }
 
     func filterLogits(_ logits: MLMultiArray, withTokens tokens: [Int]) -> MLMultiArray {
@@ -50,20 +64,23 @@ final class VocabularyBoostFilter: LogitsFiltering {
         // token this step (e.g. two terms sharing a first token) -- bonuses add, they do
         // not overwrite each other, same rule as the read-modify-write below.
         var bonusByToken: [Int: Float] = [:]
-        for term in termTokens {
-            // Longest k (1..<term.count) such that the last k tokens of the history equal
-            // the first k tokens of the term -- i.e. how far into this term we already are.
+        for term in terms {
+            // Longest k (1..<term.tokens.count) such that the last k tokens of the history
+            // equal the first k tokens of the term -- i.e. how far into this term we
+            // already are. For a single-token term this loop never runs (`term.tokens.count
+            // - 1 == 0`), so `matched` stays 0 forever: there is no continuation branch to
+            // reach, only the first-token one, every single step.
             var matched = 0
-            var k = min(term.count - 1, tokens.count)
+            var k = min(term.tokens.count - 1, tokens.count)
             while k > 0 {
-                if Array(tokens.suffix(k)) == Array(term.prefix(k)) {
+                if Array(tokens.suffix(k)) == Array(term.tokens.prefix(k)) {
                     matched = k
                     break
                 }
                 k -= 1
             }
-            let bonus = matched > 0 ? continuationBonus : firstTokenBonus
-            bonusByToken[term[matched], default: 0] += bonus
+            let bonus = matched > 0 ? term.continuationBonus : term.firstTokenBonus
+            bonusByToken[term.tokens[matched], default: 0] += bonus
         }
 
         // Built-in filters index the logits as [0, 0, tokenId] (`LogitsFilter.swift`) --
