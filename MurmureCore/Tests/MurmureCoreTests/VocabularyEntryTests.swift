@@ -61,4 +61,40 @@ final class VocabularyEntryTests: XCTestCase {
 
         XCTAssertEqual(updated, [VocabularyEntry(term: "Trucost", replacement: "TruCost")])
     }
+
+    // MARK: - isWordAddable(_:) -- the pane's "New word" Add button
+
+    func testABlankWordIsNotAddable() {
+        XCTAssertFalse(VocabularyEntry.isWordAddable(""))
+    }
+
+    func testAWhitespaceOnlyWordIsNotAddable() {
+        XCTAssertFalse(VocabularyEntry.isWordAddable("   "))
+    }
+
+    func testARealWordIsAddable() {
+        XCTAssertTrue(VocabularyEntry.isWordAddable("Trucost"))
+    }
+
+    // MARK: - isCorrectionAddable(term:replacement:) -- the pane's "Should be" Add button
+
+    func testBothFieldsBlankIsNotAddable() {
+        XCTAssertFalse(VocabularyEntry.isCorrectionAddable(term: "", replacement: ""))
+    }
+
+    /// The rule `commitCorrection` already enforces: an empty "Should be" refuses the whole
+    /// correction rather than downgrading it to a bare word, so a term alone is not addable here
+    /// even though `isWordAddable(term)` on its own would say yes.
+    func testATermWithNoReplacementIsNotAddableAsACorrection() {
+        XCTAssertFalse(VocabularyEntry.isCorrectionAddable(term: "cloud code", replacement: "  "))
+    }
+
+    func testABlankTermWithARealReplacementIsNotAddable() {
+        XCTAssertFalse(VocabularyEntry.isCorrectionAddable(term: "  ", replacement: "Claude Code"))
+    }
+
+    func testBothFieldsHoldingRealTextIsAddable() {
+        XCTAssertTrue(
+            VocabularyEntry.isCorrectionAddable(term: "cloud code", replacement: "Claude Code"))
+    }
 }

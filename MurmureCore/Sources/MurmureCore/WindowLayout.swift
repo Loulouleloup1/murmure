@@ -66,4 +66,15 @@ public enum WindowLayout {
     /// fit inside `minimumSize.width`, or the table's last column falls off the smallest window
     /// the app can be resized to.
     public static let modelsNameMinimum: CGFloat = 200
+
+    /// The gap between the lines INSIDE one Vocabulary group's header block -- its heading (with
+    /// count) and its subtitle. Tighter than `vocabularyGroupSpacing`, the gap between the two
+    /// groups themselves, so a header's own lines read as one paragraph rather than as a third
+    /// group floating between the other two.
+    public static let vocabularyHeaderSpacing: CGFloat = 6
+
+    /// The gap between Vocabulary's two groups (`VocabularyPaneView`'s outer `VStack`, one group
+    /// per heading) -- wide enough that "Words to recognise" and "Corrections" read as two
+    /// separate sections, never as two halves of one.
+    public static let vocabularyGroupSpacing: CGFloat = 20
 }

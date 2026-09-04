@@ -279,4 +279,72 @@ final class VocabularyPromptTests: XCTestCase {
         XCTAssertEqual(plan.dropped, [overlong])
         XCTAssertTrue((plan.noticeText ?? "").contains(overlong.term), plan.noticeText ?? "")
     }
+
+    // MARK: - budgetLine(totalEntries:) -- the pane-level line below the problem banner / cap notice
+
+    /// A vocabulary with nothing in it has no budget to report -- shown beside an already-empty
+    /// pane, "0 of 0 reach the recogniser" would be noise, not information.
+    func testBudgetLineIsNilForAnEmptyVocabulary() {
+        let plan = VocabularyPrompt.plan(for: [])
+        XCTAssertNil(plan.budgetLine(totalEntries: 0))
+    }
+
+    /// The common day: nothing dropped, and the line still says so, briefly -- it is a standing
+    /// readout of a real feature, not a message that only ever appears to report a problem.
+    func testBudgetLineSaysAllTermsReachWhenNothingIsDropped() {
+        let entries = (1...16).map { VocabularyEntry(term: "Term\(String(format: "%02d", $0))") }
+        let plan = VocabularyPrompt.plan(for: entries)
+
+        XCTAssertEqual(
+            plan.budgetLine(totalEntries: entries.count), "All 16 terms reach the recogniser.")
+    }
+
+    /// Singular grammar for the one-entry vocabulary, not "All 1 terms reach".
+    func testBudgetLineUsesSingularWordingForOneEntryNoneDropped() {
+        let entries = [VocabularyEntry(term: "Trucost")]
+        let plan = VocabularyPrompt.plan(for: entries)
+
+        XCTAssertEqual(
+            plan.budgetLine(totalEntries: entries.count), "All 1 term reaches the recogniser.")
+    }
+
+    /// Once the cap bites, the line reports the counts on both sides of it -- kept and dropped --
+    /// rather than the named list `noticeText` already carries. No noun on the dropped count: it
+    /// is always a count of terms, already said once earlier in the same sentence.
+    func testBudgetLineReportsKeptAndDroppedCountsWhenTheCapBites() {
+        let entries = (1...25).map { VocabularyEntry(term: "Term\(String(format: "%02d", $0))") }
+        let plan = VocabularyPrompt.plan(for: entries)
+
+        XCTAssertEqual(plan.dropped.count, 5)
+        XCTAssertEqual(
+            plan.budgetLine(totalEntries: entries.count),
+            "20 of 25 terms reach the recogniser -- 5 dropped by the cap.")
+    }
+
+    /// The verb agrees with how many REACH (singular when exactly one survives), independently
+    /// of how many the vocabulary held in total -- a 2-term vocabulary reduced to 1 survivor says
+    /// "reaches", even though "2 terms" (the total) stays plural.
+    func testBudgetLineSingularisesTheVerbWhenExactlyOneTermReaches() {
+        let overlong = VocabularyEntry(term: String(repeating: "b", count: 300))
+        let entries = [VocabularyEntry(term: "Alpha"), overlong]
+        let plan = VocabularyPrompt.plan(for: entries)
+
+        XCTAssertEqual(plan.dropped, [overlong])
+        XCTAssertEqual(
+            plan.budgetLine(totalEntries: entries.count),
+            "1 of 2 terms reaches the recogniser -- 1 dropped by the cap.")
+    }
+
+    /// The noun agrees with the TOTAL independently of the verb: a one-term vocabulary that drops
+    /// its only entry says "term", not "terms", even though what reaches is zero -- "reach"
+    /// stays plural (zero is not "one"), so the sentence pairs a plural verb with a singular noun.
+    func testBudgetLineSingularisesTheNounWhenTheVocabularyHoldsExactlyOneTerm() {
+        let overlong = VocabularyEntry(term: String(repeating: "b", count: 300))
+        let plan = VocabularyPrompt.plan(for: [overlong])
+
+        XCTAssertEqual(plan.dropped, [overlong])
+        XCTAssertEqual(
+            plan.budgetLine(totalEntries: 1),
+            "0 of 1 term reach the recogniser -- 1 dropped by the cap.")
+    }
 }

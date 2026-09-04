@@ -50,4 +50,12 @@ final class WindowLayoutTests: XCTestCase {
         // The name is the column being read; none of the other three may outgrow it.
         XCTAssertGreaterThan(WindowLayout.modelsNameMinimum, columns.size)
     }
+
+    /// A header's own lines (heading, subtitle) must read tighter than the gap that separates
+    /// Vocabulary's two groups, or the header would look like a third group rather than one
+    /// paragraph describing the row beneath it.
+    func testTheVocabularyHeaderSpacingIsTighterThanTheGapBetweenGroups() {
+        XCTAssertGreaterThan(WindowLayout.vocabularyHeaderSpacing, 0)
+        XCTAssertLessThan(WindowLayout.vocabularyHeaderSpacing, WindowLayout.vocabularyGroupSpacing)
+    }
 }

@@ -47,6 +47,26 @@ public struct VocabularyEntry: Codable, Equatable, Sendable {
     /// wherever it is spelled out again.
     public var isCorrection: Bool { replacement != nil }
 
+    /// Whether "New word"'s current text would add anything if committed right now -- the same
+    /// emptiness rule `normalized()` enforces, named here so the pane's Add button can disable
+    /// itself in lockstep with what pressing it (or Enter) would actually do, rather than the view
+    /// re-deriving "is this blank, once trimmed" on its own.
+    public static func isWordAddable(_ term: String) -> Bool {
+        VocabularyEntry(term: term).normalized() != nil
+    }
+
+    /// Whether a correction row's two fields would add anything if committed right now. Both must
+    /// hold real text: an empty "Should be" refuses the whole correction rather than downgrading
+    /// it to a bare word, the rule `VocabularyPaneModel.add(term:replacement:)`'s caller
+    /// (`commitCorrection`) already enforces -- so this is deliberately NOT
+    /// `isWordAddable(term) && isWordAddable(replacement)` read as two independent words, it is
+    /// `replacement` held to the stricter "must not be blank" rather than `normalized()`'s own
+    /// "blank folds to nil, which is still usable" rule.
+    public static func isCorrectionAddable(term: String, replacement: String) -> Bool {
+        guard isWordAddable(term) else { return false }
+        return !replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// `entries` with `self` in place of the existing entry of the same `term`
     /// (case-insensitive, matching `VocabularyStore.loadAll()`'s own duplicate rule) -- appended
     /// when there is none.

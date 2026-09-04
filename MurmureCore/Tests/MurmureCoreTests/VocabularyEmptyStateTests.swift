@@ -72,6 +72,44 @@ final class VocabularyEmptyStateTests: XCTestCase {
         XCTAssertEqual(VocabularyGroup.wordsToRecognise.entries(in: entries), entries)
     }
 
+    // MARK: - headingWithCount(_:) -- the pane's section header
+
+    func testHeadingWithCountJoinsTheHeadingAndTheCountWithAMiddleDot() {
+        XCTAssertEqual(VocabularyGroup.wordsToRecognise.headingWithCount(12), "Words to recognise · 12")
+        XCTAssertEqual(VocabularyGroup.corrections.headingWithCount(0), "Corrections · 0")
+    }
+
+    // MARK: - subtitle -- reused by the section header AND by "nothing yet" below
+
+    /// Each group's subtitle talks about what THAT group's own list does, the same split
+    /// `testWordsToRecogniseEmptyStateTalksOnlyAboutBiasingWhatIsHeard` checks on the composed
+    /// sentence below -- checked here on the fragment itself since the section header draws it
+    /// directly, with no "No words yet." in front of it.
+    func testWordsToRecogniseSubtitleTalksOnlyAboutBiasingWhatIsHeard() {
+        let subtitle = VocabularyGroup.wordsToRecognise.subtitle
+        XCTAssertTrue(subtitle.contains("guides what Whisper hears"), subtitle)
+        XCTAssertFalse(subtitle.contains("corrects"), subtitle)
+    }
+
+    func testCorrectionsSubtitleTalksOnlyAboutFixingTheTranscript() {
+        let subtitle = VocabularyGroup.corrections.subtitle
+        XCTAssertTrue(subtitle.contains("fixes it"), subtitle)
+        XCTAssertFalse(subtitle.contains("guides what Whisper hears"), subtitle)
+    }
+
+    /// The refactor this guards: `VocabularyEmptyState`'s "nothing yet" sentence must not restate
+    /// the group's own wording, it must fold `subtitle` in whole -- so the two never drift into
+    /// two descriptions of the same group. Mutation-proof: rewording either `subtitle` case breaks
+    /// this assertion, not just the section header.
+    func testNothingYetFoldsInTheGroupsOwnSubtitleRatherThanRestatingIt() {
+        XCTAssertTrue(
+            VocabularyEmptyState.nothingYet(.wordsToRecognise).description
+                .hasSuffix(VocabularyGroup.wordsToRecognise.subtitle))
+        XCTAssertTrue(
+            VocabularyEmptyState.nothingYet(.corrections).description
+                .hasSuffix(VocabularyGroup.corrections.subtitle))
+    }
+
     // MARK: - Parse failures are not scoped to one group
 
     /// The failure this type exists for. Given a `vocabulary.json` that will not parse, when the

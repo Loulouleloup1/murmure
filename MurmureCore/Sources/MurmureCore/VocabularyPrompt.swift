@@ -200,4 +200,45 @@ public struct VocabularyPromptPlan: Equatable {
         guard let tail else { return "\(subject) \(verb)." }
         return "\(subject) \(verb) -- \(tail)"
     }
+
+    /// The pane's standing budget readout, drawn ONCE at pane level -- below the problem banner
+    /// and `noticeText`'s cap notice, above both groups -- never nested under either group's own
+    /// heading. It has to sit there: `totalEntries` is `model.entries.count`, the WHOLE
+    /// vocabulary this plan was built from (both "Words to recognise" and "Corrections" combined,
+    /// `VocabularyPrompt`'s own header), since a bare term and a correction cost the cap's budget
+    /// exactly alike -- a count drawn under one group's heading would describe that group while
+    /// actually reporting on both, which is the self-contradiction a "Words to recognise · 12"
+    /// heading followed by "All 16 terms reach the recogniser" would read as.
+    ///
+    /// Where `noticeText` is silent until a cap actually bites, `budgetLine` is drawn every time
+    /// the pane is open -- a not-very-savvy user watching a number never has to first discover a
+    /// feature exists by hitting its limit. `totalEntries` is passed in rather than stored on the
+    /// plan, because the caller already has the count it built the plan from and a second stored
+    /// copy on `VocabularyPromptPlan` is a second place for that number to drift from it.
+    ///
+    /// Nil when `totalEntries` is 0 -- a vocabulary with nothing in it has no budget to report,
+    /// and "0 of 0 reach the recogniser" beside an already-empty pane is noise, not information.
+    /// Otherwise never nil: **when nothing is dropped the line still says so, briefly**, rather
+    /// than disappearing, because a line that is only ever there to report a problem teaches
+    /// nothing about the feature on the far more common day nothing goes wrong.
+    ///
+    /// Grammar agrees independently on two counts, not one: the verb ("reach"/"reaches") with
+    /// how many actually REACH (`reaching`), the noun ("terms"/"term") with the TOTAL the
+    /// vocabulary holds -- a one-term vocabulary that drops its only entry is "0 of 1 term
+    /// reach", plural verb (zero) beside singular noun (one total), not two independent guesses
+    /// that happen to agree only when nothing is capped.
+    public func budgetLine(totalEntries: Int) -> String? {
+        guard totalEntries > 0 else { return nil }
+        let reaching = totalEntries - dropped.count
+
+        guard !dropped.isEmpty else {
+            return reaching == 1
+                ? "All 1 term reaches the recogniser."
+                : "All \(reaching) terms reach the recogniser."
+        }
+        let totalWord = totalEntries == 1 ? "term" : "terms"
+        let verb = reaching == 1 ? "reaches" : "reach"
+        return "\(reaching) of \(totalEntries) \(totalWord) \(verb) the recogniser -- "
+            + "\(dropped.count) dropped by the cap."
+    }
 }

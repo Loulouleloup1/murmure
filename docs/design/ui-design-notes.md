@@ -122,6 +122,15 @@ table where the replacement is optional, i.e. one list serves both "bias the rec
 "fix this word afterwards". That matches Murmure's spec §5 exactly (initial-prompt hints +
 find→replace) and is worth keeping as **one list, not two**.
 
+**Divergence (2026-09-05), on Louis's own request:** Murmure's Vocabulary pane now departs from
+the installed app's layout above on three points, because the installed app's own affordances (a
+keycap hint, no buttons) tested as too plain and too easy to miss for a not-very-savvy user. Rows
+carry an **always-on card** (History's convention, §1.3) rather than a hover-only fill, with an
+8 pt gap between rows; a replacement's arrow is a **plain glyph**, not a filled chip (a filled chip
+would vanish against the row's own now-permanent card fill); and each input row carries a
+**visible "Add" button** beside it (`.bordered`, `.controlSize(.small)` — the same style
+`GeneralPaneView`'s Record button uses) in addition to Enter, rather than Enter/⌘-Enter alone.
+
 ### 1.3 History — layout only
 
 *(Louis's real dictated content is visible in this capture. Layout only below; nothing about the

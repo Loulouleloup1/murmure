@@ -25,6 +25,26 @@ public enum VocabularyGroup: Equatable, Sendable, CaseIterable {
         }
     }
 
+    /// `heading`, with how many entries this group holds -- the pane's section header, named here
+    /// so the separator is chosen once rather than glued together at the one call site.
+    public func headingWithCount(_ count: Int) -> String {
+        "\(heading) · \(count)"
+    }
+
+    /// One line saying what putting a word in THIS group's list actually does. The same wording
+    /// `VocabularyEmptyState.nothingYet`'s sentence uses below -- reused, not restated, so the
+    /// pane's section header and its empty-list message never drift into two descriptions of one
+    /// group.
+    public var subtitle: String {
+        switch self {
+        case .wordsToRecognise:
+            "A word added here guides what Whisper hears -- it does not change your text."
+        case .corrections:
+            "Add the word Whisper mis-hears and the one it should have written, and this list "
+                + "fixes it every time afterwards."
+        }
+    }
+
     /// This group's own entries out of the full vocabulary, in whatever order `vocabulary`
     /// already has -- filtering preserves it, so a caller that alphabetises the whole list before
     /// splitting gets an alphabetised group back, with no re-sort here.
@@ -84,11 +104,9 @@ public enum VocabularyEmptyState: Equatable, CustomStringConvertible {
         // single sentence covering both reads as one operation, which is the affordance problem
         // this whole feature exists to fix.
         case .nothingYet(.wordsToRecognise):
-            "No words yet. A word added here guides what Whisper hears -- it does not change "
-                + "your text."
+            "No words yet. \(VocabularyGroup.wordsToRecognise.subtitle)"
         case .nothingYet(.corrections):
-            "No corrections yet. Add the word Whisper mis-hears and the one it should have "
-                + "written, and this list fixes it every time afterwards."
+            "No corrections yet. \(VocabularyGroup.corrections.subtitle)"
         }
     }
 }
