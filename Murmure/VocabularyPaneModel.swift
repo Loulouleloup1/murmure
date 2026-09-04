@@ -41,16 +41,23 @@ final class VocabularyPaneModel: ObservableObject {
         entries = sorted(store.loadAll())
     }
 
-    /// The one sentence an empty list shows, or nil when there are entries to list.
+    /// This group's own entries -- `VocabularyGroup`'s split of `entries`, so the pane never
+    /// re-derives "bare term vs. correction" itself.
+    func entries(in group: VocabularyGroup) -> [VocabularyEntry] {
+        group.entries(in: entries)
+    }
+
+    /// The one sentence an empty GROUP list shows, or nil when it has entries to list.
     ///
-    /// Which of the two empty states this is -- a file that will not parse, or no file at all --
-    /// is `VocabularyEmptyState`'s decision and is tested there. A save failure comes first for
-    /// the reason it does in History: it is the most recent thing that happened, and it is why
-    /// the list looks the way it does.
-    var emptyListMessage: String? {
-        guard entries.isEmpty else { return nil }
+    /// Which of the two empty states this is -- a file that will not parse, or nothing of this
+    /// group's kind yet -- is `VocabularyEmptyState`'s decision and is tested there. A save
+    /// failure comes first for the reason it does in History: it is the most recent thing that
+    /// happened, and it is why the list looks the way it does.
+    func emptyListMessage(for group: VocabularyGroup) -> String? {
+        guard entries(in: group).isEmpty else { return nil }
         if let saveProblem { return saveProblem }
-        return VocabularyEmptyState.current(problem: loadProblem, hasEntries: false)?.description
+        return VocabularyEmptyState.current(
+            problem: loadProblem, hasEntries: false, group: group)?.description
     }
 
     /// The line above the list. A save failure whatever the list looks like, then a load problem
@@ -63,8 +70,10 @@ final class VocabularyPaneModel: ObservableObject {
     }
 
     /// Adds a term, or replaces the existing one of the same name (case-insensitive, matching
-    /// `VocabularyStore.loadAll()`'s own duplicate rule). A bare term only biases the recogniser; a
-    /// term with a replacement also corrects it after the fact.
+    /// `VocabularyStore.loadAll()`'s own duplicate rule -- `VocabularyEntry.upserting(into:)`).
+    /// A bare term only biases the recogniser; a term with a replacement also corrects it after
+    /// the fact. Which of the pane's two input rows called this is not passed in: the two fields
+    /// alone already say which group the result lands in.
     ///
     /// `term` alone commits nothing else; `term` and `replacement` commit both. An empty term
     /// commits nothing at all -- the input row's placeholder text is not a value.
@@ -75,11 +84,7 @@ final class VocabularyPaneModel: ObservableObject {
         let entry = VocabularyEntry(
             term: trimmedTerm,
             replacement: trimmedReplacement.isEmpty ? nil : trimmedReplacement)
-        var updated = entries.filter {
-            $0.term.localizedCaseInsensitiveCompare(trimmedTerm) != .orderedSame
-        }
-        updated.append(entry)
-        persist(updated)
+        persist(entry.upserting(into: entries))
     }
 
     func delete(_ entry: VocabularyEntry) {

@@ -131,8 +131,22 @@ extension KeyCombo {
         117: "⌦",
         119: "End",
         121: "Page Down",
-        122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6", 98: "F7", 100: "F8",
-        101: "F9", 109: "F10", 103: "F11", 111: "F12",
         123: "←", 124: "→", 125: "↓", 126: "↑",
     ]
+    .merging(functionKeyLabels) { _, new in new }
+
+    /// `kVK_F1` ... `kVK_F12`, split out of ``namedKeys`` rather than inlined there, so
+    /// ``functionKeyCodes`` below and ``HotkeyRecording``'s "bindable bare" rule can both be
+    /// derived from this ONE table instead of each keeping its own copy of the same twelve
+    /// numbers -- the exact drift `ModelInventory.requiredBundles`'s own header describes and was
+    /// made public to end.
+    private static let functionKeyLabels: [UInt32: String] = [
+        122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6", 98: "F7", 100: "F8",
+        101: "F9", 109: "F10", 103: "F11", 111: "F12",
+    ]
+
+    /// The key codes `HotkeyRecording.evaluate` accepts without a modifier held -- public and no
+    /// wider than that: exposing the code/label pairing itself is unneeded outside this file, only
+    /// the set of codes is.
+    public static let functionKeyCodes: Set<UInt32> = Set(functionKeyLabels.keys)
 }

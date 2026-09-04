@@ -224,4 +224,59 @@ final class VocabularyPromptTests: XCTestCase {
     func testAnEmptyVocabularyStillBuildsNoPromptEvenWithTheFillerWord() {
         XCTAssertNil(VocabularyPrompt.build(from: []))
     }
+
+    // MARK: - noticeText
+
+    func testNoticeTextIsNilWhenNothingWasDropped() {
+        let plan = VocabularyPrompt.plan(for: [VocabularyEntry(term: "Trucost")])
+        XCTAssertNil(plan.noticeText)
+    }
+
+    /// A dropped bare term did nothing but bias the recogniser -- once out of the prompt it does
+    /// nothing at all, so the sentence must not claim it still corrects the transcript.
+    func testADroppedBareTermSaysOnlyThatItNoLongerGuidesTheRecogniser() {
+        let entries = (1...25).map { VocabularyEntry(term: "Term\(String(format: "%02d", $0))") }
+        let plan = VocabularyPrompt.plan(for: entries)
+
+        let text = plan.noticeText ?? ""
+        XCTAssertTrue(text.contains("no longer guide"), text)
+        XCTAssertFalse(text.contains("still corrects the text"), text)
+    }
+
+    /// A dropped correction still finds and replaces in the transcript, whether or not it shaped
+    /// what Whisper heard -- the sentence must say so, unlike the bare-term case above.
+    func testADroppedCorrectionSaysItStillCorrectsTheTextAfterwards() {
+        let entries = (1...25).map {
+            VocabularyEntry(term: "Term\(String(format: "%02d", $0))", replacement: "Term\($0)")
+        }
+        let plan = VocabularyPrompt.plan(for: entries)
+
+        let text = plan.noticeText ?? ""
+        XCTAssertTrue(text.contains("still corrects the text afterwards"), text)
+    }
+
+    /// A cap that drops one of each kind must not pretend they lost the same thing -- two
+    /// sentences, one true of each.
+    func testACapThatDropsBothKindsProducesOneSentenceForEach() {
+        let overlong1 = VocabularyEntry(term: String(repeating: "a", count: 300))
+        let overlong2 = VocabularyEntry(
+            term: String(repeating: "b", count: 300), replacement: String(repeating: "b", count: 300))
+        let plan = VocabularyPrompt.plan(for: [overlong1, overlong2])
+
+        let text = plan.noticeText ?? ""
+        XCTAssertTrue(text.contains("no longer guides the recogniser."), text)
+        XCTAssertTrue(text.contains("still corrects the text afterwards"), text)
+    }
+
+    /// Not scoped to either of the pane's two groups: `replacement ?? term` is what reaches the
+    /// prompt, so a correction costs a slot exactly like a bare term, and a single dropped
+    /// correction is named just as plainly as a single dropped bare term.
+    func testASingleDroppedCorrectionIsNamedInTheNotice() {
+        let overlong = VocabularyEntry(
+            term: String(repeating: "b", count: 300), replacement: String(repeating: "b", count: 300))
+        let plan = VocabularyPrompt.plan(for: [VocabularyEntry(term: "Alpha"), overlong])
+
+        XCTAssertEqual(plan.dropped, [overlong])
+        XCTAssertTrue((plan.noticeText ?? "").contains(overlong.term), plan.noticeText ?? "")
+    }
 }

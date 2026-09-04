@@ -32,11 +32,47 @@ final class VocabularyEmptyStateTests: XCTestCase {
         return (entries, reported)
     }
 
-    private func state() -> VocabularyEmptyState? {
+    /// What one of the two group lists shows, the same way the pane computes it: this group's own
+    /// slice of the loaded entries decides `hasEntries`, not the whole file.
+    private func state(for group: VocabularyGroup = .wordsToRecognise) -> VocabularyEmptyState? {
         let loaded = load()
         return VocabularyEmptyState.current(
-            problem: loaded.problem, hasEntries: !loaded.entries.isEmpty)
+            problem: loaded.problem,
+            hasEntries: !group.entries(in: loaded.entries).isEmpty,
+            group: group)
     }
+
+    // MARK: - VocabularyGroup's own split
+
+    func testWordsToRecogniseIsEntriesWithNoReplacement() {
+        let entries = [
+            VocabularyEntry(term: "Trucost"),
+            VocabularyEntry(term: "cloud code", replacement: "Claude Code"),
+        ]
+        XCTAssertEqual(
+            VocabularyGroup.wordsToRecognise.entries(in: entries), [VocabularyEntry(term: "Trucost")])
+    }
+
+    func testCorrectionsIsEntriesWithAReplacement() {
+        let entries = [
+            VocabularyEntry(term: "Trucost"),
+            VocabularyEntry(term: "cloud code", replacement: "Claude Code"),
+        ]
+        XCTAssertEqual(
+            VocabularyGroup.corrections.entries(in: entries),
+            [VocabularyEntry(term: "cloud code", replacement: "Claude Code")])
+    }
+
+    func testSplittingPreservesTheOrderOfTheInputRatherThanResorting() {
+        // Already alphabetised, the way the pane hands it in -- the split must not shuffle it.
+        let entries = [
+            VocabularyEntry(term: "Alpha"),
+            VocabularyEntry(term: "Zulu"),
+        ]
+        XCTAssertEqual(VocabularyGroup.wordsToRecognise.entries(in: entries), entries)
+    }
+
+    // MARK: - Parse failures are not scoped to one group
 
     /// The failure this type exists for. Given a `vocabulary.json` that will not parse, when the
     /// pane draws an empty list, then it says the file could not be read -- not that there are no
@@ -48,7 +84,16 @@ final class VocabularyEmptyStateTests: XCTestCase {
 
         XCTAssertNotNil(message)
         XCTAssertTrue(message!.contains("vocabulary.json"), message!)
-        XCTAssertFalse(message!.contains("No vocabulary yet"), message!)
+        XCTAssertFalse(message!.contains("No words yet"), message!)
+    }
+
+    /// The same broken file says the same thing under the OTHER group too -- a parse failure
+    /// costs the whole load, so it is not a "words" problem or a "corrections" problem, it is a
+    /// file problem either group can ask about.
+    func testTheSameParseFailureShowsUnderEitherGroup() throws {
+        try Data(#"[{"term": "Murmure"},"#.utf8).write(to: fileURL)
+
+        XCTAssertEqual(state(for: .wordsToRecognise), state(for: .corrections))
     }
 
     /// The message is `VocabularyLoadProblem`'s own, not a second wording of it: one failure, one
@@ -63,25 +108,44 @@ final class VocabularyEmptyStateTests: XCTestCase {
         XCTAssertEqual(message, problem?.description)
     }
 
+    // MARK: - The ordinary empty state, per group
+
     /// A file that has never been created is a fresh install, which `VocabularyStore` reports
-    /// nothing about on purpose. The pane says the ordinary thing.
-    func testNoVocabularyFileAtAllIsTheOrdinaryEmptyState() {
-        XCTAssertEqual(state(), .nothingYet)
+    /// nothing about on purpose. Each group says the ordinary thing, in its own words.
+    func testNoVocabularyFileAtAllIsTheOrdinaryEmptyStateForBothGroups() {
+        XCTAssertEqual(state(for: .wordsToRecognise), .nothingYet(.wordsToRecognise))
+        XCTAssertEqual(state(for: .corrections), .nothingYet(.corrections))
     }
 
     func testAnEmptyVocabularyFileIsTheSameOrdinaryEmptyState() throws {
         try Data("[]".utf8).write(to: fileURL)
 
-        XCTAssertEqual(state(), .nothingYet)
+        XCTAssertEqual(state(for: .wordsToRecognise), .nothingYet(.wordsToRecognise))
     }
 
-    /// The empty sentence says what the two halves of an entry do, because an empty pane with one
-    /// input row above it does not.
-    func testTheOrdinaryEmptyStateSaysWhatAWordAddedHereWouldDo() {
-        let message = VocabularyEmptyState.nothingYet.description
+    /// A vocabulary that is all bare terms leaves Corrections legitimately empty, with nothing
+    /// wrong with the file -- the ordinary "nothing of this kind yet" sentence, not a problem.
+    func testAGroupWithNoEntriesOfItsOwnKindIsOrdinaryNotAFailure() throws {
+        try Data(#"[{"term": "Murmure"}]"#.utf8).write(to: fileURL)
+
+        XCTAssertEqual(state(for: .corrections), .nothingYet(.corrections))
+        XCTAssertNil(state(for: .wordsToRecognise), "Words to recognise has an entry to show")
+    }
+
+    /// Each group's empty sentence says what THIS group's own list does, not what a vocabulary
+    /// entry as a whole can do -- the two are drawn apart precisely so this does not conflate.
+    func testWordsToRecogniseEmptyStateTalksOnlyAboutBiasingWhatIsHeard() {
+        let message = VocabularyEmptyState.nothingYet(.wordsToRecognise).description
 
         XCTAssertTrue(message.contains("guides what Whisper hears"), message)
-        XCTAssertTrue(message.contains("corrects the text afterwards"), message)
+        XCTAssertFalse(message.contains("corrects"), message)
+    }
+
+    func testCorrectionsEmptyStateTalksOnlyAboutFixingTheTranscript() {
+        let message = VocabularyEmptyState.nothingYet(.corrections).description
+
+        XCTAssertTrue(message.contains("fixes it"), message)
+        XCTAssertFalse(message.contains("guides what Whisper hears"), message)
     }
 
     /// A problem that cost one entry may not replace the entries that loaded. Given a file whose
@@ -92,7 +156,9 @@ final class VocabularyEmptyStateTests: XCTestCase {
         let loaded = load()
 
         let produced = VocabularyEmptyState.current(
-            problem: loaded.problem, hasEntries: !loaded.entries.isEmpty)
+            problem: loaded.problem,
+            hasEntries: !VocabularyGroup.wordsToRecognise.entries(in: loaded.entries).isEmpty,
+            group: .wordsToRecognise)
 
         XCTAssertEqual(loaded.entries.count, 1)
         XCTAssertNotNil(loaded.problem, "the skipped entry was reported")

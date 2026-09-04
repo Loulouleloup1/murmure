@@ -155,4 +155,49 @@ public struct VocabularyPromptPlan: Equatable {
     /// A term merged into an identical form is NOT dropped -- it is the same word, and reporting
     /// it as lost would be a lie the interface repeats to the user.
     public let dropped: [VocabularyEntry]
+
+    /// The sentence the pane shows for what `dropped` cost the recogniser, or nil when nothing
+    /// was. **Not scoped to either of the pane's two groups**: `replacement ?? term` is what
+    /// reaches the prompt (this file's own header), so a correction contributes its corrected
+    /// form and costs a slot exactly like a bare term -- both groups feed the one list this caps,
+    /// and the notice must not read as though only one of them were affected.
+    ///
+    /// It DOES still split `dropped` in two, because the two kinds of entry are not left equally
+    /// worse off by losing that slot. **A dropped bare term does nothing at all once it is out**:
+    /// it was pure bias and nothing else, so losing its place in the prompt is the entire loss.
+    /// A dropped correction still finds and replaces in the transcript whether or not it shaped
+    /// what Whisper heard -- saying "it still corrects the text afterwards" about a bare term
+    /// would describe a mechanism that entry never had, which is exactly the sentence this type
+    /// used to build before the two kinds of entry had a name.
+    public var noticeText: String? {
+        guard !dropped.isEmpty else { return nil }
+
+        let words = dropped.filter { !$0.isCorrection }
+        let corrections = dropped.filter(\.isCorrection)
+
+        var sentences: [String] = []
+        if !words.isEmpty {
+            sentences.append(Self.clause(forTermsNamed: words.map(\.term), tail: nil))
+        }
+        if !corrections.isEmpty {
+            sentences.append(
+                Self.clause(
+                    forTermsNamed: corrections.map(\.term),
+                    tail: "it still corrects the text afterwards, just not what gets heard."))
+        }
+        return sentences.joined(separator: " ")
+    }
+
+    /// Up to three names, then a count of the rest -- long enough to act on, short enough to stay
+    /// one line, for either half of `noticeText` above.
+    private static func clause(forTermsNamed terms: [String], tail: String?) -> String {
+        let quoted = terms.map { "\u{201C}\($0)\u{201D}" }
+        let shown = quoted.prefix(3).joined(separator: ", ")
+        let remainder = quoted.count - min(quoted.count, 3)
+        let subject = remainder > 0 ? "\(shown), and \(remainder) more" : shown
+        let verb = quoted.count == 1
+            ? "no longer guides the recogniser" : "no longer guide the recogniser"
+        guard let tail else { return "\(subject) \(verb)." }
+        return "\(subject) \(verb) -- \(tail)"
+    }
 }

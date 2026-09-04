@@ -44,13 +44,6 @@ public enum HotkeyRecordingOutcome: Equatable {
 /// the one place this package converts a foreign bitmask, and is tested there directly against
 /// the real AppKit literals.
 public enum HotkeyRecording {
-    /// `kVK_F1` ... `kVK_F12`, duplicated from `Keycap`'s own table rather than shared: that table
-    /// is `private`, and a public one for this single caller would widen `Keycap`'s surface for
-    /// no reader outside this file.
-    private static let functionKeyCodes: Set<UInt32> = [
-        122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111,
-    ]
-
     public static func evaluate(_ event: CapturedKeyEvent) -> HotkeyRecordingOutcome {
         switch event {
         case .flagsChanged:
@@ -70,7 +63,7 @@ public enum HotkeyRecording {
             if carbonModifiers != 0 {
                 return .accepted(KeyCombo(keyCode: code, carbonModifiers: carbonModifiers))
             }
-            if functionKeyCodes.contains(code) {
+            if KeyCombo.functionKeyCodes.contains(code) {
                 return .accepted(KeyCombo(keyCode: code, carbonModifiers: 0))
             }
             return .refused(

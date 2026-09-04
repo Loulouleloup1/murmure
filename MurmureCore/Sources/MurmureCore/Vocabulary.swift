@@ -38,6 +38,35 @@ public struct VocabularyEntry: Codable, Equatable, Sendable {
             term: trimmedTerm,
             replacement: (trimmedReplacement?.isEmpty ?? true) ? nil : trimmedReplacement)
     }
+
+    /// Whether this entry corrects a mis-hearing rather than merely biasing the recogniser
+    /// toward it -- the one bit `VocabularyGroup` splits the pane's two lists on, and the one
+    /// `VocabularyPromptPlan.noticeText` reads to say what a dropped entry still does. Named here,
+    /// once, rather than as `replacement != nil` at each call site, because that comparison
+    /// carries meaning ("has been corrected before") that reads as an implementation detail
+    /// wherever it is spelled out again.
+    public var isCorrection: Bool { replacement != nil }
+
+    /// `entries` with `self` in place of the existing entry of the same `term`
+    /// (case-insensitive, matching `VocabularyStore.loadAll()`'s own duplicate rule) -- appended
+    /// when there is none.
+    ///
+    /// **The one behaviour a user can hit by accident**, now that the pane draws two input rows
+    /// for what is still one array keyed on `term` alone. Typing a bare "Trucost" into "Words to
+    /// recognise" when a correction already exists for "Trucost" does not add a second row beside
+    /// it -- it REPLACES the correction, moving the term into the other group and losing the
+    /// replacement. This is deliberate, not a gap left over from the single-list pane: a file may
+    /// never hold two entries for one term (`VocabularyStore.loadAll()`'s own duplicate rule,
+    /// "the last one wins"), so upserting immediately does what a reload would collapse the file
+    /// into anyway, rather than leaving a moment where two rows on screen disagree with what a
+    /// save-then-reload would actually keep.
+    public func upserting(into entries: [VocabularyEntry]) -> [VocabularyEntry] {
+        var updated = entries.filter {
+            $0.term.localizedCaseInsensitiveCompare(term) != .orderedSame
+        }
+        updated.append(self)
+        return updated
+    }
 }
 
 /// A vocabulary entry that could not be used, and why. Reported one by one, mirroring

@@ -1,56 +1,87 @@
 import MurmureCore
 import SwiftUI
 
-/// Vocabulary: one input row, then a flat alphabetical two-column list (design notes §1.2).
+/// Vocabulary: two groups, each its own input row and its own alphabetical list -- "Words to
+/// recognise" (a term alone, biasing the recogniser) and "Corrections" (a term and its
+/// replacement, correcting a known mis-hearing both in the prompt and in the transcript
+/// afterwards). Drawn apart on purpose: a single row with an arrow between two fields reads as
+/// one operation ("turn A into B") for entries where there is no B, which is exactly the
+/// affordance `VocabularyEntry`'s bare-term half was missing. `VocabularyGroup` (`MurmureCore`)
+/// is the one place that decides the split, the heading and the empty-state wording; this view
+/// only draws what it is handed.
 ///
 /// **No colour is written in this file.** Every one goes through `Color(role:)`, the same rule
 /// `HistoryPaneView` follows and for the same reason (Q-NB6).
 struct VocabularyPaneView: View {
     @ObservedObject var model: VocabularyPaneModel
 
-    @State private var termField = ""
-    @State private var replacementField = ""
+    @State private var wordField = ""
+    @State private var correctionTermField = ""
+    @State private var correctionReplacementField = ""
     /// Which row the pointer is over. One at a time: the delete affordance is hover-only (design
     /// notes §1.2), so only the row underneath the pointer may show it.
     @State private var hoveredTerm: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            inputRow
             if let banner = model.banner {
                 problemRow(banner)
             }
-            if !droppedEntries.isEmpty {
-                capNotice
+            if let notice = promptPlan.noticeText {
+                capNotice(notice)
             }
-            list
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    group(.wordsToRecognise)
+                    group(.corrections)
+                }
+                .padding(.vertical, 4)
+            }
+            .background(Color(role: .paneBackground))
         }
         .onAppear { model.reload() }
     }
 
-    /// Entries a cap left out of the recogniser's prompt -- NOT the entries merged by
-    /// de-duplication, which `VocabularyPrompt.plan(for:)` already excludes because those are the
-    /// same word twice, not a loss.
-    private var droppedEntries: [VocabularyEntry] {
-        VocabularyPrompt.plan(for: model.entries).dropped
+    /// What a cap left out of the recogniser's prompt, across BOTH groups: `VocabularyPrompt`
+    /// caps the combined ordered list, not either group on its own, so the notice above is shown
+    /// once, spanning both, rather than nested under one of the two headings.
+    private var promptPlan: VocabularyPromptPlan {
+        VocabularyPrompt.plan(for: model.entries)
     }
 
-    // MARK: - The input row
+    // MARK: - One group: heading, input row, list
 
-    /// A term alone, or a term and its replacement -- Return in either field commits both
-    /// (design notes §1.2, as settled for this task). Committing an empty term does nothing.
-    private var inputRow: some View {
-        HStack(spacing: 8) {
-            field("New word", text: $termField)
-            Image(systemName: "arrow.right")
-                .font(.system(size: 10, weight: .semibold))
+    private func group(_ kind: VocabularyGroup) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(kind.heading)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color(role: .secondaryText))
-            field("Replacement (optional)", text: $replacementField)
+                .padding(.horizontal, 16)
+            inputRow(for: kind)
+                .padding(.horizontal, 16)
+            list(for: kind)
         }
-        .padding(16)
     }
 
-    private func field(_ placeholder: String, text: Binding<String>) -> some View {
+    @ViewBuilder
+    private func inputRow(for kind: VocabularyGroup) -> some View {
+        switch kind {
+        case .wordsToRecognise:
+            field("New word", text: $wordField) { commitWord() }
+        case .corrections:
+            HStack(spacing: 8) {
+                field("Mis-heard as", text: $correctionTermField) { commitCorrection() }
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color(role: .secondaryText))
+                field("Should be", text: $correctionReplacementField) { commitCorrection() }
+            }
+        }
+    }
+
+    private func field(_ placeholder: String, text: Binding<String>, onSubmit: @escaping () -> Void)
+        -> some View
+    {
         TextField(placeholder, text: text)
             .textFieldStyle(.plain)
             .font(.system(size: 13, design: .rounded))
@@ -61,40 +92,39 @@ struct VocabularyPaneView: View {
                 RoundedRectangle(cornerRadius: WindowLayout.chipCornerRadius, style: .continuous)
                     .fill(Color(role: .cardBackground))
             )
-            .onSubmit { commit() }
+            .onSubmit(onSubmit)
     }
 
-    private func commit() {
-        guard !termField.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        model.add(term: termField, replacement: replacementField)
-        termField = ""
-        replacementField = ""
+    /// Committing an empty word does nothing -- the input row's placeholder text is not a value.
+    private func commitWord() {
+        guard !wordField.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        model.add(term: wordField, replacement: "")
+        wordField = ""
+    }
+
+    /// Return in either field commits both -- a correction with an empty replacement would just be
+    /// a bare word, so an empty "Should be" is refused here rather than silently downgrading the
+    /// group the user typed into.
+    private func commitCorrection() {
+        let trimmedTerm = correctionTermField.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedReplacement = correctionReplacementField.trimmingCharacters(
+            in: .whitespacesAndNewlines)
+        guard !trimmedTerm.isEmpty, !trimmedReplacement.isEmpty else { return }
+        model.add(term: correctionTermField, replacement: correctionReplacementField)
+        correctionTermField = ""
+        correctionReplacementField = ""
     }
 
     /// Information, not a warning (the cap is deliberate and measured, not a failure): named,
     /// because a user who can see which of their words is not reaching the recogniser can act on
-    /// it, and a sentence about a threshold only leaves them counting rows.
-    private var capNotice: some View {
-        Text(capNoticeText)
+    /// it. Shown once, above both groups -- not scoped to either -- because a correction costs a
+    /// slot in that same prompt exactly like a bare term (`VocabularyPrompt`'s own header).
+    private func capNotice(_ text: String) -> some View {
+        Text(text)
             .font(.system(size: 11, design: .rounded))
             .foregroundStyle(Color(role: .secondaryText))
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
-    }
-
-    /// Up to three names, then a count of the rest -- long enough to act on, short enough to stay
-    /// one line. A dropped entry is not useless: it still finds and replaces once the transcript
-    /// comes back, it has just stopped biasing what gets heard in the first place.
-    private var capNoticeText: String {
-        let names = droppedEntries.map { "\u{201C}\($0.term)\u{201D}" }
-        let shown = names.prefix(3).joined(separator: ", ")
-        let remainder = names.count - min(names.count, 3)
-        let subject = remainder > 0 ? "\(shown), and \(remainder) more" : shown
-        return names.count == 1
-            ? "\(subject) no longer guides the recogniser -- it still corrects the text "
-                + "afterwards, just not what gets heard."
-            : "\(subject) no longer guide the recogniser -- they still correct the text "
-                + "afterwards, just not what gets heard."
     }
 
     private func problemRow(_ problem: String) -> some View {
@@ -111,20 +141,22 @@ struct VocabularyPaneView: View {
         .padding(.bottom, 8)
     }
 
-    // MARK: - The list
+    // MARK: - One group's list
 
-    private var list: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(model.entries, id: \.term) { entry in
-                    row(entry)
-                }
+    private func list(for kind: VocabularyGroup) -> some View {
+        let groupEntries = model.entries(in: kind)
+        return LazyVStack(alignment: .leading, spacing: 2) {
+            ForEach(groupEntries, id: \.term) { entry in
+                row(entry)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
         }
-        .background(Color(role: .paneBackground))
-        .overlay { if let message = model.emptyListMessage { emptyList(message) } }
+        .padding(.horizontal, 12)
+        .frame(minHeight: groupEntries.isEmpty ? 60 : 0)
+        .overlay {
+            if let message = model.emptyListMessage(for: kind) {
+                emptyList(message)
+            }
+        }
     }
 
     /// Left column = the term; a replacement, when there is one, follows an arrow chip in a second
@@ -174,18 +206,19 @@ struct VocabularyPaneView: View {
         .onHover { hovering in hoveredTerm = hovering ? entry.term : nil }
     }
 
-    /// An empty list is two different events -- no file yet, or a file that will not parse -- and
-    /// **which sentence that is is not decided here.** It is `VocabularyEmptyState`, in
-    /// `MurmureCore`, where the parse failure can be produced by writing a real broken file.
+    /// A group's empty list is two different events -- no file yet (or nothing of this group's
+    /// kind), or a file that will not parse -- and **which sentence that is is not decided here.**
+    /// It is `VocabularyEmptyState`, in `MurmureCore`, where the parse failure can be produced by
+    /// writing a real broken file.
     ///
-    /// Centred and measured, like `HistoryPaneView`'s: both sentences run to two lines, and one of
-    /// them names a file.
+    /// Centred and measured, like `HistoryPaneView`'s: both sentences run to two lines.
     private func emptyList(_ message: String) -> some View {
         Text(message)
             .font(.system(size: 12, design: .rounded))
             .foregroundStyle(Color(role: .secondaryText))
             .multilineTextAlignment(.center)
             .frame(maxWidth: 420)
-            .padding(24)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
     }
 }
