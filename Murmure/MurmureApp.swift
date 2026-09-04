@@ -168,7 +168,9 @@ struct MurmureApp: App {
         // where `HotkeyManager` and `settings` already both live.
         _generalModel = StateObject(
             wrappedValue: GeneralPaneModel(
-                settings: settings, rebindToggleHotkey: controller.rebindToggleHotkey))
+                settings: settings, rebindToggleHotkey: controller.rebindToggleHotkey,
+                releaseToggleHotkey: controller.releaseToggleHotkey,
+                restoreToggleHotkey: controller.restoreToggleHotkey))
         // The same store the controller opened and the same recordings folder it resolved — read
         // here rather than resolved again, so the pane's Delete All Recordings and the retention
         // sweep cannot end up pointing at two different directories.

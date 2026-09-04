@@ -13,6 +13,60 @@ final class KeyComboTests: XCTestCase {
         XCTAssertEqual(back, KeyCombo.defaultToggle)
     }
 
+    // MARK: - Modifier-only bindings
+
+    /// A JSON blob shaped exactly like one `AppSettings.toggleHotkey` would have written before
+    /// this feature existed -- the format did not change (no third field, no `kind` case), so a
+    /// domain untouched by a rebind must still decode into the combo it always meant.
+    func testOldFormatJSONStillDecodes() throws {
+        let oldFormatJSON = Data(#"{"keyCode":49,"carbonModifiers":2048}"#.utf8)
+        let combo = try JSONDecoder().decode(KeyCombo.self, from: oldFormatJSON)
+        XCTAssertEqual(combo, KeyCombo.defaultToggle)
+    }
+
+    /// The new shape -- carbonModifiers 0, a modifier key code -- round-trips through the exact
+    /// same Codable conformance as the old one, because it is the same two fields.
+    func testModifierOnlyComboRoundTripsThroughJSON() throws {
+        let rightOption = KeyCombo(keyCode: 61, carbonModifiers: 0) // kVK_RightOption
+        let data = try JSONEncoder().encode(rightOption)
+        let back = try JSONDecoder().decode(KeyCombo.self, from: data)
+        XCTAssertEqual(back, rightOption)
+        XCTAssertTrue(back.isModifierOnly)
+    }
+
+    /// `carbonModifiers == 0` alone is not enough -- a bare function key is also stored that way,
+    /// and the two must not be confused.
+    func testIsModifierOnlyDistinguishesFromABareFunctionKey() {
+        XCTAssertTrue(KeyCombo(keyCode: 61, carbonModifiers: 0).isModifierOnly) // right-⌥
+        XCTAssertFalse(KeyCombo(keyCode: 122, carbonModifiers: 0).isModifierOnly) // bare F1
+        XCTAssertFalse(KeyCombo.defaultToggle.isModifierOnly) // ⌥Space, a real chord
+    }
+
+    // MARK: - Left-hand modifiers
+
+    /// The four keys General warns about, and only those four.
+    func testIsLeftHandModifierOnlyIsTrueForExactlyTheLeftHandFour() {
+        let leftHand: [UInt32] = [55, 56, 58, 59] // ⌘ ⇧ ⌥ ⌃, left
+        let notLeftHand: [UInt32] = [54, 60, 61, 62, 63] // ⌘ ⇧ ⌥ ⌃ right, and fn
+
+        for code in leftHand {
+            XCTAssertTrue(
+                KeyCombo(keyCode: code, carbonModifiers: 0).isLeftHandModifierOnly,
+                "key \(code) should read as left-hand")
+        }
+        for code in notLeftHand {
+            XCTAssertFalse(
+                KeyCombo(keyCode: code, carbonModifiers: 0).isLeftHandModifierOnly,
+                "key \(code) should not read as left-hand")
+        }
+    }
+
+    /// A chord that happens to use the left ⌘'s key code as its non-modifier key is not a
+    /// modifier-only binding at all, so it must not read as left-hand either.
+    func testIsLeftHandModifierOnlyIsFalseForAChord() {
+        XCTAssertFalse(KeyCombo.defaultToggle.isLeftHandModifierOnly) // ⌥Space
+    }
+
     // MARK: - carbonModifierMask(fromAppKitModifierFlags:)
 
     /// `NSEvent.ModifierFlags`' own raw values, spelled out rather than imported -- this package

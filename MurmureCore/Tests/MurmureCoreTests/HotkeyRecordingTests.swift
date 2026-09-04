@@ -14,14 +14,16 @@ final class HotkeyRecordingTests: XCTestCase {
     // MARK: - Modifier-only presses
 
     func testAFlagsChangedEventIsStillPressing() {
+        // kVK_Option -- the physical key this event is for; HotkeyRecording.evaluate itself does
+        // not look at it, only HotkeyRecordingSession does (see HotkeyRecordingSessionTests).
         let outcome = HotkeyRecording.evaluate(
-            .flagsChanged(appKitModifierFlags: AppKitModifierFlag.option))
+            .flagsChanged(keyCode: 58, appKitModifierFlags: AppKitModifierFlag.option))
         XCTAssertEqual(outcome, .stillPressing)
     }
 
     func testAFlagsChangedEventWithNoModifierHeldIsStillStillPressing() {
         // A modifier released back to nothing is still "no key yet", not a refusal.
-        let outcome = HotkeyRecording.evaluate(.flagsChanged(appKitModifierFlags: 0))
+        let outcome = HotkeyRecording.evaluate(.flagsChanged(keyCode: 58, appKitModifierFlags: 0))
         XCTAssertEqual(outcome, .stillPressing)
     }
 

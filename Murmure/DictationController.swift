@@ -629,6 +629,32 @@ final class DictationController {
         return true
     }
 
+    /// Releases the live toggle entirely while `GeneralPaneModel` is capturing a new shortcut.
+    /// Called at the START of a recording, from `GeneralPaneModel.startRecordingHotkey()`.
+    ///
+    /// **Unregisters, rather than merely ignoring what fires** -- an earlier version suspended a
+    /// flag inside `HotkeyManager` and left the live registration untouched, reasoning that a
+    /// Carbon hotkey cannot be un-registered and re-registered mid-recording. That reasoning
+    /// missed the actual consequence: Carbon still CONSUMES the keys of a registered chord before
+    /// they ever reach an `NSEvent` monitor, suspended flag or not -- so recording while the
+    /// CURRENT chord is bound and pressing that same chord produced nothing, reproducing the
+    /// original bug this whole feature exists to fix. Releasing the registration outright, and
+    /// re-registering on every exit (`restoreToggleHotkey()`), is what lets the very keys already
+    /// bound be captured and re-accepted like any other combination.
+    func releaseToggleHotkey() {
+        hotkeys.unregister()
+    }
+
+    /// The other half of `releaseToggleHotkey()` -- called from every exit of
+    /// `GeneralPaneModel.stopRecordingHotkey()`, idempotent, safe even when nothing was released.
+    /// A failure here is the same shape as a launch-time failure -- the old combo is simply gone
+    /// -- so it is reported the same way, through `appState.hotkeyUnavailable`.
+    func restoreToggleHotkey() {
+        guard !registerToggle(settings.toggleHotkey) else { return }
+        log.fault("toggle hotkey restore FAILED after a recording closed -- Murmure has no working toggle")
+        appState.hotkeyUnavailable = true
+    }
+
     /// History's "Process again" (D12): a stored transcript, a mode, and the refinement that
     /// comes back — **re-refine only, never re-transcribe.**
     ///

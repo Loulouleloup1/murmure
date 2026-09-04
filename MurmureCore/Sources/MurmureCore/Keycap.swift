@@ -134,6 +134,7 @@ extension KeyCombo {
         123: "←", 124: "→", 125: "↓", 126: "↑",
     ]
     .merging(functionKeyLabels) { _, new in new }
+    .merging(modifierKeyLabels) { _, new in new }
 
     /// `kVK_F1` ... `kVK_F12`, split out of ``namedKeys`` rather than inlined there, so
     /// ``functionKeyCodes`` below and ``HotkeyRecording``'s "bindable bare" rule can both be
@@ -149,4 +150,19 @@ extension KeyCombo {
     /// wider than that: exposing the code/label pairing itself is unneeded outside this file, only
     /// the set of codes is.
     public static let functionKeyCodes: Set<UInt32> = Set(functionKeyLabels.keys)
+
+    /// Labels for a modifier key bound on its own -- ``KeyCombo/isModifierOnly``. Split out like
+    /// ``functionKeyLabels`` above, and for the same reason: one table these keys are named from,
+    /// not a second copy of the same nine numbers that could drift from ``KeyCombo/modifierKeyCodes``.
+    ///
+    /// **Left and right spelled out.** macOS's own System Settings does this for exactly the
+    /// gesture this exists for -- Superwhisper's right-⌥ -- and a bare "⌥" chip would leave Louis
+    /// unable to tell which physical key a modifier-only binding actually names.
+    private static let modifierKeyLabels: [UInt32: String] = [
+        54: "Right ⌘", 55: "Left ⌘",
+        56: "Left ⇧", 60: "Right ⇧",
+        58: "Left ⌥", 61: "Right ⌥",
+        59: "Left ⌃", 62: "Right ⌃",
+        63: "fn",
+    ]
 }

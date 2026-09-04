@@ -105,6 +105,22 @@ final class KeycapTests: XCTestCase {
         XCTAssertEqual(Keycap.glyphWidth, Keycap.height)
     }
 
+    // MARK: - Modifier-only bindings
+
+    /// The gesture this whole feature exists for: right-⌥, tapped alone, drawn as one word chip
+    /// naming the physical side -- not a bare "⌥" that could mean either key.
+    func testAModifierOnlyBindingRendersAsOneWordChip() {
+        let rightOption = KeyCombo(keyCode: 61, carbonModifiers: 0)
+        XCTAssertEqual(rightOption.keycaps, [Keycap("Right ⌥")])
+        XCTAssertEqual(rightOption.keycaps[0].shape, .word)
+    }
+
+    /// fn has no left/right pair, so it is the one modifier-only chip with no "Left"/"Right"
+    /// prefix -- the same lowercase legend macOS itself uses for the key.
+    func testFnTapRendersAsFn() {
+        XCTAssertEqual(KeyCombo(keyCode: 63, carbonModifiers: 0).keycaps, [Keycap("fn")])
+    }
+
     // MARK: - Keys with no name
 
     /// A key code the table does not know still produces a visible chip. A shortcut that rendered
