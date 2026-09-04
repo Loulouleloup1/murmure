@@ -231,10 +231,21 @@ struct ModesPaneView: View {
                 if draft.mode.llm.enabled {
                     field("Refiner model", text: text(\.llm.model),
                           placeholder: "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M")
+                    // The note is the fix for Louis opening `Prompt`, reading
+                    // `"[Context: general]"` and concluding there was no prompt at all: under
+                    // `api: .s1` this field is a control line the model copies rather than reads,
+                    // and that has to be readable right here, not only in `apiPicker`'s note on
+                    // the other screen.
                     field("Instructions", text: text(\.instructions),
                           placeholder: draft.mode.llm.api == .s1
                               ? "[Context: general]" : "Clean up the transcript.",
+                          note: draft.mode.llm.api == .s1
+                              ? "A control line for the s1 model (bracketed fields only, e.g. "
+                                  + "\u{201C}[Context: general]\u{201D}) -- the model copies this "
+                                  + "into its answer instead of following it."
+                              : "The written prompt sent to the refiner model as its system turn.",
                           lines: 2...6)
+                    contextGroup(draft)
                 }
 
                 advancedButton(draft)
@@ -325,7 +336,10 @@ struct ModesPaneView: View {
                               placeholder: "com.googlecode.iterm2, com.apple.Terminal",
                               note: "Bundle ids, comma-separated. This mode is picked when one of "
                                   + "them is frontmost.")
-                        contextToggles
+                        // The three context toggles moved to the basic editor, next to
+                        // `Instructions` -- they are what feeds that field's system turn, and
+                        // that is where their consequence (or, under `api: .s1`, their absence
+                        // of one) is visible. See `contextGroup(_:)`.
                         // **No `simulateKeypresses` row, and it is not an omission.** Nothing
                         // reads the field: `PasteInserter.insert()` always builds ⌘V events,
                         // whatever the mode says. A switch for a behaviour that does not exist
@@ -401,12 +415,30 @@ struct ModesPaneView: View {
     }
 
     /// The three context sources, as three toggles and not one control: they are independent, and
-    /// spec §5 stores them that way.
-    private var contextToggles: some View {
-        VStack(alignment: .leading, spacing: ModesLayout.fieldSpacing) {
-            toggle("Selected text", isOn: flag(\.context.selectedText))
-            toggle("Clipboard", isOn: flag(\.context.clipboard))
-            toggle("Frontmost app", isOn: flag(\.context.appContext))
+    /// spec §5 stores them that way. What they feed is `RefinementRequest.systemTurn`, assembled
+    /// from whatever `Instructions` holds plus whichever of these is on -- which is why this sits
+    /// right under that field rather than on the advanced screen where it used to live.
+    ///
+    /// **Shown and DISABLED under `api: .s1`, never hidden.** An `s1` mode's instructions are a
+    /// control line the model copies into its answer rather than reads (`Mode/LLM/API/s1`), so
+    /// there is nowhere for a selection, a clipboard or an app name to go -- `RefinementRequest`
+    /// already refuses to fold them in for that api. Hiding the row would read as a missing
+    /// feature; disabling it with a reason says what it is instead: a control that does nothing
+    /// here, not a control that was never built.
+    private func contextGroup(_ draft: ModeDraft) -> some View {
+        let disabledForS1 = draft.mode.llm.api == .s1
+        return VStack(alignment: .leading, spacing: ModesLayout.fieldSpacing) {
+            toggle("Selected text", isOn: flag(\.context.selectedText), disabled: disabledForS1)
+            toggle("Clipboard", isOn: flag(\.context.clipboard), disabled: disabledForS1)
+            toggle("Frontmost app", isOn: flag(\.context.appContext), disabled: disabledForS1)
+            if disabledForS1 {
+                Text("Not available on s1 -- its instructions are a control line the model copies "
+                    + "into its answer rather than reads, so there is nowhere for this context to "
+                    + "go. Switch \u{201C}Refiner API\u{201D} to chat on Advanced to use it.")
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(Color(role: .secondaryText))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -523,13 +555,14 @@ struct ModesPaneView: View {
         }
     }
 
-    private func toggle(_ label: String, isOn: Binding<Bool>) -> some View {
+    private func toggle(_ label: String, isOn: Binding<Bool>, disabled: Bool = false) -> some View {
         labelled(label, note: nil) {
             Toggle("", isOn: isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .disabled(disabled)
         }
     }
 

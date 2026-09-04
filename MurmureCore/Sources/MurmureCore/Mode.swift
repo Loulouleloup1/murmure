@@ -339,7 +339,12 @@ extension Mode {
     )
 
     /// Spec §3: large-v3-turbo for live dictation.
-    private static let defaultSTTModel = "large-v3-turbo"
+    ///
+    /// Not `private` any more: ``SpeechModelResolution`` reads this exact string to recognise
+    /// "this mode file still carries the shipped default" without a second copy of it -- two
+    /// literals in two files are two rules that can drift apart silently, the reason
+    /// ``ModelInventory/requiredBundles`` gives for the same choice.
+    static let defaultSTTModel = "large-v3-turbo"
 
     /// Pinned, not `"auto"`. Measured on the whole 1 449-dictation corpus: `detectLanguage` is
     /// re-evaluated per window and produced 9 non-Latin transcripts plus unseen language switches,

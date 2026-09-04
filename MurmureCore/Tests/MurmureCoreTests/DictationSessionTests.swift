@@ -78,26 +78,37 @@ private final class FakeTranscriber: Transcriber, @unchecked Sendable {
     /// the transcription and nothing else, on the failing path as well as the succeeding one.
     var onCall: (() -> Void)?
 
+    /// What `transcribe` reports as the model that ran. `nil` -- the default -- echoes back
+    /// whatever `model` it was called with, the ordinary case where the engine honoured the
+    /// mode's request. Set to a fixed string to simulate the engine falling back to a different
+    /// model than the one asked for.
+    var runningModel: String?
+
     /// One dictation's worth of what `transcribe` was called with.
     struct Call: Equatable {
         var language: String
+        var model: String
         var initialPrompt: String?
     }
 
     private let lock = NSLock()
     private var storage: [Call] = []
 
-    init(result: Result<String, Error>, onCall: (() -> Void)? = nil) {
+    init(result: Result<String, Error>, onCall: (() -> Void)? = nil, runningModel: String? = nil) {
         self.result = result
         self.onCall = onCall
+        self.runningModel = runningModel
     }
 
     var calls: [Call] { lock.withLock { storage } }
 
-    func transcribe(wav: URL, language: String, initialPrompt: String?) async throws -> String {
-        lock.withLock { storage.append(Call(language: language, initialPrompt: initialPrompt)) }
+    func transcribe(
+        wav: URL, language: String, model: String, initialPrompt: String?
+    ) async throws -> TranscriptionOutcome {
+        lock.withLock { storage.append(Call(language: language, model: model, initialPrompt: initialPrompt)) }
         onCall?()
-        return try result.get()
+        let text = try result.get()
+        return TranscriptionOutcome(text: text, model: runningModel ?? model)
     }
 }
 
@@ -136,6 +147,11 @@ private final class SpyRefiner: DictationRefining, @unchecked Sendable {
         /// Every transcript actually handed to the model. Empty is the assertion that matters:
         /// it is how a test proves a call never left.
         var refined: [String] = []
+        /// The mode `refine` actually received for each call, in order -- `DictationSession`
+        /// hands this the mode `RefinementRequest` produced, not `activeMode` itself, so this is
+        /// where a test reads whether the toggled context actually reached what would have been
+        /// sent to Ollama.
+        var refinedModes: [Mode] = []
     }
 
     private let lock = NSLock()
@@ -164,8 +180,45 @@ private final class SpyRefiner: DictationRefining, @unchecked Sendable {
     func refine(_ transcript: String, with mode: Mode) async -> String {
         lock.lock()
         storage.refined.append(transcript)
+        storage.refinedModes.append(mode)
         lock.unlock()
         return answer(transcript)
+    }
+}
+
+/// The context-capture seam, answering fixed strings and counting how often each of the two
+/// AppKit-only reads was actually made.
+///
+/// Defaults to nil for both -- the same "refines nothing until told to" default `SpyRefiner`
+/// picks, so a test that never mentions context keeps exercising the pipeline it was written
+/// about.
+private final class SpyContextCapture: ContextCapturing, @unchecked Sendable {
+    var selectedText: String?
+    var clipboard: String?
+
+    private let lock = NSLock()
+    private var selectedTextCalls = 0
+    private var clipboardCalls = 0
+
+    init(selectedText: String? = nil, clipboard: String? = nil) {
+        self.selectedText = selectedText
+        self.clipboard = clipboard
+    }
+
+    /// How many times each read was actually made -- the proof that `DictationSession` skips a
+    /// read the mode's own toggle did not ask for, not only that it filters the answer afterwards.
+    var calls: (selectedText: Int, clipboard: Int) {
+        lock.withLock { (selectedTextCalls, clipboardCalls) }
+    }
+
+    func captureSelectedText() async -> String? {
+        lock.withLock { selectedTextCalls += 1 }
+        return selectedText
+    }
+
+    func captureClipboard() async -> String? {
+        lock.withLock { clipboardCalls += 1 }
+        return clipboard
     }
 }
 
@@ -248,7 +301,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("bonjour murmure")),
             inserter: inserter, refiner: SpyRefiner(),
-            recording: SpyRecording(), vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle() // start
         let recordingState = await session.state
@@ -266,7 +320,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .failure(TestError())),
             inserter: inserter, refiner: SpyRefiner(),
-            recording: SpyRecording(), vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -284,7 +339,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("texte précieux")),
             inserter: inserter, refiner: SpyRefiner(),
-            recording: SpyRecording(), vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -304,7 +360,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: SpyRefiner(),
-            recording: SpyRecording(), vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -321,7 +378,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(frames: 0),
             transcriber: FakeTranscriber(result: .success("hallucination sur du silence")),
             inserter: inserter, refiner: SpyRefiner(),
-            recording: SpyRecording(), vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -341,7 +399,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: inserter, refiner: SpyRefiner(),
-            recording: SpyRecording(), vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -360,7 +419,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("première dictée")),
             inserter: inserter, refiner: SpyRefiner(),
-            recording: SpyRecording(), vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -371,7 +431,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .failure(TestError())),
             inserter: inserter, refiner: SpyRefiner(),
-            recording: SpyRecording(), vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await failing.toggle()
         await failing.toggle()
@@ -388,6 +449,7 @@ final class DictationSessionTests: XCTestCase {
             transcriber: FakeTranscriber(result: .success("bonjour")),
             inserter: SpyInserter(), refiner: SpyRefiner(),
             recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(),
             onStateChange: { states.append($0) }
         )
         await session.toggle()
@@ -410,7 +472,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(), transcriber: transcriber,
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: SpyRecording(),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle() // start
         async let pipeline: Void = session.toggle() // stop; blocks inside the transcriber
@@ -440,7 +503,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success(raw)),
             inserter: inserter, refiner: refiner, recording: SpyRecording(),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -457,7 +521,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("bonjour")),
             inserter: SpyInserter(), refiner: refiner, recording: SpyRecording(),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle() // start
         XCTAssertEqual(refiner.calls.modeResolutions, 1, "the mode is resolved at the start")
@@ -475,7 +540,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: refiner, recording: SpyRecording(),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         guard case .failed = await session.state else { return XCTFail("expected failed state") }
@@ -491,7 +557,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("euh bonjour")),
             inserter: inserter, refiner: refiner, recording: SpyRecording(),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -511,6 +578,7 @@ final class DictationSessionTests: XCTestCase {
             transcriber: FakeTranscriber(result: .success("euh bonjour")),
             inserter: SpyInserter(), refiner: SpyRefiner(mode: .prompt),
             recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(),
             onStateChange: { states.append($0) }
         )
         await session.toggle()
@@ -533,7 +601,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("")),
             inserter: inserter, refiner: refiner, recording: SpyRecording(),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -550,7 +619,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success(" \n \t ")),
             inserter: inserter, refiner: refiner, recording: SpyRecording(),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -581,6 +651,7 @@ final class DictationSessionTests: XCTestCase {
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: refiner,
             recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(),
             onStateChange: { states.append($0) }
         )
         async let firstPress: Void = session.toggle()
@@ -615,6 +686,7 @@ final class DictationSessionTests: XCTestCase {
             transcriber: FakeTranscriber(result: .success("bonjour murmure")),
             inserter: SpyInserter(), refiner: SpyRefiner(),
             recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(),
             onStateChange: { states.append($0) }
         )
         await session.toggle()
@@ -635,6 +707,7 @@ final class DictationSessionTests: XCTestCase {
             transcriber: FakeTranscriber(result: .success("hallucination sur du silence")),
             inserter: inserter, refiner: SpyRefiner(),
             recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(),
             onStateChange: { states.append($0) }
         )
         await session.toggle()
@@ -653,6 +726,7 @@ final class DictationSessionTests: XCTestCase {
             transcriber: FakeTranscriber(result: .success("")),
             inserter: SpyInserter(), refiner: SpyRefiner(),
             recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(),
             onStateChange: { states.append($0) }
         )
         await session.toggle()
@@ -674,6 +748,7 @@ final class DictationSessionTests: XCTestCase {
             inserter: inserter,
             refiner: SpyRefiner(mode: .prompt, answer: { "reformulé : \($0)" }),
             recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(),
             onStateChange: { states.append($0) }
         )
         await session.toggle()
@@ -695,6 +770,7 @@ final class DictationSessionTests: XCTestCase {
             transcriber: FakeTranscriber(result: .failure(TestError())),
             inserter: inserter, refiner: SpyRefiner(),
             recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(),
             onStateChange: { states.append($0) }
         )
         await session.toggle()
@@ -721,6 +797,7 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(), transcriber: FakeTranscriber(result: .success("bonjour")),
             inserter: SpyInserter(), refiner: SpyRefiner(),
             recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(),
             onStateChange: { states.append($0) }
         )
         await session.toggle()
@@ -740,7 +817,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: SpyRecording(),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.cancel()
@@ -756,7 +834,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: SpyRecording(),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.cancel()
@@ -775,6 +854,7 @@ final class DictationSessionTests: XCTestCase {
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: SpyRefiner(),
             recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(),
             onStateChange: { states.append($0) }
         )
         await session.cancel()
@@ -794,7 +874,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(), transcriber: transcriber,
             inserter: inserter, refiner: SpyRefiner(), recording: SpyRecording(),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle() // start
         async let pipeline: Void = session.toggle() // stop; blocks inside the transcriber
@@ -818,7 +899,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("première dictée")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: SpyRecording(),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -840,7 +922,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("une phrase inventée")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -854,7 +937,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("une phrase inventée")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -878,7 +962,8 @@ final class DictationSessionTests: XCTestCase {
             transcriber: FakeTranscriber(result: .success("euh une phrase inventée")),
             inserter: SpyInserter(),
             refiner: SpyRefiner(mode: .prompt, answer: { "reformulé : \($0)" }),
-            recording: recording, vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            recording: recording, vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -905,7 +990,7 @@ final class DictationSessionTests: XCTestCase {
             // The shape of a `TranscriptRefiner` that fell back: Ollama was down, so what comes
             // back is exactly what went in.
             refiner: SpyRefiner(mode: .prompt, answer: { clock.advance(3); return $0 }),
-            recording: recording, vocabulary: FakeVocabulary(),
+            recording: recording, vocabulary: FakeVocabulary(), contextCapture: SpyContextCapture(),
             now: { clock.now }, onStateChange: { _ in }
         )
         await session.toggle()
@@ -924,7 +1009,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("une phrase inventée")),
             inserter: SpyInserter(), refiner: SpyRefiner(mode: .voice), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -946,7 +1032,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("hallucination sur du silence")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), now: { clock.now }, onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), now: { clock.now }, onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -968,7 +1055,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success(""), onCall: { clock.advance(2) }),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), now: { clock.now }, onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), now: { clock.now }, onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -989,7 +1077,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .failure(ModelMissing())),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -1013,7 +1102,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("texte inventé et précieux")),
             inserter: inserter, refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -1038,7 +1128,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), now: { clock.now }, onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), now: { clock.now }, onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -1059,7 +1150,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -1082,7 +1174,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), now: { clock.now }, onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), now: { clock.now }, onStateChange: { _ in }
         )
         await session.toggle()
         await session.cancel()
@@ -1106,7 +1199,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.cancel()
         XCTAssertEqual(recording.records, [])
@@ -1130,7 +1224,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: refiner, recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         XCTAssertEqual(recording.records, [])
@@ -1160,7 +1255,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("jamais atteint")),
             inserter: SpyInserter(), refiner: refiner, recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { states.append($0) }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { states.append($0) }
         )
 
         await session.toggle()
@@ -1195,7 +1291,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("une phrase inventée")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
 
         await session.toggle()
@@ -1214,7 +1311,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("une phrase inventée")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: SpyRecording(target: .unknown),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
 
         await session.toggle()
@@ -1231,7 +1329,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(), transcriber: transcriber,
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         async let pipeline: Void = session.toggle()
@@ -1256,7 +1355,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("une phrase inventée")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle() // start -- Louis is in his editor
         XCTAssertEqual(recording.targetResolutions, 1, "the target is read at the start")
@@ -1285,7 +1385,7 @@ final class DictationSessionTests: XCTestCase {
             inserter: SpyInserter(),
             refiner: SpyRefiner(
                 mode: .prompt, answer: { _ in clock.advance(3); return "reformulé" }),
-            recording: recording, vocabulary: FakeVocabulary(),
+            recording: recording, vocabulary: FakeVocabulary(), contextCapture: SpyContextCapture(),
             now: { clock.now }, onStateChange: { _ in }
         )
         await session.toggle()
@@ -1310,7 +1410,8 @@ final class DictationSessionTests: XCTestCase {
             transcriber: FakeTranscriber(
                 result: .success("une phrase inventée"), onCall: { clock.advance(2) }),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), now: { clock.now }, onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), now: { clock.now }, onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -1328,7 +1429,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: recorder,
             transcriber: FakeTranscriber(result: .success("une phrase inventée")),
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -1358,7 +1460,7 @@ final class DictationSessionTests: XCTestCase {
             inserter: SpyInserter(),
             refiner: SpyRefiner(
                 mode: .prompt, answer: { clock.advance(3); return "reformulé : \($0)" }),
-            recording: recording, vocabulary: FakeVocabulary(),
+            recording: recording, vocabulary: FakeVocabulary(), contextCapture: SpyContextCapture(),
             now: { clock.now }, onStateChange: { _ in }
         )
         await session.toggle()
@@ -1390,12 +1492,58 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(), transcriber: transcriber,
             inserter: SpyInserter(), refiner: SpyRefiner(mode: englishMode),
-            recording: SpyRecording(), vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
 
         XCTAssertEqual(transcriber.calls.map(\.language), ["en"])
+    }
+
+    /// `Mode.stt.model`'s counterpart to the test above: the transcriber must see the ACTIVE
+    /// mode's own variant, never a constant compiled into the engine. This is the seam the
+    /// original defect lived in -- `Mode.stt.model` was written to history and read by nobody, so
+    /// a mode naming a different variant transcribed on the same model as every other mode while
+    /// its history row claimed otherwise. A mode with a variant that is neither blank nor the
+    /// shipped default is what proves the value travelled rather than being silently discarded.
+    func testTheModelReachingTheTranscriberIsTheActiveModesNotAConstant() async {
+        var namedVariantMode = Mode.voice
+        namedVariantMode.stt = .init(model: "openai_whisper-tiny", language: "fr")
+        let transcriber = FakeTranscriber(result: .success("hello"))
+        let session = DictationSession(
+            recorder: FakeRecorder(), transcriber: transcriber,
+            inserter: SpyInserter(), refiner: SpyRefiner(mode: namedVariantMode),
+            recording: SpyRecording(), vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+
+        XCTAssertEqual(transcriber.calls.map(\.model), ["openai_whisper-tiny"])
+    }
+
+    /// The history row names what the engine actually ran, not what the mode asked for, when the
+    /// two disagree -- `TranscriptionOutcome.model` is what `archive` must use, and reading
+    /// `activeMode.stt.model` a second time there would silently paper back over a real fallback.
+    func testHistoryRecordsTheModelThatActuallyRanRatherThanWhatWasAsked() async {
+        var namedVariantMode = Mode.voice
+        namedVariantMode.stt = .init(model: "openai_whisper-tiny", language: "fr")
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(
+                result: .success("bonjour"), runningModel: "openai_whisper-large-v3-v20240930_turbo"),
+            inserter: SpyInserter(), refiner: SpyRefiner(mode: namedVariantMode), recording: recording,
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+
+        guard let row = recording.records.first else { return XCTFail("no record written") }
+        XCTAssertEqual(row.sttModel, "openai_whisper-large-v3-v20240930_turbo")
+        XCTAssertNotEqual(row.sttModel, namedVariantMode.stt.model)
     }
 
     /// `initialPrompt` is `VocabularyPrompt.build(from:)`'s answer for the entries the provider
@@ -1408,7 +1556,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(), transcriber: transcriber,
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: SpyRecording(),
-            vocabulary: FakeVocabulary(entries: entries), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(entries: entries),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -1425,7 +1574,8 @@ final class DictationSessionTests: XCTestCase {
         let session = DictationSession(
             recorder: FakeRecorder(), transcriber: transcriber,
             inserter: SpyInserter(), refiner: SpyRefiner(), recording: SpyRecording(),
-            vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -1444,7 +1594,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("open cloud code now")),
             inserter: SpyInserter(), refiner: refiner, recording: SpyRecording(),
-            vocabulary: FakeVocabulary(entries: entries), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(entries: entries),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -1467,7 +1618,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("open cloud code now")),
             inserter: inserter, refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(entries: entries), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(entries: entries),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -1495,7 +1647,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("open cloud code now")),
             inserter: SpyInserter(), refiner: refiner, recording: recording,
-            vocabulary: FakeVocabulary(entries: entries), onStateChange: { _ in }
+            vocabulary: FakeVocabulary(entries: entries),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle()
         await session.toggle()
@@ -1530,7 +1683,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("on relance le pipeline demain matin")),
             inserter: inserter, refiner: SpyRefiner(),
-            recording: archive, vocabulary: FakeVocabulary(), onStateChange: { _ in }
+            recording: archive, vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
         )
         await session.toggle() // start
         await session.toggle() // stop + pipeline
@@ -1569,7 +1723,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("bonjour murmure")),
             inserter: inserter, refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { states.append($0) }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { states.append($0) }
         )
 
         await session.toggle()
@@ -1621,7 +1776,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("bonjour murmure")),
             inserter: inserter, refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { states.append($0) }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { states.append($0) }
         )
 
         await session.toggle()
@@ -1655,7 +1811,8 @@ final class DictationSessionTests: XCTestCase {
             recorder: FakeRecorder(),
             transcriber: FakeTranscriber(result: .success("")),
             inserter: inserter, refiner: SpyRefiner(), recording: recording,
-            vocabulary: FakeVocabulary(), onStateChange: { states.append($0) }
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { states.append($0) }
         )
 
         await session.toggle()
@@ -1682,6 +1839,125 @@ final class DictationSessionTests: XCTestCase {
             previous = state
         }
         return labels
+    }
+
+    // MARK: - Context: the toggles Mode.Context stores actually reach the refiner
+
+    /// A `.chat` mode with `selectedText` on. Its own factory so the two tests below differ by
+    /// exactly one field -- the toggle -- everything else held equal.
+    private func chatModeWithSelectedText(_ on: Bool) -> Mode {
+        var mode = Mode.voice
+        mode.llm = .init(
+            enabled: true, endpoint: "http://localhost:11434", model: "gemma4:12b-it-qat",
+            api: .chat)
+        mode.instructions = "Clean up the transcript."
+        mode.context = .init(selectedText: on, clipboard: false, appContext: false)
+        return mode
+    }
+
+    /// **The test that would have caught the bug this whole lot exists to fix.** Before this lot,
+    /// `Mode.Context`'s three fields were drawn as toggles and read by nothing: this proves the
+    /// opposite, end to end, through the real session rather than through `RefinementRequest`
+    /// alone -- a break anywhere between the toggle and the model (the capture step skipping the
+    /// read, or the assembly ignoring the toggle) fails this.
+    ///
+    /// Mutate `DictationSession.captureContext(for:target:using:)` to read
+    /// `capture.captureSelectedText()` unconditionally, instead of gating it on
+    /// `mode.context.selectedText`, and `testSelectedTextToggleOffNeverReachesTheRefiner` below
+    /// goes red while this one stays green -- which is exactly the asymmetry a silent-default bug
+    /// would produce.
+    func testSelectedTextToggleOnReachesTheRefinerAsLabelledContext() async {
+        let refiner = SpyRefiner(mode: chatModeWithSelectedText(true))
+        let capture = SpyContextCapture(selectedText: "Bonjour, voici le paragraphe à revoir.")
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("dictée réelle")),
+            inserter: SpyInserter(), refiner: refiner, recording: SpyRecording(),
+            vocabulary: FakeVocabulary(), contextCapture: capture, onStateChange: { _ in }
+        )
+
+        await session.toggle() // start -- captures context here
+        await session.toggle() // stop -- refines with what was captured
+
+        guard let sent = refiner.calls.refinedModes.first else {
+            return XCTFail("refine was never called")
+        }
+        XCTAssertTrue(sent.instructions.contains("Bonjour, voici le paragraphe à revoir."))
+        XCTAssertTrue(sent.instructions.contains("Selected text:"))
+        XCTAssertEqual(capture.calls.selectedText, 1)
+    }
+
+    /// The other half of the pair: toggle OFF, same captured value available -- it must never
+    /// reach the mode `refine` receives, and the read must never even happen.
+    func testSelectedTextToggleOffNeverReachesTheRefiner() async {
+        let refiner = SpyRefiner(mode: chatModeWithSelectedText(false))
+        let capture = SpyContextCapture(selectedText: "Bonjour, voici le paragraphe à revoir.")
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("dictée réelle")),
+            inserter: SpyInserter(), refiner: refiner, recording: SpyRecording(),
+            vocabulary: FakeVocabulary(), contextCapture: capture, onStateChange: { _ in }
+        )
+
+        await session.toggle()
+        await session.toggle()
+
+        guard let sent = refiner.calls.refinedModes.first else {
+            return XCTFail("refine was never called")
+        }
+        XCTAssertEqual(sent.instructions, "Clean up the transcript.")
+        XCTAssertFalse(sent.instructions.contains("Bonjour"))
+        XCTAssertEqual(
+            capture.calls.selectedText, 0, "toggle off must skip the read, not filter it")
+    }
+
+    /// Captured at the moment the recording STARTS, not re-read at any later point -- the same
+    /// rule `target` and `activeMode` already follow. The capture double is mutated mid-pipeline,
+    /// standing in for "Louis changed his selection while the refiner was still running"; what
+    /// reaches `refine` must be the value that was true when he pressed the key.
+    func testContextIsCapturedAtRecordingStartNotAtRefinementTime() async {
+        let refiner = SpyRefiner(mode: chatModeWithSelectedText(true))
+        let capture = SpyContextCapture(selectedText: "au moment du press")
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("dictée réelle")),
+            inserter: SpyInserter(), refiner: refiner, recording: SpyRecording(),
+            vocabulary: FakeVocabulary(), contextCapture: capture, onStateChange: { _ in }
+        )
+
+        await session.toggle() // start -- reads "au moment du press"
+        // Louis's selection changes while the (real) refiner would still be running.
+        capture.selectedText = "changé pendant le traitement"
+        await session.toggle() // stop -- must refine with the value captured at the press
+
+        guard let sent = refiner.calls.refinedModes.first else {
+            return XCTFail("refine was never called")
+        }
+        XCTAssertTrue(sent.instructions.contains("au moment du press"))
+        XCTAssertFalse(sent.instructions.contains("changé pendant le traitement"))
+    }
+
+    /// A mode with its refiner off, or speaking `s1`, must never touch the Accessibility API or
+    /// the pasteboard at all -- not read them and discard the answer, actually skip the call. Both
+    /// are true privacy properties (nothing about Louis's selection or clipboard is read for a
+    /// dictation that could never use it) and true cost properties (an `s1` dictation never pays
+    /// for an AX round trip it cannot use).
+    func testCaptureIsSkippedEntirelyWhenTheModeCannotUseIt() async {
+        var s1Mode = chatModeWithSelectedText(true)
+        s1Mode.llm.api = .s1
+        s1Mode.instructions = "[Context: general]"
+        let capture = SpyContextCapture(selectedText: "ne doit jamais être lu")
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("dictée réelle")),
+            inserter: SpyInserter(), refiner: SpyRefiner(mode: s1Mode), recording: SpyRecording(),
+            vocabulary: FakeVocabulary(), contextCapture: capture, onStateChange: { _ in }
+        )
+
+        await session.toggle()
+        await session.toggle()
+
+        XCTAssertEqual(capture.calls.selectedText, 0)
     }
 }
 
@@ -1719,11 +1995,14 @@ private actor GatedTranscriber: Transcriber {
     private var release: CheckedContinuation<String, Never>?
     private var hasEntered = false
 
-    func transcribe(wav: URL, language: String, initialPrompt: String?) async -> String {
+    func transcribe(
+        wav: URL, language: String, model: String, initialPrompt: String?
+    ) async -> TranscriptionOutcome {
         hasEntered = true
         entered?.resume()
         entered = nil
-        return await withCheckedContinuation { release = $0 }
+        let text = await withCheckedContinuation { release = $0 }
+        return TranscriptionOutcome(text: text, model: model)
     }
 
     func waitUntilTranscribing() async {

@@ -22,9 +22,10 @@ import MurmureCore
 /// `downloadBase`, `modelFolder`, every argument of `WhisperKit.init` -- in a second place that has
 /// to stay in step with `WhisperKitEngine.load` and cannot be made to, and a warm-up that compiles a
 /// *different* configuration warms nothing while reporting that it did. Going through
-/// `WhisperKitEngine.prepare()` reaches `loadedKit()`, which is the same private function
-/// `transcribe` reaches and therefore the file's single `WhisperKit(...)` expression. Not arguments
-/// that match: the same call. There is nothing left to keep in step.
+/// `WhisperKitEngine.prepare()` reaches `loadedKit(for:)`, which is the same private function
+/// `transcribe` reaches and therefore the file's single `WhisperKit(...)` expression -- with
+/// `dictationModel` for the variant, the one `prepare()` always asks for. Not arguments that
+/// match: the same call. There is nothing left to keep in step.
 ///
 /// **What is NOT a reason, having been measured rather than assumed.** A first draft of this note
 /// argued that a separately-built helper would compile into an artefact the real app could not

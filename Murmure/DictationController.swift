@@ -293,7 +293,8 @@ final class DictationController {
             inserter: inserter,
             refiner: ModeAwareRefinement(modesDirectory: modesDirectory, appState: appState),
             recording: DictationArchive(store: history, appState: appState),
-            vocabulary: VocabularyProvider(fileURL: vocabularyFileURL)
+            vocabulary: VocabularyProvider(fileURL: vocabularyFileURL),
+            contextCapture: AppKitContextCapture()
         ) { state in
             // **Stamped HERE, and the position of this line is the whole of the guarantee.** It
             // runs synchronously inside `DictationSession`'s actor, in the order the states are

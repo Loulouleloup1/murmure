@@ -83,6 +83,11 @@ public struct HistoryRecord: Codable, Equatable, Sendable {
     /// be renamed, rekeyed or deleted, and a row that can only say `modeKey = "prompt"` for a file
     /// that no longer exists is a row that cannot be read.
     public var modeName: String
+    /// The speech model that actually transcribed this dictation -- `TranscriptionOutcome.model`,
+    /// not `Mode.stt.model` re-read. The two agree whenever the engine could honour what the mode
+    /// asked for; when it could not (an unresolvable variant), this is the model that ran, and the
+    /// mode's own field is not repeated here as a second, silently wrong, answer to the same
+    /// question.
     public var sttModel: String
     /// `nil` when the mode had no refiner.
     public var llmModel: String?

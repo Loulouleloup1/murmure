@@ -5,8 +5,15 @@ import WhisperKit
 
 private let logger = Logger(subsystem: "com.louiscourcier.Murmure", category: "transcription")
 
-/// WhisperKit-backed speech-to-text. Downloads large-v3-turbo into
+/// WhisperKit-backed speech-to-text. Downloads a mode's speech model into
 /// `Application Support/Murmure/models` on first use and keeps it loaded afterwards.
+///
+/// **One variant loaded at a time.** ``dictationModel`` is the default for a mode that names
+/// nothing usable (see ``SpeechModelResolution``), not the only model this engine can run any
+/// more -- but the memory budget this app was built for (a second Mac with 16 GB, not 16 GB free)
+/// has no room for two large speech models resident together, so switching variant releases
+/// whichever one was loaded before. See ``loaded`` for what that means for a dictation still in
+/// flight on the one being replaced.
 ///
 /// An `actor` rather than the `final class` the brief sketched: the model is a mutable stored
 /// property written from an `async` function, so two overlapping dictations would each observe
@@ -52,6 +59,11 @@ actor WhisperKitEngine {
     /// `large-v3-v20240930` IS large-v3-turbo, OpenAI's 2024-09-30 release; the `_turbo` suffix
     /// is WhisperKit's own compute variant on top of it. Getting this string wrong fails at
     /// download time with a confusing "model not found", so it is verified, not remembered.
+    ///
+    /// **The default, not the only possibility.** A mode's `stt.model` names the variant to load
+    /// (``SpeechModelResolution`` decides what that resolves to); this constant is what a mode
+    /// gets when it names nothing usable, and what an unresolvable variant falls back to rather
+    /// than failing the dictation outright -- see ``load(variant:report:)``.
     static let dictationModel = "openai_whisper-large-v3-v20240930_turbo"
 
     /// The Hugging Face repository the variant above lives in. Same default WhisperKit uses; it
@@ -63,7 +75,26 @@ actor WhisperKitEngine {
     /// about a model nobody has.
     static let modelRepo = "argmaxinc/whisperkit-coreml"
 
-    private var loading: Task<LoadedModel, Error>?
+    /// The one model slot this engine keeps -- keyed by the variant it was asked for, so a second
+    /// caller asking for the SAME variant shares the one load already in flight (the property
+    /// `loadedKit(for:)` existed to give, preserved) while a caller asking for a DIFFERENT one
+    /// gets its own task and replaces this slot rather than being handed the wrong model.
+    ///
+    /// **What replacing the slot does and does not do.** Storing a new entry drops this actor's
+    /// own reference to the old task; it does NOT reach into a `transcribe` call already in
+    /// flight on the model that task produced; and it cannot, since that call holds its own
+    /// `LoadedModel` reference by then (`loadedKit(for:)` already returned it) and Swift's ARC
+    /// keeps that instance -- and the CoreML models inside it -- alive for as long as the call
+    /// still holds it, regardless of what this property points at meanwhile. So a dictation that
+    /// starts on variant B while one is still running on variant A does not corrupt either
+    /// transcription, but it DOES mean both models are briefly resident together, over the one
+    /// model this app's memory budget was sized for. Nothing here can fix that without cancelling
+    /// the in-flight dictation on A, which would lose real, already-spoken text -- worse than a
+    /// transient memory spike. It does not happen through the shipped UI today: `DictationSession`
+    /// only ever runs one dictation at a time (`AudioRecorder.start()` refuses a second recording),
+    /// so no caller of this actor can currently ask for two variants concurrently. This comment is
+    /// for the day something else calls it that isn't bound by that rule.
+    private var loaded: (variant: String, task: Task<(model: LoadedModel, resolvedVariant: String), Error>)?
 
     /// Where "how far into the audio has the decoder got" is left for the interface to pull.
     ///
@@ -143,13 +174,27 @@ actor WhisperKitEngine {
     /// `initialPrompt`, when not nil, is `VocabularyPrompt.build(from:)`'s output verbatim -- this
     /// method does not interpret it, per this file's own rule that it translates and does not
     /// decide.
-    func transcribe(wav: URL, language: String, initialPrompt: String?) async throws -> String {
+    ///
+    /// `model` is `activeMode.stt.model` -- a request, not a promise. What comes back names the
+    /// variant that actually ran (``TranscriptionOutcome/model``), which is `model` resolved
+    /// through ``SpeechModelResolution`` whenever that could be honoured, and ``dictationModel``
+    /// when it could not (see ``load(variant:report:)``). `DictationSession` archives this value,
+    /// never `model` itself, so a fallback is visible in the history it would otherwise be
+    /// invisible from the outside.
+    func transcribe(
+        wav: URL, language: String, model: String, initialPrompt: String?
+    ) async throws -> TranscriptionOutcome {
         // Here rather than beside the WhisperKit call: everything between the two -- reading the
         // file, measuring it for silence, and on the first dictation of a session loading the
         // model, 112 s measured cold -- happens while the interface is already showing
         // `.transcribing`. Without this the bar would spend all of it showing the previous
         // dictation's full one.
         progress.begin()
+
+        // Resolved once, up front, and used both for the empty-audio early return below and for
+        // the real load: a pure string decision, no I/O, so computing it before knowing whether
+        // there is even speech to decode costs nothing.
+        let variant = SpeechModelResolution.variant(storedAs: model, engineDefault: Self.dictationModel)
 
         let samples: [Float]
         do {
@@ -174,7 +219,10 @@ actor WhisperKitEngine {
                 no speech in \(wav.lastPathComponent, privacy: .public) -- \
                 \(reason, privacy: .public); not transcribed
                 """)
-            return ""
+            // No model was loaded to answer this -- `variant` names what WOULD have run, not a
+            // claim that it did. `HistoryRecord.sttModel` on a `.nothingHeard` row has never meant
+            // "and here is proof it loaded"; the row already carries no transcript either.
+            return TranscriptionOutcome(text: "", model: variant)
         }
 
         let audio = Self.audioWorthDecoding(samples: samples, voiced: voiced)
@@ -186,11 +234,11 @@ actor WhisperKitEngine {
                 """)
         }
 
-        let model = try await loadedKit()
+        let resolved = try await loadedKit(for: variant)
 
         let results: [TranscriptionResult]
         do {
-            results = try await model.transcribe(
+            results = try await resolved.model.transcribe(
                 audio: audio, language: language, initialPrompt: initialPrompt, reporting: progress)
         } catch {
             logger.error("transcription failed: \(error.localizedDescription, privacy: .public)")
@@ -204,10 +252,10 @@ actor WhisperKitEngine {
         if text.isEmpty {
             logger.warning("no text from \(wav.lastPathComponent, privacy: .public)")
         }
-        return text
+        return TranscriptionOutcome(text: text, model: resolved.resolvedVariant)
     }
 
-    /// Downloads and loads the model, transcribing nothing.
+    /// Downloads and loads the engine's own default model, transcribing nothing.
     ///
     /// **The one thing a script needs and `transcribe` cannot give it.** The wait a fresh Mac pays
     /// on its first dictation is not transcription: `sample` on the process showed the thread
@@ -220,14 +268,16 @@ actor WhisperKitEngine {
     ///
     /// So `scripts/bootstrap.sh` calls it, through `ModelWarmup`, as the last thing it does.
     ///
-    /// **It is `loadedKit()` and nothing else, which is the whole of why this method exists rather
-    /// than a second binary that also links WhisperKit.** The compiled artefact CoreML caches is
-    /// keyed on the configuration it compiled, so a warm-up that opened another variant, another
-    /// `downloadBase` or another `WhisperKit.init` would warm nothing and would report that it
-    /// had -- a wait that looks paid and still happens, which is worse than one that does not
-    /// pretend. Every argument here is `transcribe`'s because it is literally the same call.
+    /// **It is `loadedKit(for:)` and nothing else, which is the whole of why this method exists
+    /// rather than a second binary that also links WhisperKit.** The compiled artefact CoreML
+    /// caches is keyed on the configuration it compiled, so a warm-up that opened another variant,
+    /// another `downloadBase` or another `WhisperKit.init` would warm nothing and would report
+    /// that it had -- a wait that looks paid and still happens, which is worse than one that does
+    /// not pretend. Fixed to `dictationModel` rather than taking a variant: the script has no mode
+    /// to read one from, and warming the shipped default is the one thing every install needs
+    /// regardless of which modes somebody goes on to create.
     func prepare() async throws {
-        _ = try await loadedKit()
+        _ = try await loadedKit(for: Self.dictationModel)
     }
 
     /// Which 100 ms frames of the recording carry sound, as `SpeechGate`'s thresholds were
@@ -278,32 +328,34 @@ actor WhisperKitEngine {
         try AudioProcessor.loadAudioAsFloatArray(fromPath: wav.path)
     }
 
-    /// The loaded model, loading it exactly once.
+    /// The loaded model for `variant`, loading it exactly once per variant.
     ///
     /// Creating the task and storing it happen with no `await` between them, so no second caller
-    /// can observe `loading == nil` while a load is in flight. A failed load clears the task so
-    /// the next dictation retries: a dropped Wi-Fi connection must not disable transcription for
-    /// the lifetime of the process. Clearing unconditionally is safe -- a new task can only be
-    /// created by a caller that found `loading` nil, and this is the only place that nils it.
-    /// The loaded model, loading it exactly once.
+    /// asking for the SAME variant can observe `loaded` not yet holding it while a load is in
+    /// flight. A failed load clears the slot -- but only if a THIRD caller has not already
+    /// replaced it while this one was failing, which is why the check is `loaded?.variant ==
+    /// variant` rather than an unconditional `nil` -- so the next dictation on this variant
+    /// retries: a dropped Wi-Fi connection must not disable transcription for the lifetime of the
+    /// process.
     ///
     /// The `report(nil)` on both exits is what hands the surfaces back to the dictation: whichever
     /// way the load ends, the model is no longer being prepared, and a preparation left standing
     /// would sit on screen saying "Loading model" for the whole of the transcription that follows.
-    /// It is deliberately NOT on the early return above -- a second dictation finds the model
-    /// already loaded, reports nothing at all, and its card is the dictation's from the first frame.
-    private func loadedKit() async throws -> LoadedModel {
-        if let loading {
-            return try await loading.value
+    /// It is deliberately NOT on the early return above -- a second dictation on the same variant
+    /// finds it already loaded, reports nothing at all, and its card is the dictation's from the
+    /// first frame.
+    private func loadedKit(for variant: String) async throws -> (model: LoadedModel, resolvedVariant: String) {
+        if let loaded, loaded.variant == variant {
+            return try await loaded.task.value
         }
-        let task = Task { [report] in try await Self.load(report: report) }
-        loading = task
+        let task = Task { [report] in try await Self.load(variant: variant, report: report) }
+        loaded = (variant, task)
         do {
-            let model = try await task.value
+            let result = try await task.value
             await report(nil)
-            return model
+            return result
         } catch {
-            loading = nil
+            if loaded?.variant == variant { loaded = nil }
             // Before the throw, so the failure the session is about to turn into `.failed` reaches
             // a card that is no longer showing a percentage frozen where the connection died.
             await report(nil)
@@ -319,10 +371,23 @@ actor WhisperKitEngine {
     ///
     /// **The split is now visible from outside the app as well as inside it**, which is what that
     /// last clause was written for and never got: each of the two steps announces itself through
-    /// `report`, so the wait a fresh Mac spends here says which half of it is happening.
+    /// `report`, so the wait a fresh Mac spends here says which half of it is happening -- for
+    /// WHICHEVER variant is loading, not only the shipped default: the CoreML compile this file's
+    /// own doc comment measures at several minutes is paid again, in full, the first time THIS
+    /// machine sees a new variant, and this is the only place that wait is announced.
+    ///
+    /// A variant that does not resolve to anything the repository has -- ``WhisperError
+    /// .modelsUnavailable``, thrown by `WhisperKit.download`'s own glob search before a single byte
+    /// moves -- falls back to ``dictationModel`` once rather than failing the dictation outright:
+    /// spec chose a free-text field for `stt.model`, so a typo or a stale variant name is something
+    /// a mode file can carry with nothing to catch it at save time. A real network failure
+    /// (`Failure.modelDownloadStalled`, `.modelDownloadFailed`) is NOT caught here and must not be:
+    /// silently retrying an unrelated variant on a dropped connection would either mask the real
+    /// error or start a second multi-gigabyte download while offline.
     private static func load(
+        variant: String,
         report: @escaping @MainActor @Sendable (ModelPreparation?) -> Void
-    ) async throws -> LoadedModel {
+    ) async throws -> (model: LoadedModel, resolvedVariant: String) {
         let modelStore = try Storage.directory(subfolder: "models")
 
         // Warm start: the model is already on disk, so skip WhisperKit.download entirely.
@@ -330,14 +395,24 @@ actor WhisperKitEngine {
         // (`WhisperKit.swift:250-260`: `getFilenames` then `snapshot`), which costs 4-5 s on
         // every process start even when nothing needs fetching -- paid before the first
         // dictation of every session, in an app whose whole value is being fast.
-        if let cached = cachedModelFolder(in: modelStore) {
+        //
+        // This is an EXACT match on `variant`, not a fuzzy one: `SpeechModelResolution` has
+        // already turned a blank field or the shipped default alias into the exact folder name
+        // this engine verified, and a variant somebody typed by hand is the exact string
+        // `WhisperKit.download` will have named the folder after IF it was a full, unambiguous
+        // folder name to begin with. A genuinely fuzzy alias for a variant this store has never
+        // seen resolved (the case the future "add a model" task exists for) will not warm-start
+        // hit here and pays the Hub round trip below instead -- which does not re-download bytes
+        // already on disk, only re-confirms them, so the cost of that miss is seconds, not
+        // gigabytes.
+        if let cached = cachedModelFolder(in: modelStore, variant: variant) {
             do {
                 // Announced on the warm path too, and that is not belt-and-braces: this is the
                 // branch Louis's OWN Mac takes on the first dictation of every session, and the
                 // load behind it was measured at 112 s cold. The machine with the model already on
                 // disk has the same right to know what it is waiting for as the one downloading it.
                 await report(.loading)
-                return try await loadKit(from: cached, downloadBase: modelStore)
+                return (try await loadKit(from: cached, variant: variant, downloadBase: modelStore), variant)
             } catch {
                 // The folder looked complete but CoreML would not load it -- a truncated or
                 // corrupted file inside one of the .mlmodelc bundles. Fall through to the normal
@@ -350,18 +425,40 @@ actor WhisperKitEngine {
             }
         }
 
-        let modelFolder = try await downloadModel(into: modelStore, report: report)
+        let modelFolder: URL
+        do {
+            modelFolder = try await downloadModel(into: modelStore, variant: variant, report: report)
+        } catch WhisperError.modelsUnavailable(let detail) {
+            guard variant != dictationModel else {
+                logger.error("""
+                    default model unavailable (\(detail, privacy: .public))
+                    """)
+                throw Failure.modelDownloadFailed(WhisperError.modelsUnavailable(detail))
+            }
+            logger.warning("""
+                stt model \(variant, privacy: .public) is not a variant \
+                \(modelRepo, privacy: .public) has (\(detail, privacy: .public)) -- falling back \
+                to \(dictationModel, privacy: .public)
+                """)
+            // Known, accepted cost: `loaded` caches this result under the ORIGINAL `variant`, not
+            // under `dictationModel`. Two modes each naming a different unresolvable variant would
+            // each independently fall back and each independently pay `loadKit`'s init -- not the
+            // multi-minute CoreML compile, which is cached on disk and keyed on the configuration
+            // (this file's own note on `prepare()`), just the few seconds that init still costs.
+            // Not worth a second cache keyed on the resolved name for a case this rare.
+            return try await load(variant: dictationModel, report: report)
+        }
 
         do {
             await report(.loading)
-            return try await loadKit(from: modelFolder, downloadBase: modelStore)
+            return (try await loadKit(from: modelFolder, variant: modelFolder.lastPathComponent, downloadBase: modelStore), modelFolder.lastPathComponent)
         } catch {
             logger.error("model load failed: \(error.localizedDescription, privacy: .public)")
             throw Failure.modelLoadFailed(error)
         }
     }
 
-    /// The local folder WhisperKit would have downloaded the variant into, if it holds a model.
+    /// The local folder WhisperKit would have downloaded `variant` into, if it holds a model.
     ///
     /// The path is asked of WhisperKit's own Hub client rather than spelled out here, so it
     /// cannot drift from where `WhisperKit.download` puts things. The three `.mlmodelc` bundles
@@ -373,26 +470,28 @@ actor WhisperKitEngine {
     /// The list comes from `ModelInventory` rather than being spelled here, for the reason the
     /// path does: the Models pane decides whether a model reads as installed with the same
     /// constant, and two literals in two modules are two rules that can drift apart silently.
-    private static func cachedModelFolder(in modelStore: URL) -> URL? {
+    private static func cachedModelFolder(in modelStore: URL, variant: String) -> URL? {
         let folder = HubApiWrapper(downloadBase: modelStore)
             .localRepoLocation(HubApiWrapper.Repo(id: modelRepo, type: .models))
-            .appending(path: dictationModel)
+            .appending(path: variant)
         let complete = ModelInventory.requiredBundles.allSatisfy {
             FileManager.default.fileExists(atPath: folder.appending(path: $0).path)
         }
         return complete ? folder : nil
     }
 
-    private static func loadKit(from folder: URL, downloadBase: URL) async throws -> LoadedModel {
+    private static func loadKit(
+        from folder: URL, variant: String, downloadBase: URL
+    ) async throws -> LoadedModel {
         let start = Date()
         let kit = try await WhisperKit(
-            model: dictationModel,
+            model: variant,
             downloadBase: downloadBase,
             modelFolder: folder.path,
             verbose: false
         )
         logger.info("""
-            model loaded in \
+            \(variant, privacy: .public) loaded in \
             \(Date().timeIntervalSince(start), format: .fixed(precision: 1), privacy: .public)s
             """)
         return LoadedModel(kit)
@@ -407,6 +506,7 @@ actor WhisperKitEngine {
     /// machine stuck in `.transcribing`, which spec §9's error table has no row for.
     private static func downloadModel(
         into modelStore: URL,
+        variant: String,
         report: @escaping @MainActor @Sendable (ModelPreparation?) -> Void
     ) async throws -> URL {
         let lastProgress = OSAllocatedUnfairLock(initialState: Date())
@@ -419,9 +519,9 @@ actor WhisperKitEngine {
                     try await announceBytesReceived(in: modelStore, report: report)
                 }
                 group.addTask {
-                    let log = downloadProgressLogger()
+                    let log = downloadProgressLogger(variant: variant)
                     return try await WhisperKit.download(
-                        variant: dictationModel,
+                        variant: variant,
                         downloadBase: modelStore,
                         from: modelRepo,
                         progressCallback: { progress in
@@ -450,6 +550,13 @@ actor WhisperKitEngine {
         } catch let failure as Failure {
             logger.error("model download stalled: \(failure.localizedDescription, privacy: .public)")
             throw failure
+        } catch WhisperError.modelsUnavailable(let detail) {
+            // Rethrown raw rather than wrapped: `load(variant:report:)` needs to tell "this
+            // variant does not exist" apart from a real transport failure, and wrapping it into
+            // `Failure` here would erase that distinction one frame before it is needed. Any OTHER
+            // `WhisperError` case falls through to the generic wrap below, same as before this
+            // clause existed.
+            throw WhisperError.modelsUnavailable(detail)
         } catch {
             logger.error("model download failed: \(error.localizedDescription, privacy: .public)")
             throw Failure.modelDownloadFailed(error)
@@ -549,7 +656,7 @@ actor WhisperKitEngine {
     /// file-count fraction, the card shows the byte one, and having both in the record is what
     /// would let a future "the bar sat at 40 % for ten minutes" be diagnosed rather than guessed
     /// at. It is also the only thing that still says anything at all if the reporting path breaks.
-    private static func downloadProgressLogger() -> ProgressCallback {
+    private static func downloadProgressLogger(variant: String) -> ProgressCallback {
         let lastTenth = OSAllocatedUnfairLock(initialState: -1)
         return { progress in
             let tenth = Int(progress.fractionCompleted * 10)
@@ -560,7 +667,7 @@ actor WhisperKitEngine {
             }
             guard isNew else { return }
             logger.info("""
-                downloading \(dictationModel, privacy: .public) -- \
+                downloading \(variant, privacy: .public) -- \
                 \(tenth * 10, privacy: .public)%
                 """)
         }

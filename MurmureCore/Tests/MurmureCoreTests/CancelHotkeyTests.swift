@@ -382,6 +382,7 @@ final class CancelHotkeyTests: XCTestCase {
             recorder: recorder, transcriber: CancelFakeTranscriber(result: .success("")),
             inserter: CancelSpyInserter(), refiner: CancelSpyRefiner(),
             recording: CancelSpyRecording(), vocabulary: CancelFakeVocabulary(),
+            contextCapture: CancelContextCapture(),
             onStateChange: { hotkey.apply(hotkey.stamp($0)) })
 
         // When
@@ -465,6 +466,7 @@ private struct DictationPath {
             refiner: CancelSpyRefiner(),
             recording: CancelSpyRecording(),
             vocabulary: CancelFakeVocabulary(),
+            contextCapture: CancelContextCapture(),
             onStateChange: onStateChange)
     }
 }
@@ -514,8 +516,10 @@ private final class CancelFakeRecorder: Recorder {
 
 private struct CancelFakeTranscriber: Transcriber {
     let result: Result<String, Error>
-    func transcribe(wav: URL, language: String, initialPrompt: String?) async throws -> String {
-        try result.get()
+    func transcribe(
+        wav: URL, language: String, model: String, initialPrompt: String?
+    ) async throws -> TranscriptionOutcome {
+        TranscriptionOutcome(text: try result.get(), model: model)
     }
 }
 
@@ -546,4 +550,11 @@ private struct CancelSpyRecording: DictationRecording {
     }
 
     func record(_ dictation: HistoryRecord) async {}
+}
+
+/// Nothing to capture, which is all this file's tests need: `CancelSpyRefiner` always answers
+/// `.voice`, whose refiner is off, so the capture step never even reads this.
+private struct CancelContextCapture: ContextCapturing {
+    func captureSelectedText() async -> String? { nil }
+    func captureClipboard() async -> String? { nil }
 }

@@ -11,11 +11,33 @@ public protocol Recorder {
 }
 
 public protocol Transcriber {
-    /// `language` and `initialPrompt` both come from the mode active when the recording started
-    /// (`activeMode.stt.language`, `VocabularyPrompt.build(from:)`) -- the engine has no notion of
-    /// a mode or a vocabulary of its own, it only ever does what it is told
-    /// (`Murmure/WhisperKitEngine.swift`: it translates, it does not decide).
-    func transcribe(wav: URL, language: String, initialPrompt: String?) async throws -> String
+    /// `language`, `model` and `initialPrompt` all come from the mode active when the recording
+    /// started (`activeMode.stt.language`, `activeMode.stt.model`,
+    /// `VocabularyPrompt.build(from:)`) -- the engine has no notion of a mode or a vocabulary of
+    /// its own, it only ever does what it is told (`Murmure/WhisperKitEngine.swift`: it translates,
+    /// it does not decide). `model` is a request, not a promise: see ``TranscriptionOutcome`` for
+    /// what the engine hands back when it could not honour it.
+    func transcribe(
+        wav: URL, language: String, model: String, initialPrompt: String?
+    ) async throws -> TranscriptionOutcome
+}
+
+/// What a transcription actually produced, and with what.
+///
+/// **`model` is the whole reason this is a struct and not the bare `String` it used to be.**
+/// `activeMode.stt.model` is a request Whisper is asked to honour, not a fact about what ran --
+/// `WhisperKitEngine` falls back to its own compiled-in default when the mode names a variant it
+/// cannot resolve (see that file's doc comments), and a history row that recorded the request
+/// rather than the answer would claim a dictation ran on a model that never loaded. So the engine
+/// reports back what it actually used, and that is what `DictationSession` archives.
+public struct TranscriptionOutcome: Equatable, Sendable {
+    public let text: String
+    public let model: String
+
+    public init(text: String, model: String) {
+        self.text = text
+        self.model = model
+    }
 }
 
 /// Where the text of one dictation actually went.
@@ -209,6 +231,7 @@ public actor DictationSession {
     private let refiner: any DictationRefining
     private let recording: any DictationRecording
     private let vocabulary: any VocabularyProviding
+    private let contextCapture: any ContextCapturing
     private let now: @Sendable () -> Date
     private let onStateChange: @Sendable (State) -> Void
 
@@ -218,6 +241,12 @@ public actor DictationSession {
 
     /// What was in front when the recording started, fixed there for the same reason as the mode.
     private var target: DictationTarget = .unknown
+
+    /// What was selected, on the clipboard and in front of Louis when the recording started,
+    /// filtered to what `activeMode` asked for. `.none` until a dictation's capture step has run,
+    /// which is also what every mode with its three toggles off, or its refiner off, or an `s1`
+    /// api, produces -- see ``captureContext(for:target:using:)``.
+    private var activeContext: CapturedContext = .none
 
     /// When the recording in progress started. `distantPast` until one does; no row can carry it,
     /// because a row is only ever written for a dictation that reached `.recording`.
@@ -245,7 +274,7 @@ public actor DictationSession {
     public init(
         recorder: Recorder, transcriber: Transcriber, inserter: TextInserter,
         refiner: any DictationRefining, recording: any DictationRecording,
-        vocabulary: any VocabularyProviding,
+        vocabulary: any VocabularyProviding, contextCapture: any ContextCapturing,
         // A closure literal rather than `Date.init`, which is not `@Sendable` and warns here.
         now: @escaping @Sendable () -> Date = { Date() },
         onStateChange: @escaping @Sendable (State) -> Void
@@ -256,6 +285,7 @@ public actor DictationSession {
         self.refiner = refiner
         self.recording = recording
         self.vocabulary = vocabulary
+        self.contextCapture = contextCapture
         self.now = now
         self.onStateChange = onStateChange
     }
@@ -337,6 +367,13 @@ public actor DictationSession {
                 // change to it fails a test rather than passing unnoticed.
                 self.target = target
                 activeMode = await refiner.modeForNewDictation()
+                // Captured here and nowhere later, for the reason `target` and `activeMode` are
+                // both already fixed at this line: a refinement can run for over a minute
+                // (`OllamaChat.timeout`), and what has to reach the model is what was selected and
+                // copied when Louis STARTED speaking, not whatever either holds by the time the
+                // call actually returns.
+                activeContext = await Self.captureContext(
+                    for: activeMode, target: target, using: contextCapture)
                 transition(to: .recording)
             } catch {
                 transition(to: .failed(
@@ -411,9 +448,17 @@ public actor DictationSession {
         let prompt = VocabularyPrompt.build(from: entries)
         let transcriptionStarted = now()
         let transcript: String
+        // What the engine actually ran, which is `activeMode.stt.model` only when the engine
+        // could honour it -- see `TranscriptionOutcome`. This is what gets archived below, never
+        // `activeMode.stt.model` read a second time: that would silently re-substitute the
+        // request for the answer in the one place a fallback is supposed to be visible.
+        let ranModel: String
         do {
-            transcript = try await transcriber.transcribe(
-                wav: wav, language: activeMode.stt.language, initialPrompt: prompt)
+            let outcome = try await transcriber.transcribe(
+                wav: wav, language: activeMode.stt.language, model: activeMode.stt.model,
+                initialPrompt: prompt)
+            transcript = outcome.text
+            ranModel = outcome.model
         } catch {
             transcriptionSeconds = now().timeIntervalSince(transcriptionStarted)
             let message = "transcription failed: \(error.localizedDescription)"
@@ -489,7 +534,8 @@ public actor DictationSession {
                 rawTranscript: storedTranscript(transcript),
                 correctedText: storedCorrection(corrected, of: transcript),
                 refinedText: storedRefinement(text, of: corrected),
-                insertedCharacters: landed
+                insertedCharacters: landed,
+                sttModel: ranModel
             )
         } catch {
             // Spec §9: the dictation is never lost -- keep the text for recovery.
@@ -505,7 +551,8 @@ public actor DictationSession {
                 rawTranscript: storedTranscript(transcript),
                 correctedText: storedCorrection(corrected, of: transcript),
                 refinedText: storedRefinement(text, of: corrected),
-                failureMessage: message
+                failureMessage: message,
+                sttModel: ranModel
             )
         }
     }
@@ -564,7 +611,14 @@ public actor DictationSession {
         correctedText: String? = nil,
         refinedText: String? = nil,
         insertedCharacters: Int = 0,
-        failureMessage: String? = nil
+        failureMessage: String? = nil,
+        // `nil` at every call site that archives before a transcriber call has returned --
+        // reading failed, nothing was heard, the recording never reached the transcriber at all.
+        // There is nothing that "ran" yet in those cases, so the mode's own request is the only
+        // fact there is, same as before this parameter existed. Once a call carries `ranModel`, it
+        // is `TranscriptionOutcome.model` -- what the engine actually used -- never `activeMode`
+        // read a second time.
+        sttModel: String? = nil
     ) async {
         await recording.record(HistoryRecord(
             startedAt: startedAt,
@@ -572,7 +626,7 @@ public actor DictationSession {
             outcome: outcome,
             modeKey: activeMode.key,
             modeName: activeMode.name,
-            sttModel: activeMode.stt.model,
+            sttModel: sttModel ?? activeMode.stt.model,
             // NULL when the mode had no refiner at all -- which is a different fact from "the
             // refiner did not run this time", and the reason both columns exist.
             llmModel: activeMode.llm.enabled ? activeMode.llm.model : nil,
@@ -665,12 +719,34 @@ public actor DictationSession {
         // hourglass says nothing about whether the model is working or the app is stuck.
         transition(to: .refining)
         let started = now()
-        let text = await refiner.refine(transcript, with: activeMode)
+        // `RefinementRequest` is where `activeContext` actually reaches the model: it folds the
+        // toggled sections into `activeMode`'s instructions (a no-op for `Voice`, for an `s1`
+        // mode, or for a mode whose capture found nothing usable), and `refiner.refine` never
+        // sees `activeContext` at all -- only the mode it produces.
+        let mode = RefinementRequest(mode: activeMode, captured: activeContext).effectiveMode
+        let text = await refiner.refine(transcript, with: mode)
         // Set for every call that LEFT, including the ones that came back with the transcript
         // unchanged -- see `storedRefinement`, which reads it to tell "no refiner" from "a
         // refiner that changed nothing".
         refinementSeconds = now().timeIntervalSince(started)
         return text
+    }
+
+    /// Reads only what `mode`'s toggles ask for, and reads nothing at all for a mode that could
+    /// never use it: an `s1` mode's instructions are a control line
+    /// (``Mode/LLM/API/s1``, ``RefinementRequest/systemTurn``), and a mode with its refiner off
+    /// never reaches a system turn to begin with. Skipping the read is not an optimisation so
+    /// much as the point -- Louis's selection and clipboard are not touched for a dictation that
+    /// was never going to carry them.
+    private static func captureContext(
+        for mode: Mode, target: DictationTarget, using capture: any ContextCapturing
+    ) async -> CapturedContext {
+        guard mode.llm.enabled, mode.llm.api == .chat else { return .none }
+        let selectedText = mode.context.selectedText ? await capture.captureSelectedText() : nil
+        let clipboard = mode.context.clipboard ? await capture.captureClipboard() : nil
+        return CapturedContext(
+            selectedText: selectedText, clipboard: clipboard,
+            frontmostAppName: mode.context.appContext ? target.name : nil)
     }
 
     private func transition(to newState: State) {
