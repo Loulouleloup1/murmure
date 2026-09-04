@@ -48,6 +48,7 @@ public struct AppSettings {
         static let soundOnTextInserted = "soundOnTextInserted"
         static let pasteBehaviour = "pasteBehaviour"
         static let restoreClipboardAfterPaste = "restoreClipboardAfterPaste"
+        static let toggleHotkey = "toggleHotkey"
     }
 
     private let defaults: UserDefaults
@@ -109,6 +110,35 @@ public struct AppSettings {
         switch cue {
         case .recordingStarted: Key.soundOnRecordingStarted
         case .textInserted: Key.soundOnTextInserted
+        }
+    }
+
+    /// The shortcut that starts and stops a dictation. Default ``KeyCombo/defaultToggle`` (⌥Space)
+    /// -- an empty domain must keep doing exactly what the app does today.
+    ///
+    /// **Stored as a JSON string, not `Data`.** `KeyCombo` is `Codable`, so a `Data` blob would
+    /// work too, but it prints as unreadable hex under `defaults read com.louiscourcier.Murmure`;
+    /// a JSON string is the one encoding that is both a native `UserDefaults` type and legible by
+    /// hand, which matters here because this is the one setting Louis could plausibly want to
+    /// edit outside the app.
+    ///
+    /// **An unrecognised stored value reads as the default, following `pasteBehaviour`'s own
+    /// rule**, reachable by a hand-edited domain or a future encoding change: refusing would leave
+    /// Murmure with no way to start a dictation at all, which is a worse failure than silently
+    /// keeping the shortcut Louis already knows.
+    public var toggleHotkey: KeyCombo {
+        get {
+            guard let stored = defaults.string(forKey: Key.toggleHotkey),
+                  let data = stored.data(using: .utf8),
+                  let combo = try? JSONDecoder().decode(KeyCombo.self, from: data)
+            else { return .defaultToggle }
+            return combo
+        }
+        nonmutating set {
+            guard let data = try? JSONEncoder().encode(newValue),
+                  let stored = String(data: data, encoding: .utf8)
+            else { return }
+            defaults.set(stored, forKey: Key.toggleHotkey)
         }
     }
 

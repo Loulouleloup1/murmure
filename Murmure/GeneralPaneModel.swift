@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Foundation
 import MurmureCore
@@ -7,16 +8,18 @@ import SwiftUI
 ///
 /// Thin, like `VocabularyPaneModel` and for the same reason -- the app target has no test bundle,
 /// so anything decided here is verified by reading. Everything that is a decision lives in
-/// `MurmureCore` and is tested there: what a shortcut looks like as chips (`Keycap`), what the
-/// microphone row says (`MicrophoneStatus`), what every setting defaults to and stores
-/// (`AppSettings`), and -- the one that would fail silently -- that the two sound switches actually
-/// reach `CueFeedback` (`SoundSettingsWiringTests`). What is left below is three reads of the
-/// system and the bindings the view writes through.
+/// `MurmureCore` and is tested there: what a shortcut looks like as chips (`Keycap`), what a
+/// captured press is allowed to become (`HotkeyRecording`), what the microphone row says
+/// (`MicrophoneStatus`), what every setting defaults to and stores (`AppSettings`), and -- the one
+/// that would fail silently -- that the two sound switches actually reach `CueFeedback`
+/// (`SoundSettingsWiringTests`). What is left below is the `NSEvent` capture the app target has to
+/// own (`HotkeyRecording` has no AppKit import), three reads of the system, and the bindings the
+/// view writes through.
 ///
-/// **Two of the four rows are reports and not controls**, which is unusual enough to say once:
-/// the hotkey is displayed because rebinding it is a second hotkey lifecycle, and the microphone
-/// is displayed because `AudioRecorder` has no way to be told which device to open. Both would
-/// otherwise be controls that store an answer and change nothing.
+/// **One of the four rows is a report and not a control**: the microphone, because `AudioRecorder`
+/// has no way to be told which device to open, and a picker beside it would store an answer and
+/// change nothing. The hotkey row used to be the other one; see ``startRecordingHotkey()`` for why
+/// it no longer is.
 @MainActor
 final class GeneralPaneModel: ObservableObject {
     /// Whether macOS currently has Murmure registered to start with the session.
@@ -46,11 +49,37 @@ final class GeneralPaneModel: ObservableObject {
 
     private let settings: AppSettings
 
+    /// `DictationController.rebindToggleHotkey(to:)`, handed in rather than reached through a
+    /// stored reference to the controller. The pane's job stops at "here is a legal combo"; what
+    /// registering it with Carbon and rolling back a refusal looks like is `DictationController`'s
+    /// own decision, made where `HotkeyManager` and `settings` already both live. The same shape
+    /// `ModesPaneModel`'s `didChangeModes` and `AdvancedPaneModel`'s closures use, for the same
+    /// reason: `MurmureApp.init` is the one place that can close over both objects.
+    private let rebindToggleHotkey: (KeyCombo) -> Bool
+
     /// `settings` is injected rather than built here for the reason every store in this app is:
     /// the `UserDefaults` domain is chosen once, in `MurmureApp.init`, and a pane that picked its
     /// own would be writing somewhere the dictation pipeline is not reading.
-    init(settings: AppSettings) {
+    init(settings: AppSettings, rebindToggleHotkey: @escaping (KeyCombo) -> Bool) {
         self.settings = settings
+        self.rebindToggleHotkey = rebindToggleHotkey
+    }
+
+    deinit {
+        // Belt beside `GeneralPaneView`'s `.onDisappear`: this object is a `@StateObject` that
+        // outlives the pane (`MurmureApp` builds it once), so the view going away is the ordinary
+        // way recording stops -- but a monitor left installed past that point would keep
+        // swallowing every keystroke Louis's window receives, silently, until the process quits.
+        //
+        // `deinit` is nonisolated whatever the type says, the same fact `HotkeyManager.deinit`
+        // documents; asserted here rather than assumed for the same reason -- the last release of
+        // a `@MainActor` object is not guaranteed to happen on the main thread by the type system
+        // alone, only by how this app is actually built (every strong owner is itself main-actor).
+        MainActor.assumeIsolated {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+            }
+        }
     }
 
     /// Re-reads the three things that live outside this object: the login registration, its
@@ -66,23 +95,104 @@ final class GeneralPaneModel: ObservableObject {
         defaultDeviceName = Self.currentInputDeviceName()
     }
 
-    // MARK: - The hotkey, displayed
+    // MARK: - The hotkey, recorded
 
-    /// ⌥Space as one chip per key, in macOS's own ⌃⌥⇧⌘ order. The decomposition is `Keycap`'s and
-    /// is tested there; this is only which shortcut is shown.
+    /// Whether the pane is currently listening for a new shortcut. `@Published` because the
+    /// Record button's label and the note underneath both depend on it.
+    @Published private(set) var isRecordingHotkey = false
+
+    /// The sentence a refusal leaves on screen, or nil. Cleared at the start of the next recording
+    /// so a stale refusal does not linger under a shortcut that has since changed.
+    @Published private(set) var hotkeyRecordingMessage: String?
+
+    /// The local monitor capturing the recording, or nil while none is running. `Any?` rather than
+    /// a concrete type because that is what `NSEvent.addLocalMonitorForEvents` returns -- an opaque
+    /// token meaningful only to `NSEvent.removeMonitor`.
+    private var eventMonitor: Any?
+
+    /// The shortcut, as one chip per key in macOS's own ⌃⌥⇧⌘ order. The decomposition is
+    /// `Keycap`'s and is tested there; `settings.toggleHotkey` is read fresh on every access
+    /// rather than cached, so a successful rebind is reflected the moment `isRecordingHotkey`
+    /// flips back to `false` and SwiftUI redraws the row.
     var toggleKeycaps: [Keycap] {
-        KeyCombo.defaultToggle.keycaps
+        settings.toggleHotkey.keycaps
     }
 
-    /// Why there is no Record button beside it.
+    /// What the sentence under the shortcut says: idle instructions, what is happening while
+    /// recording, or why the last attempt was refused.
+    var hotkeyNote: String {
+        if let hotkeyRecordingMessage { return hotkeyRecordingMessage }
+        return isRecordingHotkey
+            ? "Press the keys for your new shortcut."
+            : "Click Record, then press the keys you want. Needs ⌃, ⌥, ⇧ or ⌘, except for the "
+                + "F-keys, which can be bound on their own."
+    }
+
+    /// Starts listening for a new shortcut. A no-op if already recording, so a second click of
+    /// Record cannot install a second monitor over the first.
     ///
-    /// **The screen has to be honest that the binding is fixed rather than look like a field that
-    /// is not working.** Capturing a new combination is a second hotkey lifecycle -- an event
-    /// monitor, a conflict check against the rest of the system, and an unregister/re-register
-    /// path with a rollback when the new one is refused -- and it belongs with push-to-talk in a
-    /// lot of its own. Saying so is the difference between a decision and an omission.
-    let hotkeyNote = "This shortcut is fixed for now. Changing it, and push-to-talk, come together "
-        + "in a later release."
+    /// **`.addLocalMonitorForEvents`, never a global monitor.** A global monitor needs
+    /// Accessibility permission and would watch every keystroke on the machine for as long as this
+    /// pane is open; a local one only sees events delivered to Murmure's own window, which is
+    /// exactly where Louis is while he is pressing Record. The trade this makes is deliberate: a
+    /// combination can only be recorded while the General pane's window is key, never in the
+    /// background -- which is the right place for a feature that changes what every OTHER
+    /// application's keystrokes might get stolen by.
+    func startRecordingHotkey() {
+        guard eventMonitor == nil else { return }
+        isRecordingHotkey = true
+        hotkeyRecordingMessage = nil
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) {
+            [weak self] event in
+            self?.handle(event)
+            // Returning nil swallows the event: the press being recorded must not also reach
+            // whatever text field or button happens to be focused behind the Record button.
+            return nil
+        }
+    }
+
+    /// Stops listening, with or without a shortcut having been accepted. Idempotent: called from
+    /// every exit of a recording (`handle(_:)`'s three outcomes) and from
+    /// `GeneralPaneView`'s `.onDisappear`, and safe to call when nothing is running.
+    func stopRecordingHotkey() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+        }
+        eventMonitor = nil
+        isRecordingHotkey = false
+    }
+
+    /// One captured event, handed to `MurmureCore`'s pure rule and acted on.
+    ///
+    /// The raw `UInt`/`UInt16` values cross into `MurmureCore` rather than an `NSEvent` itself,
+    /// because that package has no AppKit import (`HotkeyRecording`'s own note) -- this function
+    /// is the one seam where an `NSEvent` becomes the numbers that rule can read.
+    private func handle(_ event: NSEvent) {
+        let captured: CapturedKeyEvent = event.type == .flagsChanged
+            ? .flagsChanged(appKitModifierFlags: event.modifierFlags.rawValue)
+            : .keyDown(keyCode: event.keyCode, appKitModifierFlags: event.modifierFlags.rawValue)
+
+        switch HotkeyRecording.evaluate(captured) {
+        case .stillPressing:
+            // Not done yet -- keep the monitor installed and say nothing.
+            return
+
+        case .refused(let message):
+            hotkeyRecordingMessage = message
+            stopRecordingHotkey()
+
+        case .accepted(let combo):
+            // `rebindToggleHotkey` is `DictationController`'s -- it registers with Carbon first
+            // and writes `settings.toggleHotkey` only on success, so this call is what decides
+            // whether the row below ends up showing the new combo or the one it already had.
+            if !rebindToggleHotkey(combo) {
+                hotkeyRecordingMessage =
+                    "macOS refused that combination -- it may already be in use by another app. "
+                    + "Your previous shortcut is still active."
+            }
+            stopRecordingHotkey()
+        }
+    }
 
     // MARK: - The microphone, reported
 

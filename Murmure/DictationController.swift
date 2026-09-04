@@ -431,14 +431,17 @@ final class DictationController {
             Task { await session.cancel() }
         }
 
-        // Task 4 deliberately shipped `register` WITHOUT `@discardableResult`. A ⌥Space that
+        // Task 4 deliberately shipped `register` WITHOUT `@discardableResult`. A toggle combo that
         // another app already owns leaves Murmure with no way to start a dictation at all, so the
         // failure has to reach the only surface lot 1 has.
-        let registered = hotkeys.register(.defaultToggle) { [session] in
-            Task { await session.toggle() }
-        }
+        //
+        // `settings.toggleHotkey` rather than `.defaultToggle`: General now lets Louis rebind this
+        // (`rebindToggleHotkey(to:)` below, driven from `GeneralPaneModel`), and
+        // `AppSettings.toggleHotkey` already answers `.defaultToggle` for an untouched domain, so
+        // a fresh install registers exactly what it did before this existed.
+        let registered = registerToggle(settings.toggleHotkey)
         if !registered {
-            log.error("⌥Space registration refused -- another application owns the combination")
+            log.error("toggle hotkey registration refused -- another application owns the combination")
             appState.hotkeyUnavailable = true
             appState.status = .failed
         }
@@ -584,6 +587,45 @@ final class DictationController {
         appState.availableModes = ModeStore(directory: modesDirectory) { [log] problem in
             log.error("mode file problem: \(problem.description, privacy: .public)")
         }.loadAll()
+    }
+
+    /// `hotkeys.register`'s one caller with an opinion on what a press does: both `init` and
+    /// `rebindToggleHotkey(to:)` need the same closure, and writing it twice is how the two would
+    /// drift the day `session.toggle()` needs a parameter.
+    private func registerToggle(_ combo: KeyCombo) -> Bool {
+        hotkeys.register(combo) { [session] in
+            Task { await session.toggle() }
+        }
+    }
+
+    /// General's Record button, after `HotkeyRecording` has accepted a captured press. Returns
+    /// whether `combo` is now the live toggle.
+    ///
+    /// **The store follows a successful registration, and never precedes it.** Writing
+    /// `settings.toggleHotkey` first and registering second would leave a combo stored that does
+    /// nothing the moment the registration failed -- a shortcut the pane claims to have set, that
+    /// is not the one actually bound. `AppSettings.launchAtLogin`'s own rule, applied here.
+    ///
+    /// **A refusal puts the previous combo back.** `appState.hotkeyUnavailable` already covers a
+    /// refusal at launch, when there is nothing to fall back to; a refusal at rebind time is
+    /// different, because the OLD combo was working a moment ago and Louis must not be left
+    /// without a working toggle just for having tried a new one. The re-registration below can
+    /// itself fail only if something else grabbed the old combination in the few milliseconds
+    /// since it was released -- rare, but `appState.hotkeyUnavailable` is the honest thing to set
+    /// if it happens, for the same reason it is set at launch.
+    @discardableResult
+    func rebindToggleHotkey(to combo: KeyCombo) -> Bool {
+        let previous = settings.toggleHotkey
+        guard registerToggle(combo) else {
+            log.error("toggle hotkey rebind refused -- reverting to the previous combination")
+            if !registerToggle(previous) {
+                log.fault("toggle hotkey revert ALSO refused -- Murmure has no working toggle")
+                appState.hotkeyUnavailable = true
+            }
+            return false
+        }
+        settings.toggleHotkey = combo
+        return true
     }
 
     /// History's "Process again" (D12): a stored transcript, a mode, and the refinement that

@@ -158,7 +158,13 @@ struct MurmureApp: App {
                 store: Storage.url(subfolder: "models"),
                 speech: [ModelsPaneModel.dictationModel],
                 language: { ModelInventory.languageModels(in: state.availableModes) }))
-        _generalModel = StateObject(wrappedValue: GeneralPaneModel(settings: settings))
+        // `controller.rebindToggleHotkey` rather than a copy of the logic: the pane decides
+        // whether a captured press is legal (`HotkeyRecording`), the controller decides whether
+        // Carbon will actually take it and rolls back a refusal -- and it can only do that from
+        // where `HotkeyManager` and `settings` already both live.
+        _generalModel = StateObject(
+            wrappedValue: GeneralPaneModel(
+                settings: settings, rebindToggleHotkey: controller.rebindToggleHotkey))
         // The same store the controller opened and the same recordings folder it resolved — read
         // here rather than resolved again, so the pane's Delete All Recordings and the retention
         // sweep cannot end up pointing at two different directories.

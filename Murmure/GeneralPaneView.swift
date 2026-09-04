@@ -8,9 +8,9 @@ import SwiftUI
 /// (Q-NB6): dark-only is cheap now and expensive to retrofit, and the difference between the two is
 /// entirely whether the colours are in one table or spread across six panes.
 ///
-/// The first two rows are **reports drawn as rows, not controls**. They deliberately do not look
-/// like a field or a picker -- there is nothing to click, and the note under each says why, which
-/// is the difference between a decision and a control that appears broken.
+/// The microphone row is a **report drawn as a row, not a control**. It deliberately does not
+/// look like a picker -- there is nothing to click, and the note under it says why, which is the
+/// difference between a decision and a control that appears broken.
 struct GeneralPaneView: View {
     @ObservedObject var model: GeneralPaneModel
 
@@ -27,18 +27,35 @@ struct GeneralPaneView: View {
         }
         .background(Color(role: .paneBackground))
         .onAppear { model.refresh() }
+        // The monitor `startRecordingHotkey()` installs is local to this window; the pane leaving
+        // the screen -- another section picked, the window closed -- must stop it, or it goes on
+        // swallowing every keystroke Murmure's window receives with nothing left on screen to say
+        // why. `GeneralPaneModel.deinit` is the same removal for the case this never fires.
+        .onDisappear { model.stopRecordingHotkey() }
     }
 
     // MARK: - The hotkey
 
     /// One chip per key, never a concatenated string (design notes §2). The decomposition and the
-    /// ⌃⌥⇧⌘ order are `Keycap`'s, tested there; this only draws them.
+    /// ⌃⌥⇧⌘ order are `Keycap`'s, tested there; this only draws them, beside the Record button
+    /// that captures a new combination.
     private var hotkeyRow: some View {
         row("Start and stop dictation", note: model.hotkeyNote) {
-            HStack(spacing: 4) {
-                ForEach(Array(model.toggleKeycaps.enumerated()), id: \.offset) { _, cap in
-                    keycap(cap)
+            HStack(spacing: 8) {
+                HStack(spacing: 4) {
+                    ForEach(Array(model.toggleKeycaps.enumerated()), id: \.offset) { _, cap in
+                        keycap(cap)
+                    }
                 }
+                Button(model.isRecordingHotkey ? "Cancel" : "Record") {
+                    if model.isRecordingHotkey {
+                        model.stopRecordingHotkey()
+                    } else {
+                        model.startRecordingHotkey()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
         }
     }

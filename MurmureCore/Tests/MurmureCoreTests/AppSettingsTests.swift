@@ -32,6 +32,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(settings.isSoundEnabled(.textInserted))
         XCTAssertEqual(settings.pasteBehaviour, .pasteIntoFrontmostApp)
         XCTAssertTrue(settings.restoreClipboardAfterPaste)
+        XCTAssertEqual(settings.toggleHotkey, .defaultToggle)
     }
 
     /// Every default is the behaviour the app already had before this file existed. Stated as its
@@ -141,5 +142,40 @@ final class AppSettingsTests: XCTestCase {
 
         // Then
         XCTAssertFalse(settings.willRestoreClipboard)
+    }
+
+    // MARK: - Toggle hotkey
+
+    func testTheToggleHotkeyRoundTripsThroughASecondInstance() {
+        // Given
+        let settings = AppSettings(defaults: defaults)
+        let combo = KeyCombo(keyCode: 122, carbonModifiers: 256) // ⌘F1
+
+        // When
+        settings.toggleHotkey = combo
+
+        // Then -- read through a SECOND instance, so this is the stored value and not a cached one
+        XCTAssertEqual(AppSettings(defaults: defaults).toggleHotkey, combo)
+    }
+
+    /// `defaults read com.louiscourcier.Murmure` prints this key as a JSON string -- readable by
+    /// hand, unlike a `Data` blob, which is the reason `toggleHotkey` is stored as a string.
+    func testTheToggleHotkeyIsStoredAsAReadableJSONString() throws {
+        let settings = AppSettings(defaults: defaults)
+        settings.toggleHotkey = .defaultToggle
+
+        let stored = try XCTUnwrap(defaults.string(forKey: "toggleHotkey"))
+        XCTAssertTrue(stored.contains("\"keyCode\""))
+        XCTAssertTrue(stored.contains("49"))
+    }
+
+    /// A hand-edited domain, or a decoding failure of some other kind. Degrading to ⌥Space means
+    /// Murmure can still start a dictation; refusing would mean it cannot start one at all.
+    func testAMalformedToggleHotkeyReadsAsTheDefault() {
+        // Given
+        defaults.set("not json", forKey: "toggleHotkey")
+
+        // Then
+        XCTAssertEqual(AppSettings(defaults: defaults).toggleHotkey, .defaultToggle)
     }
 }

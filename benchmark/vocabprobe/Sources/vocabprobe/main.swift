@@ -25,12 +25,22 @@ import WhisperKit
 // MARK: - Job description
 
 struct Job: Decodable {
+    /// A logits-bias arm, entirely separate from `prompt` -- see
+    /// `VocabularyBoostFilter.swift` and `docs/benchmarks/2026-09-vocabulary-logits-bias.md`.
+    /// Null = no filter, the plain `logitsFilters: []` WhisperKit ships with.
+    struct Boost: Decodable {
+        let terms: [String]
+        let firstTokenBonus: Double
+        let continuationBonus: Double
+    }
+
     struct Task: Decodable {
         let id: String
         let wav: String
         let arm: String
         /// The literal string handed to WhisperKit's tokenizer. Null = no prompt.
         let prompt: String?
+        let boost: Boost?
     }
 
     let tasks: [Task]
@@ -44,7 +54,12 @@ struct Row: Encodable {
     let promptTokenCount: Int
     /// What WhisperKit actually kept after `Array(promptTokens.suffix(maxPromptLen))`.
     let promptTokensKept: Int
+    /// Terms carried by the logits-bias filter this task ran with, 0 when none.
+    let boostTermCount: Int
     let decodeSeconds: Double
+    /// Sum of `TranscriptionResult.timings.decodingFiltering` across every window --
+    /// the CPU time actually spent inside `logitsFilters`, prompt or no prompt.
+    let filterSeconds: Double
     let audioSeconds: Double
     let decodedSeconds: Double
     let error: String?
@@ -155,10 +170,34 @@ for (index, task) in job.tasks.enumerated() {
         kept = min(encoded.count, maxPromptLen)
     }
 
+    // The filter is swapped on the already-loaded `kit` between tasks -- `kit.textDecoder`
+    // and `TextDecoder.logitsFilters` are both public `var`s (`TextDecoder.swift:65,310`),
+    // so this needs no `WhisperKit.init` change and therefore no ANE recompilation risk.
+    // Reset to empty for every task first: a task with no `boost` must run with exactly
+    // the built-in filters, not whatever the previous task's arm left behind.
+    var boostTermCount = 0
+    if let boost = task.boost {
+        let termTokens = boost.terms.map { term in
+            tokenizer.encode(text: " " + term)
+                .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+        }
+        boostTermCount = termTokens.count
+        kit.textDecoder.logitsFilters = [
+            VocabularyBoostFilter(
+                termTokens: termTokens,
+                firstTokenBonus: Float(boost.firstTokenBonus),
+                continuationBonus: Float(boost.continuationBonus)
+            )
+        ]
+    } else {
+        kit.textDecoder.logitsFilters = []
+    }
+
     var row = Row(
         id: task.id, arm: task.arm, wav: task.wav, text: "",
         promptTokenCount: promptTokens?.count ?? 0, promptTokensKept: kept,
-        decodeSeconds: 0, audioSeconds: 0, decodedSeconds: 0, error: nil)
+        boostTermCount: boostTermCount,
+        decodeSeconds: 0, filterSeconds: 0, audioSeconds: 0, decodedSeconds: 0, error: nil)
 
     do {
         let cached: (audio: [Float], full: Int)
@@ -178,11 +217,13 @@ for (index, task) in job.tasks.enumerated() {
 
         let text = results.map(\.text).joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let filterSeconds = results.reduce(0.0) { $0 + $1.timings.decodingFiltering }
 
         row = Row(
             id: task.id, arm: task.arm, wav: task.wav, text: text,
             promptTokenCount: promptTokens?.count ?? 0, promptTokensKept: kept,
-            decodeSeconds: elapsed,
+            boostTermCount: boostTermCount,
+            decodeSeconds: elapsed, filterSeconds: filterSeconds,
             audioSeconds: Double(cached.full) / Double(WhisperKit.sampleRate),
             decodedSeconds: Double(cached.audio.count) / Double(WhisperKit.sampleRate),
             error: nil)
@@ -190,7 +231,8 @@ for (index, task) in job.tasks.enumerated() {
         row = Row(
             id: task.id, arm: task.arm, wav: task.wav, text: "",
             promptTokenCount: promptTokens?.count ?? 0, promptTokensKept: kept,
-            decodeSeconds: 0, audioSeconds: 0, decodedSeconds: 0,
+            boostTermCount: boostTermCount,
+            decodeSeconds: 0, filterSeconds: 0, audioSeconds: 0, decodedSeconds: 0,
             error: error.localizedDescription)
     }
 
