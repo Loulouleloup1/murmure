@@ -95,6 +95,30 @@ final class WindowController: ObservableObject {
         }
     }
 
+    /// Fronts the window the same way `show(using:)` does, but without an `OpenWindowAction` --
+    /// for `AppDelegate.applicationShouldHandleReopen`, which is not a view and cannot read one.
+    /// Returns whether there was a window to front: a Dock click while none exists yet (nothing
+    /// built this launch, or SwiftUI tore the last one down on close) has nothing here to do, and
+    /// the delegate falls back to `expectWindow()` instead.
+    func frontIfOpen() -> Bool {
+        guard let window else { return false }
+        wasAskedFor = true
+        setActivationPolicy(windowIsUp: true)
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        return true
+    }
+
+    /// Marks a window as expected without opening one -- for the Dock-click case where none
+    /// exists yet and `AppDelegate.applicationShouldHandleReopen` is about to let AppKit's default
+    /// reopen handling present the `Window` scene on its own. Without this, `adopt(_:)`'s D17
+    /// guard would see `wasAskedFor == false` and order the freshly-presented window straight back
+    /// out, which is the bug this file exists to fix.
+    func expectWindow() {
+        wasAskedFor = true
+        setActivationPolicy(windowIsUp: true)
+    }
+
     /// Called by `WindowAccessor` the moment SwiftUI has put the content in a real `NSWindow`.
     ///
     /// Idempotent per window: it runs again on every view update, and everything below either

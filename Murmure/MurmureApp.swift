@@ -33,6 +33,10 @@ enum Launch {
 }
 
 struct MurmureApp: App {
+    /// Answers the one thing SwiftUI's `Window` scene cannot: a Dock-tile click. See
+    /// `AppDelegate` for why that needs AppKit rather than an environment action.
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     @StateObject private var appState: AppState
 
     /// The one dictation controller, built here so the ⌥Space registration happens once at launch
@@ -181,6 +185,19 @@ struct MurmureApp: App {
     }
 
     var body: some Scene {
+        // Handed over here rather than in `init`: `appDelegate`, like `_appState` and every other
+        // `@StateObject` above, is a SwiftUI dynamic property, and reading one before SwiftUI has
+        // installed it is unsupported (see the note on `_appState` in `init`) -- Apple's own docs
+        // stop short of saying exactly when that installation happens relative to a plain `init()`
+        // call, so `init` is not where this can be guaranteed safe. `body` is: it is the one place
+        // the framework is documented to call back into after wiring every dynamic property, which
+        // is also why `appState` and `windowController` themselves are only ever read from here.
+        //
+        // `let _ = (assignment)` rather than a bare statement: `@SceneBuilder` requires every
+        // statement in this block to build a `Scene`, and an assignment's type is `()`, which does
+        // not conform. Wrapping it as a discarded `let` is the standard way to smuggle a side effect
+        // past a result builder -- the same trick as `let _ = Self._printChanges()`.
+        let _ = (appDelegate.windowController = windowController)
         MenuBarExtra("Murmure", systemImage: appState.menuBarSymbol) {
             // Which mode the dictation in progress is running under -- readable while it runs,
             // because that is what decides whether what he is saying goes to the LLM. The
