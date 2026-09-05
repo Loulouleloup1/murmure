@@ -44,4 +44,22 @@ public enum ModesLayout {
     /// back out of a sub-screen. Should the back chevron ever move up into the shared header, this
     /// strip goes away rather than shrinking further.
     public static let backBarHeight: CGFloat = 34
+
+    /// The Icon field's grid (task 4): tiles per row. Six puts the grid's twelve tiles -- the
+    /// "Default" tile plus `ModeSymbol.library`'s eleven entries -- in two full rows -- a picker
+    /// whose last row trails off short reads as unfinished layout rather than as "these are all of
+    /// them", which is why `ModeSymbolTests` pins `library.count + 1` against this constant rather
+    /// than the two being free to drift apart.
+    public static let iconGridColumns = 6
+
+    /// Between two icon tiles, in both directions. Tiles are `WindowLayout.sidebarTileSize`, the
+    /// same square the sidebar's own section glyphs sit on -- no new size for one more grid of
+    /// glyphs.
+    public static let iconGridSpacing: CGFloat = 6
+
+    /// What the preview block (§1) is introduced by, and its own frame: tall enough to show a
+    /// short `.chat` system turn without scrolling on the first look, capped so a very long one
+    /// scrolls inside its own box rather than pushing Instructions and Context off the bottom of
+    /// the card.
+    public static let previewHeight: (minimum: CGFloat, maximum: CGFloat) = (minimum: 90, maximum: 220)
 }

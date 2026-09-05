@@ -456,6 +456,41 @@ Two mechanisms observed: the global `⌥⇧K` "mode switcher" (an overlay not ca
 itself. The switcher is advertised **in the Modes pane footer**, as a centred keycap-chips + label
 strip — a nice, low-cost way to teach a shortcut at the exact place the user is thinking about it.
 
+### The editor's transparency blocks -- shipped 2026-09-05
+
+Three additions to the inline editor, none of them in the documentation corpus above (there is no
+capture of the installed editor at all, per this section's opening line) -- built from Louis's own
+request: modes have to be readable and fully editable, prompt-engineering included.
+
+- **"What the refiner receives."** A read-only, monospaced, scrollable block under Instructions,
+  built by `RefinementPreview.render(mode:)` (`MurmureCore`) from the SAME assembler
+  (`SystemTurnAssembly.assemble`) `RefinementRequest.systemTurn` calls for the real request -- so
+  the preview can never show a system turn a dictation would not actually send. For `api: .chat` it
+  shows the exact system turn (instructions, the context preamble, one placeholder per enabled
+  toggle) and the transcript's own turn; for `api: .s1` it shows the fixed s1-mini system prompt
+  (labelled as fixed by the model card), the control line, and the transcript; with the refiner off
+  it says plainly that nothing is sent.
+- **A description under each context toggle.** `ContextSource.description` (`MurmureCore`) says
+  what is captured, when (at recording start), and how the refiner sees it. Under `api: .s1` the
+  shared reason (`ContextSource.s1DisabledReason`) explains why the three toggles stay disabled --
+  s1's system turn is fixed by the model card rather than absent (it exists: `OllamaS1.conversation`
+  writes one, and the preview's own "System prompt" block shows it), so there is nowhere for a mode
+  to put context in it -- and names the escape hatch (switch to `chat`). This is the direct answer
+  to "it does not seem to work with s1": it is by design, stated where the toggles are.
+- **The Icon field.** `Mode.symbol` (an optional SF Symbol name, nil-safe for every mode file
+  written before it existed) plus a twelve-tile grid -- a "Default" tile, drawn with the mode's
+  own stage glyph and clearing `symbol` back to nil, ahead of `ModeSymbol.library`'s eleven --
+  drawn with the same tile `MainWindowView`'s sidebar rows use -- the accent for the selected
+  tile, the neutral machinery tile otherwise. The chosen glyph is what `Mode.symbolName` now
+  returns everywhere a mode is drawn (Modes list, the window header); nil falls back to the stage
+  default it always had (§5's own microphone/sparkles split), and the Default tile is how a mode
+  gets back to that fallback once something else has been picked.
+
+Also reordered per Louis's ask ("I want to see all of it"): Name, Icon, Language (now a picker over
+WhisperKit's own language table rather than free text), Speech model, the whole refiner block
+(enabled, API, model together -- `api` moved out of Advanced), Instructions, the preview, then
+Context.
+
 ---
 
 ## 6. On-disk mode schema vs the Murmure spec

@@ -139,6 +139,28 @@ final class RefinementRequestTests: XCTestCase {
         XCTAssertTrue(instructionsRange.lowerBound < contextRange.lowerBound)
     }
 
+    /// All three sections present, pinned to the order `ContextSource.allCases` declares them in:
+    /// selected text, then clipboard, then the frontmost application. Nothing downstream promises
+    /// this order today, but the preview (`RefinementPreview.render`) and the real request build
+    /// their sections off the same `ContextSource.allCases` walk, so if a future change reorders
+    /// one of them without reordering the other, this is the test that has to go red for both
+    /// (review, lot 3a, item 8) -- mutation-proved by temporarily reversing
+    /// `SystemTurnAssembly.assemble`'s section order and confirming this fails, then reverting.
+    func testAllThreeSectionsAppearInSelectedClipboardFrontmostOrder() {
+        let mode = chatMode()
+        let captured = CapturedContext(
+            selectedText: "texte sélectionné", clipboard: "presse-papiers",
+            frontmostAppName: "Xcode")
+
+        let systemTurn = RefinementRequest(mode: mode, captured: captured).systemTurn
+
+        let selectedRange = systemTurn.range(of: "Selected text:")!
+        let clipboardRange = systemTurn.range(of: "Clipboard:")!
+        let frontmostRange = systemTurn.range(of: "Frontmost application:")!
+        XCTAssertTrue(selectedRange.lowerBound < clipboardRange.lowerBound)
+        XCTAssertTrue(clipboardRange.lowerBound < frontmostRange.lowerBound)
+    }
+
     // MARK: - The cap
 
     /// Pinned to the derivation in the doc comment, so a change to either constant it is built

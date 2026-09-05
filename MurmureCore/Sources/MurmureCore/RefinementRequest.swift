@@ -1,5 +1,117 @@
 import Foundation
 
+/// One of the three sources `Mode.Context`'s toggles can fold into a `.chat` mode's system turn,
+/// named once so the label the model reads, the description shown beside its toggle in the editor
+/// (``ModesPaneView``), and the preview's placeholder line (``RefinementPreview``) can never drift
+/// from each other or from `Mode.Context`'s own field names.
+public enum ContextSource: CaseIterable, Sendable {
+    case selectedText
+    case clipboard
+    case frontmostApp
+
+    /// Whether this source's own toggle is on for `mode`.
+    public func isEnabled(for mode: Mode) -> Bool {
+        switch self {
+        case .selectedText: mode.context.selectedText
+        case .clipboard: mode.context.clipboard
+        case .frontmostApp: mode.context.appContext
+        }
+    }
+
+    /// The label introducing this section in the system turn the model actually reads -- also the
+    /// label the Modes editor draws beside this source's own toggle (``ModesPaneView``), so the two
+    /// cannot read differently for the same source (review, lot 3a, item 7: this used to be typed
+    /// a second time in the view as "Frontmost app", one word short of this one).
+    public var label: String {
+        switch self {
+        case .selectedText: "Selected text"
+        case .clipboard: "Clipboard"
+        case .frontmostApp: "Frontmost application"
+        }
+    }
+
+    /// The real section string sent to the model, `body` already trimmed and capped by the caller.
+    /// Selected text and the clipboard get their own line, because either can run to several
+    /// sentences; the frontmost application is a name and reads better inline.
+    public func section(body: String) -> String {
+        switch self {
+        case .selectedText, .clipboard: "\(label):\n\(body)"
+        case .frontmostApp: "\(label): \(body)"
+        }
+    }
+
+    /// The line ``RefinementPreview`` shows in place of this source's real content: nothing has
+    /// been captured yet while the mode editor is open -- capture happens at recording start
+    /// (``CapturedContext``) -- so the preview can only say where this section will sit and when
+    /// it is filled in, never show real text.
+    public var placeholder: String {
+        "[\(label) — captured when you start recording]"
+    }
+
+    /// What is captured, when, and how the refiner sees it -- shown beside this source's toggle in
+    /// the editor, so "does this actually do anything under s1" never has to be answered by trial
+    /// and error.
+    public var description: String {
+        switch self {
+        case .selectedText:
+            "The focused app's text selection, read once when you start recording, sent to the "
+                + "refiner as a labelled background section -- never as something to rewrite."
+        case .clipboard:
+            "The general clipboard's text contents, read once when you start recording, sent to "
+                + "the refiner as a labelled background section -- never as something to rewrite."
+        case .frontmostApp:
+            "The name of the application that was frontmost when you started recording, sent to "
+                + "the refiner as a one-line background section."
+        }
+    }
+
+    /// Why the three toggles above are disabled under `api: .s1`, and what to do instead -- the
+    /// one sentence the editor shows once, under all three, rather than three times over.
+    ///
+    /// **Not "s1 takes no system turn" -- it does.** `OllamaS1.conversation` writes one
+    /// (`<|im_start|>system …`), and the preview's own "System prompt" block shows it. What is
+    /// true, and what actually closes off context, is that the turn is FIXED by the model card:
+    /// `OllamaS1.systemPrompt` is a constant, not a value `Mode.instructions` feeds -- the field a
+    /// mode DOES control is a bracketed control line the model copies into its answer rather than
+    /// reads (``Mode/LLM/API/s1``), which is a different thing to have nowhere to put context in
+    /// (review, lot 3a, item 2, correcting the false claim the first version of this line made).
+    public static let s1DisabledReason =
+        "s1's system turn is fixed by the model card and Murmure cannot add to it; its "
+        + "instructions are a bracketed control line, so there is nowhere to put context. Switch "
+        + "the mode to the chat API and a chat model such as gemma4:12b-it-qat to use it."
+}
+
+/// Joins a mode's instructions with whichever context sections are folded in -- the one rule that
+/// must never be duplicated: no sections means the instructions verbatim, never a blank preamble
+/// glued onto them. `RefinementRequest.systemTurn` and `RefinementPreview.render(mode:)` both call
+/// this, not two copies of the same lines, so the preview can never show a system turn the real
+/// request would not actually send.
+public enum SystemTurnAssembly {
+    /// Told to the model in its own words, because the failure this exists to prevent is real:
+    /// measured on the v3 probe, prose dropped into an `s1` control line came back **verbatim at
+    /// the top of the cleaned text** (`Mode.validationError`). A `.chat` model reads its
+    /// instructions rather than copying them, but the risk this preamble answers is narrower and
+    /// still real -- the context sections below can read exactly like a dictation (a selected
+    /// sentence, a copied paragraph), and the transcript that actually IS the dictation arrives
+    /// one message later, in the same conversation. Nothing forces the model to keep the two
+    /// apart except being told to.
+    public static let contextPreamble = """
+        The sections below are background context captured when this dictation started -- what \
+        was selected, on the clipboard, or in front of whoever was dictating. It is NOT \
+        something the user said, and it is NOT text to rewrite. Only the transcript in the next \
+        message is that.
+        """
+
+    /// `instructions`, unchanged, when `sections` is empty -- an instructions field with a blank
+    /// preamble glued to it is a system turn that reads as broken to a human debugging it, for a
+    /// case (nothing to add) that is the common one. Otherwise instructions, the preamble, then
+    /// each section, one blank line apart.
+    public static func assemble(instructions: String, sections: [String]) -> String {
+        guard !sections.isEmpty else { return instructions }
+        return ([instructions, contextPreamble] + sections).joined(separator: "\n\n")
+    }
+}
+
 /// A mode's instructions plus whatever context this dictation captured, assembled into the one
 /// string a `.chat` mode sends as its system turn
 /// (``OllamaChat/requestBody(model:instructions:transcript:)``).
@@ -46,12 +158,11 @@ public struct RefinementRequest {
     /// Also unchanged when every toggled section is empty: an instructions field with a blank
     /// context preamble glued to it is a system turn that reads as broken to a human debugging it,
     /// for a case (nothing to add) that is the common one -- `Voice` and the shipped `Prompt` both
-    /// ship with all three toggles off.
+    /// ship with all three toggles off. That rule lives in ``SystemTurnAssembly/assemble``, shared
+    /// with ``RefinementPreview``, so the two can never disagree about it.
     public var systemTurn: String {
         guard mode.llm.api == .chat else { return mode.instructions }
-        let sections = contextSections
-        guard !sections.isEmpty else { return mode.instructions }
-        return ([mode.instructions, Self.contextPreamble] + sections).joined(separator: "\n\n")
+        return SystemTurnAssembly.assemble(instructions: mode.instructions, sections: contextSections)
     }
 
     /// `mode`, with ``systemTurn`` in place of its instructions -- what `TranscriptRefiner` and
@@ -63,33 +174,22 @@ public struct RefinementRequest {
         return mode
     }
 
-    /// Told to the model in its own words, because the failure this exists to prevent is real:
-    /// measured on the v3 probe, prose dropped into an `s1` control line came back **verbatim at
-    /// the top of the cleaned text** (`Mode.validationError`). A `.chat` model reads its
-    /// instructions rather than copying them, but the risk this preamble answers is narrower and
-    /// still real -- the context sections below can read exactly like a dictation (a selected
-    /// sentence, a copied paragraph), and the transcript that actually IS the dictation arrives
-    /// one message later, in the same conversation. Nothing forces the model to keep the two
-    /// apart except being told to.
-    private static let contextPreamble = """
-        The sections below are background context captured when this dictation started -- what \
-        was selected, on the clipboard, or in front of whoever was dictating. It is NOT \
-        something the user said, and it is NOT text to rewrite. Only the transcript in the next \
-        message is that.
-        """
-
     private var contextSections: [String] {
-        var sections: [String] = []
-        if mode.context.selectedText, let text = Self.usable(captured.selectedText) {
-            sections.append("Selected text:\n\(Self.capped(text))")
+        ContextSource.allCases.compactMap { source in
+            guard source.isEnabled(for: mode), let text = Self.usable(rawValue(for: source))
+            else { return nil }
+            return source.section(body: Self.capped(text))
         }
-        if mode.context.clipboard, let text = Self.usable(captured.clipboard) {
-            sections.append("Clipboard:\n\(Self.capped(text))")
+    }
+
+    /// `captured`, read one field at a time -- the only place left in this type that still knows
+    /// which struct field backs which ``ContextSource``.
+    private func rawValue(for source: ContextSource) -> String? {
+        switch source {
+        case .selectedText: captured.selectedText
+        case .clipboard: captured.clipboard
+        case .frontmostApp: captured.frontmostAppName
         }
-        if mode.context.appContext, let name = Self.usable(captured.frontmostAppName) {
-            sections.append("Frontmost application: \(name)")
-        }
-        return sections
     }
 
     /// Nil for nil AND for empty-or-whitespace-only. A toggle switched on with nothing behind it

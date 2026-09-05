@@ -159,8 +159,11 @@ struct MainWindowView: View {
     /// to say goes through an LLM. `AppState.activeMode` already exists for exactly that reason,
     /// and the menu already carries the same line.
     ///
-    /// The glyph is derived rather than stored, which is D14 one lot early: a microphone for a
-    /// transcribe-only mode, sparkles for a refining one.
+    /// The glyph is `Mode.symbolName` (D14): the mode's own `symbol` when it picked one from the
+    /// Modes editor's Icon grid, derived from whether it refines otherwise -- the same computed
+    /// property the Modes list row reads too, so the active mode cannot wear one glyph there and
+    /// another here. (The menu-bar mode list draws no icon at all today, in a file a concurrent
+    /// lot owns -- a follow-up, not something this header can keep in step with yet.)
     private var header: some View {
         HStack(spacing: 6) {
             // For a LIST section the header *is* the search field (design notes §1.4), which is
@@ -171,7 +174,7 @@ struct MainWindowView: View {
                 HistorySearchField(text: $history.searchField)
             }
             Spacer(minLength: 0)
-            Image(systemName: appState.activeMode.llm.enabled ? "sparkles" : "mic.fill")
+            Image(systemName: appState.activeMode.symbolName)
                 .font(.system(size: 11, weight: .semibold))
             Text(appState.activeMode.name)
                 .font(.system(size: 12, weight: .medium, design: .rounded))

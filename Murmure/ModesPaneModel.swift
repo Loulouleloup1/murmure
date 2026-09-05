@@ -1,5 +1,6 @@
 import Foundation
 import MurmureCore
+import WhisperKit
 
 /// What the Modes pane is looking at: the modes on disk, the one being edited, and the files that
 /// could not be read.
@@ -37,6 +38,31 @@ final class ModesPaneModel: ObservableObject {
     /// remedy wording (`OllamaFailure.remedy`), the same sentence a dictation failure would show,
     /// so there are not two vocabularies for one server being unreachable.
     @Published private(set) var ollamaUnreachableNote: String?
+
+    /// The Language picker's own options: every distinct language code WhisperKit's decoder
+    /// accepts, one row each.
+    ///
+    /// Read from the engine's own table (`Constants.languages`, a name -> ISO-639-1 code
+    /// dictionary) rather than typed out a second time in Murmure -- a hand-kept list here could
+    /// drift from what `WhisperKitEngine.transcribe` can actually be told to decode, silently
+    /// offering a code the engine does not recognise. `MurmureCore` cannot hold this itself: the
+    /// package imports neither AppKit nor WhisperKit (`Mode.swift`'s own doc comment), so the one
+    /// place that already links WhisperKit -- the app target -- is where the picker's source of
+    /// truth has to live. A `static let` and not a read on `reload()`: it is a compiled-in
+    /// dictionary, not a disk or network read, so there is nothing to refresh.
+    ///
+    /// **Not `WhisperKit.Constants`.** WhisperKit the package also names a *class* `WhisperKit`
+    /// (the transcription engine `WhisperKitEngine` wraps), and that class -- not the module --
+    /// is what a member-access qualifier resolves to first; the module's top-level `Constants`
+    /// enum has to be named unqualified, already in scope from `import WhisperKit`.
+    ///
+    /// **`LanguageOptions.dedupe`, not a raw map.** The table names 112 languages across only 100
+    /// codes -- `"chinese"`/`"mandarin"` both say `zh`, eleven such codes -- and a `Picker` tagged
+    /// by code cannot hold two rows sharing one tag: `ForEach`'s behaviour over a duplicate id is
+    /// undefined, and before this dedupe existed the picker drew twelve redundant rows for it
+    /// (review, lot 3a, item 3). `LanguageOptions` is tested in `MurmureCore` against a literal
+    /// copy of this exact table.
+    static let languageOptions: [LanguageOption] = LanguageOptions.dedupe(Constants.languages)
 
     /// The mode files that could not be used, one line each. `ModeStore` reports them one by one
     /// for exactly that, and this pane is the surface D15 wanted for them: the menu can only say

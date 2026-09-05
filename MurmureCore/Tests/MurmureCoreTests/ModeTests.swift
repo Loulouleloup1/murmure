@@ -58,6 +58,28 @@ final class ModeTests: XCTestCase {
         XCTAssertEqual(positions, positions.sorted(), "top-level fields are not in a stable order")
     }
 
+    /// The spec example predates `symbol` -- absent from the JSON, it must decode to nil rather
+    /// than fail, the same tolerance `api` already has for the field that came before it.
+    func testAModeFileWrittenBeforeSymbolExistedStillDecodesWithANilSymbol() throws {
+        let mode = try JSONDecoder().decode(Mode.self, from: Data(specExampleJSON.utf8))
+
+        XCTAssertNil(mode.symbol)
+    }
+
+    /// A written mode always carries the key, even when there is nothing to write into it -- the
+    /// same rule `hotkey` already follows (`testAWrittenModeKeepsTheHandEditableShapeOfTheSpec`),
+    /// and for the same reason: a field invisible when nil is a field nobody discovers exists.
+    func testAWrittenModeAlwaysWritesTheSymbolKeyEvenWhenNil() throws {
+        XCTAssertNil(Mode.voice.symbol)
+        let json = String(decoding: try ModeStore.encoder.encode(Mode.voice), as: UTF8.self)
+
+        XCTAssertTrue(json.contains("\"symbol\" : null"), json)
+
+        let withSymbol = Mode.voice.with { $0.symbol = "terminal" }
+        let jsonWithSymbol = String(decoding: try ModeStore.encoder.encode(withSymbol), as: UTF8.self)
+        XCTAssertTrue(jsonWithSymbol.contains("\"symbol\" : \"terminal\""), jsonWithSymbol)
+    }
+
     func testARoundTripThroughJSONChangesNothing() throws {
         for mode in Mode.builtIns {
             let data = try ModeStore.encoder.encode(mode)

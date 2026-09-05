@@ -87,6 +87,12 @@ engine default and passes anything else through; `WhisperKitEngine` keeps one mo
 by variant, and warm-starts on an exact match. `HistoryRecord.sttModel` now records what ran, not
 what was asked.
 
+**2026-09-05: the editor shows what it sends, not just what is stored.** `RefinementPreview` renders
+the exact request (`RefinementRequest`'s own assembler, shared rather than duplicated) so "What the
+refiner receives" in the Modes editor can never drift from a real dictation. Each context toggle now
+carries a one-line description of what/when/how, and the s1-disabled reason is a single constant
+(`ContextSource`) read by both the view and its test.
+
 ## 5. Installing a model the app did not ship with — CLOSED, then generalised 2026-09-05
 
 One field takes anything -- an `owner/repo` id, a `huggingface.co` URL, or an Ollama name -- and a

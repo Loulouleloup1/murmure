@@ -40,15 +40,32 @@ extension Mode {
         llm.enabled ? [.transcription, .refinement] : [.transcription]
     }
 
-    /// The glyph the mode wears in the list (D14): **derived, never stored.**
+    /// The glyph the mode wears in the list (D14), and the two other surfaces that read this same
+    /// computed property: the Modes list row and `MainWindowView`'s header. **`symbol` when the
+    /// mode names one, derived from the stage otherwise.**
+    ///
+    /// **Not the menu-bar mode list.** That list (`MurmureApp.swift`) draws `Toggle(mode.name,
+    /// ...)` with no icon at all today -- a file this lot may not touch (a concurrent lot owns
+    /// per-mode hotkeys there) -- so it neither reads nor ignores `symbolName`; it is a follow-up
+    /// for whoever next edits that file, not a surface this property currently reaches.
     ///
     /// Superwhisper stores an `iconName` per mode file (design notes §6, item 4) and the notes
-    /// argue for adopting it. Not here, and not yet: an icon field is a field to pick a value for
-    /// in the editor, to validate, and to explain in a hand-edited file, and it would buy one
-    /// picture. What the glyph has to say is the thing the row does not otherwise show — whether
-    /// this mode sends what is said to a language model — and `llm.enabled` already knows.
+    /// argued for adopting it; `Mode.symbol` is that field, added once people started asking to
+    /// build and tell modes apart by more than "does it refine" (§4 of the modes-editor lot). The
+    /// derived half stays exactly what it was: what the glyph has to say when nobody picked one is
+    /// the thing the row does not otherwise show — whether this mode sends what is said to a
+    /// language model — and `llm.enabled` already knows.
+    ///
+    /// **Falls back on a `symbol` outside ``ModeSymbol/library`` too, not only on nil.** These
+    /// files are hand-edited (`Mode.swift`'s own opening line): `"symbol": "nonsense"` typed or
+    /// pasted wrong is not this property's business to refuse the way `Mode.validate()` refuses an
+    /// empty name, because a mode is still perfectly usable with a glyph nobody can draw -- it just
+    /// must not draw NOTHING (review, lot 3a, item 6). The library is the one place both this
+    /// check and the editor's grid read, so the two cannot silently disagree about what counts as
+    /// a real choice.
     public var symbolName: String {
-        llm.enabled ? ModeStage.refinement.symbolName : ModeStage.transcription.symbolName
+        if let symbol, ModeSymbol.library.contains(symbol) { return symbol }
+        return llm.enabled ? ModeStage.refinement.symbolName : ModeStage.transcription.symbolName
     }
 
     /// Which model a stage runs, so a badge can name it rather than being decoration.

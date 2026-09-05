@@ -94,11 +94,18 @@ public struct Mode: Codable, Equatable {
     /// Bundle ids that select this mode automatically. Resolved at recording start (lot 2, task 4).
     public var autoActivate: [String]
     public var simulateKeypresses: Bool
+    /// An SF Symbol name from ``ModeSymbol/library``, or nil.
+    ///
+    /// `nil` rather than a required field, so every mode file written before this one existed
+    /// keeps decoding without a migration: `ModeStage.symbolName` (the resolved glyph every call
+    /// site actually draws) falls back to the stage's own default -- a microphone or sparkles --
+    /// the moment this is absent, which is exactly the glyph those files already drew.
+    public var symbol: String?
 
     public init(
         key: String, name: String, hotkey: KeyCombo? = nil, stt: STT, llm: LLM,
         instructions: String, context: Context, autoActivate: [String],
-        simulateKeypresses: Bool
+        simulateKeypresses: Bool, symbol: String? = nil
     ) {
         self.key = key
         self.name = name
@@ -109,6 +116,7 @@ public struct Mode: Codable, Equatable {
         self.context = context
         self.autoActivate = autoActivate
         self.simulateKeypresses = simulateKeypresses
+        self.symbol = symbol
     }
 
     /// Written by hand for one reason that only matters because a human opens this file: the
@@ -126,6 +134,7 @@ public struct Mode: Codable, Equatable {
         try container.encode(context, forKey: .context)
         try container.encode(autoActivate, forKey: .autoActivate)
         try container.encode(simulateKeypresses, forKey: .simulateKeypresses)
+        try container.encode(symbol, forKey: .symbol)
     }
 }
 
