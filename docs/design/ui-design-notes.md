@@ -491,6 +491,34 @@ WhisperKit's own language table rather than free text), Speech model, the whole 
 (enabled, API, model together -- `api` moved out of Advanced), Instructions, the preview, then
 Context.
 
+### The Shortcut field -- shipped 2026-09-05
+
+Backlog §7's own closing sentence: `Mode.hotkey` was wired underneath (`HotkeyAssignments.resolve`,
+`ModeHotkeyPress`) with no editor field to set one from -- the only way to give a mode its own
+shortcut was hand-editing its JSON file. `ModesPaneView.shortcutRow`, between Language and Speech
+model, is that field.
+
+A chip row (or "None") plus Record and Clear, recorded through the exact same `HotkeyRecordingSession`
+General's own Record button uses for the toggle -- same rules (⌃⌥⇧⌘ required except F-keys, Escape
+always refused, a single modifier tapped alone is legal), same release/restore discipline: every
+live binding, not the toggle alone, is released for the length of the recording
+(`DictationController.releaseToggleHotkey()`) and restored on every exit -- accepted, refused,
+Cancel, the pane disappearing, or the model itself deallocating. `GeneralPaneModel` could not be
+touched to share that discipline as one helper (it was mid-review elsewhere at the time), so
+`ModesPaneModel` mirrors it rather than reusing it.
+
+Below the row, the conflict or refusal sentence `HotkeyAssignments.resolve` would produce for the
+combo just typed -- checked against the live toggle and every other mode, with the draft's own
+hotkey substituted in -- so a clash is visible before Save ever runs the same resolution for real.
+
+Two independent local-monitor recorders now exist (General's toggle, Modes' per-mode shortcut),
+each releasing and restoring every live binding around its own capture window, and neither knows
+the other exists. That is safe only because the two can never both be recording at once: `Murmure`
+shows exactly one section at a time, from one `switch` in `MainWindowView`, so leaving General's
+pane tears its monitor down (`.onDisappear`) before Modes' pane -- and its own monitor -- can ever
+appear. Two recorders on screen together would each try to release and restore the same bindings
+independently, racing each other.
+
 ---
 
 ## 6. On-disk mode schema vs the Murmure spec

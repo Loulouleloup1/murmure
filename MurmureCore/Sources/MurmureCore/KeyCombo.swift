@@ -6,7 +6,7 @@ import Foundation
 /// `carbonModifiers` is an `optionKey` / `cmdKey` / `shiftKey` / `controlKey` mask, which is
 /// what `RegisterEventHotKey` expects. They are stored as plain numbers so this type stays
 /// free of the Carbon import and can be persisted in settings verbatim (spec §5).
-public struct KeyCombo: Codable, Equatable {
+public struct KeyCombo: Codable, Equatable, Sendable {
     public let keyCode: UInt32
     public let carbonModifiers: UInt32
 
@@ -101,4 +101,12 @@ public struct KeyCombo: Codable, Equatable {
     public var isLeftHandModifierOnly: Bool {
         isModifierOnly && Self.leftHandModifierKeyCodes.contains(keyCode)
     }
+
+    /// The one sentence to append to a hotkey note when ``isLeftHandModifierOnly`` is true --
+    /// shared so `GeneralPaneModel` (the toggle) and `ModesPaneModel` (a mode's own shortcut) show
+    /// the identical warning rather than each keeping its own copy of it, which is exactly how the
+    /// two could drift to two different wordings for the same rule.
+    public static let leftHandModifierWarning =
+        "Left-hand modifiers are pressed and released on their own all day; the right-hand key "
+            + "is the safer choice."
 }

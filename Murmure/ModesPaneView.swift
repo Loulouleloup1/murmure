@@ -35,6 +35,11 @@ struct ModesPaneView: View {
         // prompt (plan §6, the risk table). The date check in `ModeStore.save(_ draft:)` is the
         // other half; this one is what keeps the list itself honest.
         .onAppear { Task { await model.reload() } }
+        // The monitor `startRecordingModeHotkey()` installs is local to this window; the pane
+        // leaving the screen -- another section picked, the window closed -- must stop it, the
+        // same rule `GeneralPaneView`'s own `.onDisappear` follows for the toggle's recorder.
+        // `ModesPaneModel.deinit` is the same removal for the case this never fires.
+        .onDisappear { model.stopRecordingModeHotkey() }
         .alert(
             model.pendingRemoval?.removalConfirmation.title ?? "",
             isPresented: Binding(
@@ -220,6 +225,9 @@ struct ModesPaneView: View {
     /// in that order, because that is the order a reader needs them to understand a mode: what it
     /// is called, what it looks like, what it hears, what cleans it up, and only then the two
     /// things that decide what the cleanup step is actually told (the words and the background).
+    ///
+    /// `shortcutRow`, between Language and Speech model, is the one addition backlog §7 left open:
+    /// `Mode.hotkey` was wired underneath with no editor field, and this is that field.
     @ViewBuilder
     private var editor: some View {
         if let draft = model.draft {
@@ -228,6 +236,7 @@ struct ModesPaneView: View {
                 field("Name", text: text(\.name), placeholder: "Voice")
                 iconPicker(draft)
                 languagePicker(draft)
+                shortcutRow(draft)
                 speechModelPicker(draft)
 
                 // The one switch that changes what the mode *is*, which is why it is here and not
@@ -439,6 +448,74 @@ struct ModesPaneView: View {
                 label: currentValue.isEmpty ? "(none)" : "\(currentValue) (not in WhisperKit's table)"))
         }
         return options
+    }
+
+    /// The Shortcut field (backlog §7's own last sentence): this mode's own hotkey, recorded
+    /// exactly the way General records the toggle -- same `HotkeyRecordingSession`, same
+    /// release/restore discipline around every live binding while the local monitor is up
+    /// (`ModesPaneModel.startRecordingModeHotkey()`'s own note explains why that discipline has to
+    /// be identical, not merely similar). Between Language and Speech model per task 3's field
+    /// order.
+    ///
+    /// A chip row (or "None"), Record/Cancel, and Clear -- absent while there is nothing to clear.
+    /// Below that, in order: the live conflict or refusal sentence `HotkeyAssignments.resolve`
+    /// would produce for this draft right now (`ModesPaneModel.modeHotkeyProblem`, the existing
+    /// warning styling `messageText` already uses elsewhere in this file), then the idle/recording
+    /// note (plain secondary text, `labelled`'s own slot) -- the same two-tier split General draws,
+    /// just assembled by hand here because "Shortcut" is not a `ModeField` `labelled` already
+    /// knows how to look a message up for.
+    private func shortcutRow(_ draft: ModeDraft) -> some View {
+        labelled("Shortcut", note: model.modeHotkeyNote) {
+            VStack(alignment: .leading, spacing: ModesLayout.messageSpacing) {
+                HStack(spacing: 8) {
+                    if draft.mode.hotkey == nil {
+                        Text("None")
+                            .font(.system(size: 12, design: .rounded))
+                            .foregroundStyle(Color(role: .secondaryText))
+                    } else {
+                        HStack(spacing: 4) {
+                            ForEach(Array(model.modeHotkeyKeycaps.enumerated()), id: \.offset) { _, cap in
+                                keycap(cap)
+                            }
+                        }
+                    }
+                    Button(model.isRecordingModeHotkey ? "Cancel" : "Record") {
+                        if model.isRecordingModeHotkey {
+                            model.stopRecordingModeHotkey()
+                        } else {
+                            model.startRecordingModeHotkey()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    if draft.mode.hotkey != nil {
+                        Button("Clear") { model.clearModeHotkey() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
+                if let problem = model.modeHotkeyProblem {
+                    messageText(problem)
+                }
+            }
+        }
+    }
+
+    /// 18 × 18 pt for a glyph, and as wide as its text plus a little for a word key — the same
+    /// measurement `GeneralPaneView.keycap(_:)` draws the toggle's own chips at (design notes §2).
+    /// Duplicated rather than shared: that view is owned by another lot currently under review, so
+    /// a common helper cannot be introduced there from here.
+    private func keycap(_ cap: Keycap) -> some View {
+        Text(cap.label)
+            .font(.system(size: 11, weight: .medium, design: .rounded))
+            .foregroundStyle(Color(role: .primaryText))
+            .padding(.horizontal, cap.shape == .glyph ? 0 : Keycap.wordHorizontalPadding)
+            .frame(minWidth: Keycap.glyphWidth, minHeight: Keycap.height)
+            .frame(height: Keycap.height)
+            .background(
+                RoundedRectangle(cornerRadius: WindowLayout.chipCornerRadius, style: .continuous)
+                    .fill(Color(role: .cardBackground))
+            )
     }
 
     /// The way to the advanced screen, and — when what is wrong is over there — the reason to go.

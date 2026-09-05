@@ -136,8 +136,15 @@ recording starts) and stops the recording exactly like the global toggle while o
 `HotkeyManager` now holds a table of bindings, not one; `HotkeyAssignments.resolve` (`MurmureCore`,
 tested, mutation-proved) settles a combo two bindings both want -- the toggle always wins, a
 mode-vs-mode tie goes to the alphabetically last key -- and reports every loser as a sentence
-appended to the same `appState.modeProblems` the menu already shows. The editor UI for recording a
-per-mode shortcut is the next step; everything under it is already in place.
+appended to the same `appState.modeProblems` the menu already shows.
+
+Editor UI landed 2026-09-05: `ModesPaneView`'s Shortcut row, between Language and Speech model --
+Record/Clear over the same `HotkeyRecordingSession` General uses for the toggle, live conflict
+feedback (`HotkeyAssignments.resolve`) shown under the row before Save. A hand-edited mode hotkey
+the recorder would refuse (Escape, a bare key) is refused rather than registered, and reported in
+the menu the same way a conflict is. A per-mode registration that fails outright -- typically a
+modifier-only combo attempted without Accessibility granted -- is reported there too, instead of
+only logged.
 
 ## Measured, and deliberately NOT shipped
 
@@ -216,3 +223,8 @@ rather than a gradient: `mdi` 3 077 occurrences, median words ×2.54, decode tim
 - **The default branch is `main`.** The rename happened; `origin/HEAD` points at it and no
   `master` remains on the remote. A clone made before it needs
   `git fetch --prune origin && git branch -m master main && git branch -u origin/main main`.
+- **`keycap(_:)` is drawn twice, once in `GeneralPaneView` and once in `ModesPaneView`.** Both
+  panes render a shortcut as chips the identical way (design notes §2), but the two views were
+  built by different lots at different times and neither shares a common parent view module a
+  small SwiftUI helper could live in without one importing the other. Left duplicated rather than
+  factored out now; worth a shared `ChipRow` view the day a third pane needs the same chips.

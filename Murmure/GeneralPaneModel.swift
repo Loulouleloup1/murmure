@@ -190,9 +190,13 @@ final class GeneralPaneModel: ObservableObject {
         // Left-hand modifiers are pressed and released alone constantly during ordinary typing
         // (`KeyCombo.isLeftHandModifierOnly`'s own note) -- the bound combo, not the recording
         // state, is what this warns about, so it is read fresh here rather than cached.
+        //
+        // `KeyCombo.leftHandModifierWarning`, not a literal copy of the sentence: `ModesPaneModel
+        // .modeHotkeyNote` warns about the identical thing for a mode's own shortcut, and a second
+        // copy of the wording here is exactly how the two panes would drift apart (review, lot 3d,
+        // item 3).
         guard settings.toggleHotkey.isLeftHandModifierOnly else { return base }
-        return base + " Left-hand modifiers are pressed and released on their own all day; the "
-            + "right-hand key is the safer choice."
+        return base + " " + KeyCombo.leftHandModifierWarning
     }
 
     /// Starts listening for a new shortcut. A no-op if already recording, so a second click of

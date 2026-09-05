@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MurmureCore
 import WhisperKit
@@ -114,6 +115,22 @@ final class ModesPaneModel: ObservableObject {
     /// selection follow it (`ModePreference.selection(_:following:)`).
     private let didChangeModes: (_ renamedKey: (from: String, to: String)?) -> Void
 
+    /// Read fresh on every access rather than cached (`settings.toggleHotkey`'s own shape, the
+    /// same one `GeneralPaneModel.toggleKeycaps` relies on) -- what the Shortcut row's conflict
+    /// check (``modeHotkeyProblem``) resolves this mode's draft hotkey against.
+    private let settings: AppSettings
+
+    /// `DictationController.releaseToggleHotkey()` / `.restoreToggleHotkey()` -- the exact same
+    /// closures `GeneralPaneModel` is handed in `MurmureApp.init`, for the identical reason
+    /// (`GeneralPaneModel`'s own note on them): recording a mode's own shortcut needs every live
+    /// binding gone first, toggle AND every other mode's, or Carbon consumes the very keys this
+    /// pane's local monitor is trying to capture before it ever sees them. Not shared as ONE
+    /// helper between the two panes -- `GeneralPaneModel` is owned by another lot currently under
+    /// review and cannot be touched from here, so the release/restore discipline below is mirrored
+    /// faithfully rather than refactored out.
+    private let releaseToggleHotkey: () -> Void
+    private let restoreToggleHotkey: () -> Void
+
     /// A session of its own, short-timed, on the loopback address -- the same shape and the same
     /// reason `ModelsPaneModel`'s own session gives: `OllamaChat.timeout`'s 120 s is sized for a
     /// model generating text, not for finding out that nothing is listening.
@@ -148,11 +165,36 @@ final class ModesPaneModel: ObservableObject {
     init(
         supportFolder: URL,
         modelsStore: URL,
+        settings: AppSettings,
+        releaseToggleHotkey: @escaping () -> Void,
+        restoreToggleHotkey: @escaping () -> Void,
         didChangeModes: @escaping (_ renamedKey: (from: String, to: String)?) -> Void = { _ in }
     ) {
         self.supportFolder = supportFolder
         self.modelsStore = modelsStore
+        self.settings = settings
+        self.releaseToggleHotkey = releaseToggleHotkey
+        self.restoreToggleHotkey = restoreToggleHotkey
         self.didChangeModes = didChangeModes
+    }
+
+    deinit {
+        // Belt beside `ModesPaneView`'s `.onDisappear` -- the identical reasoning
+        // `GeneralPaneModel.deinit` documents, mirrored rather than shared for the same reason the
+        // stored closures above are: this pane is a `@StateObject` built once in `MurmureApp.init`
+        // and normally outlives every editor session, so the view going away is the ordinary way a
+        // mode-hotkey recording stops; this is the belt for the case that never fires. Gated on
+        // `hasReleasedForModeHotkeyRecording`, not on the monitor being non-nil, for the identical
+        // two reasons `GeneralPaneModel.hasReleasedToggleHotkey`'s own note gives.
+        MainActor.assumeIsolated {
+            if let modeHotkeyEventMonitor {
+                NSEvent.removeMonitor(modeHotkeyEventMonitor)
+            }
+            if hasReleasedForModeHotkeyRecording {
+                hasReleasedForModeHotkeyRecording = false
+                restoreToggleHotkey()
+            }
+        }
     }
 
     /// Re-reads the folder, the speech-model store and Ollama's own listing. Called every time
@@ -260,7 +302,18 @@ final class ModesPaneModel: ObservableObject {
     ///
     /// Refusing to collapse at all was the other option and was rejected: a click that does
     /// nothing is its own kind of lie, and it leaves the reader with no way out and nothing said.
+    ///
+    /// **Stops a mode-hotkey recording first, unconditionally, before either branch below runs.**
+    /// Both callers -- `toggleEditor(for:)` opening a DIFFERENT mode, `create(from:)` -- can swap
+    /// the draft (or raise the discard alert over it) WITHOUT ever reaching `closeEditor()`: the
+    /// branch below that runs `action()` immediately, when there is nothing unsaved to lose, never
+    /// calls it at all. Left as it was, clicking another mode's row (or `+`) while Record was still
+    /// listening on the one being left open left the monitor installed and swallowing every
+    /// keystroke typed into whatever came next, until that recording's own accept or refusal
+    /// eventually arrived -- fixed here, in the one function both call sites share, rather than at
+    /// each call site separately.
     private func requestingDiscardIfNeeded(_ action: @escaping () -> Void) {
+        stopRecordingModeHotkey()
         guard let draft, draft.hasUnsavedChanges else { return action() }
         deferredAction = action
         discardPrompt = draft.discardConfirmation
@@ -281,7 +334,19 @@ final class ModesPaneModel: ObservableObject {
     /// Closes the editor without asking. The primitive: `save()` and `confirmDiscard()` call it
     /// once there is nothing left to lose, and Cancel calls it because pressing Cancel is the
     /// answer to the question this would otherwise ask.
+    ///
+    /// **Also stops a mode-hotkey recording and clears its stale refusal, idempotently -- but this
+    /// is not the only place that does.** `stopRecordingModeHotkey()` is the same safety
+    /// `GeneralPaneModel.stopRecordingHotkey()` relies on being called from `.onDisappear` on every
+    /// ordinary visit; `modeHotkeyRecordingMessage` is cleared here for the same reason
+    /// `clearModeHotkey()` clears it, so a refusal sentence recorded against the mode being left
+    /// cannot still be showing under the next one's row. `requestingDiscardIfNeeded(_:)` stops a
+    /// recording too, first thing, because that function can swap the draft (or raise the discard
+    /// alert over it) WITHOUT ever calling this one -- its immediate-`action()` branch. The two
+    /// together are what cover every exit; this one alone does not.
     func closeEditor() {
+        stopRecordingModeHotkey()
+        modeHotkeyRecordingMessage = nil
         draft = nil
         screen = .basic
         writeProblem = nil
@@ -293,6 +358,170 @@ final class ModesPaneModel: ObservableObject {
 
     func showBasic() {
         screen = .basic
+    }
+
+    // MARK: - The mode's own shortcut, recorded
+
+    /// Whether the pane is currently listening for a new per-mode shortcut. Named apart from
+    /// `GeneralPaneModel.isRecordingHotkey` rather than sharing it -- the two panes record two
+    /// different bindings (the toggle vs. one mode's own) and are never on screen at once, but the
+    /// names must not collide the day something reads both across a future refactor.
+    @Published private(set) var isRecordingModeHotkey = false
+
+    /// The sentence a refusal leaves on screen, or nil. Cleared at the start of the next recording,
+    /// the same rule `GeneralPaneModel.hotkeyRecordingMessage` follows.
+    @Published private(set) var modeHotkeyRecordingMessage: String?
+
+    /// The local monitor capturing the recording, or nil while none is running -- the same shape
+    /// `GeneralPaneModel.eventMonitor` uses and for the same reason (`NSEvent
+    /// .addLocalMonitorForEvents`'s own opaque return type).
+    private var modeHotkeyEventMonitor: Any?
+
+    /// Whether THIS object currently holds every live binding released -- set the moment
+    /// `releaseToggleHotkey()` is called in ``startRecordingModeHotkey()``, cleared the moment
+    /// `restoreToggleHotkey()` is called back in ``stopRecordingModeHotkey()``, `closeEditor()` or
+    /// `deinit`. The exact gate `GeneralPaneModel.hasReleasedToggleHotkey` uses, for the identical
+    /// two reasons that property's own note gives.
+    private var hasReleasedForModeHotkeyRecording = false
+
+    /// The state a recording needs across more than one event -- fresh for every recording, the
+    /// same reason `GeneralPaneModel.recordingSession` is rebuilt each time (that property's own
+    /// note on stale membership surviving a Caps Lock or Escape mid-hold).
+    private var modeHotkeyRecordingSession = HotkeyRecordingSession()
+
+    /// The draft's own shortcut, as chips -- empty when it has none, which the view draws as
+    /// "None" rather than an empty row of chips.
+    var modeHotkeyKeycaps: [Keycap] {
+        draft?.mode.hotkey?.keycaps ?? []
+    }
+
+    /// What the sentence under the Shortcut row says: idle instructions, what is happening while
+    /// recording, or -- for a modifier-only combo on a left-hand key -- the same warning General
+    /// gives the toggle for the identical reason. The base sentence and the warning are both
+    /// `GeneralPaneModel.hotkeyNote`'s own wording; the warning itself is
+    /// `KeyCombo.leftHandModifierWarning`, the one shared copy both panes read, so this pane does
+    /// not keep a second copy of a sentence General already owns.
+    var modeHotkeyNote: String {
+        if let modeHotkeyRecordingMessage { return modeHotkeyRecordingMessage }
+        if isRecordingModeHotkey { return "Press the keys for your new shortcut." }
+
+        let base = "Click Record, then press a key combination, or tap a single modifier such as "
+            + "Right ⌥ on its own. A combination needs ⌃, ⌥, ⇧ or ⌘, except for the F-keys, "
+            + "which can be bound on their own."
+        // The draft's own combo, not the recording state, is what this warns about -- read fresh
+        // here rather than cached, the same reason `GeneralPaneModel.hotkeyNote` reads
+        // `settings.toggleHotkey` fresh rather than caching it.
+        guard draft?.mode.hotkey?.isLeftHandModifierOnly == true else { return base }
+        return base + " " + KeyCombo.leftHandModifierWarning
+    }
+
+    /// The conflict or refusal sentence that names the mode being edited, or nil -- shown under
+    /// the Shortcut row before Save runs the same resolution for real. `nil` when the draft has no
+    /// hotkey at all: `HotkeyAssignments.resolve` skips a mode with none, silently, the same as any
+    /// other mode nobody has tried to bind a key to.
+    ///
+    /// `HotkeyAssignments.substituting` builds the input -- the draft's current hotkey standing in
+    /// for the mode being edited, matched against the rest by `previousKey` rather than by name
+    /// (that function's own note on why) -- and `HotkeyAssignments.resolve` is the rule; both are
+    /// tested in `MurmureCore`, so nothing here is a second copy of either.
+    var modeHotkeyProblem: String? {
+        guard let draft else { return nil }
+        let existing = modes.map {
+            HotkeyAssignments.ModeHotkey(key: $0.key, name: $0.name, hotkey: $0.hotkey)
+        }
+        let substitute = HotkeyAssignments.ModeHotkey(
+            key: draft.mode.key, name: draft.mode.name, hotkey: draft.mode.hotkey)
+        let candidates = HotkeyAssignments.substituting(
+            substitute, in: existing, previousKey: draft.previousKey)
+        let resolved = HotkeyAssignments.resolve(toggle: settings.toggleHotkey, modes: candidates)
+        let id = HotkeyBindingID.mode(draft.mode.key)
+        if let refusal = resolved.refusals.first(where: { $0.id == id }) {
+            return refusal.message
+        }
+        if let conflict = resolved.conflicts.first(where: { $0.winner == id || $0.loser == id }) {
+            return conflict.message
+        }
+        return nil
+    }
+
+    /// Starts listening for a new per-mode shortcut. A no-op if already recording -- the same
+    /// guard `GeneralPaneModel.startRecordingHotkey()` uses so a second click of Record cannot
+    /// install a second monitor over the first.
+    ///
+    /// **`.addLocalMonitorForEvents`, never a global monitor** -- see that method's own note for
+    /// why. **Every live binding released, not the toggle alone** -- a mode's own combo can be the
+    /// very key already bound to the toggle or to another mode, and Carbon consumes a registered
+    /// chord before this monitor would ever see it; `releaseToggleHotkey()` tears down all of them
+    /// (`DictationController.releaseToggleHotkey()`'s own note), which is exactly what makes
+    /// rebinding onto a combo already in use come back as an ordinary accepted press.
+    func startRecordingModeHotkey() {
+        guard modeHotkeyEventMonitor == nil else { return }
+        isRecordingModeHotkey = true
+        modeHotkeyRecordingMessage = nil
+        modeHotkeyRecordingSession = HotkeyRecordingSession()
+        releaseToggleHotkey()
+        // Set immediately after the release, before the monitor install below -- which can itself
+        // fail independently -- so this flag reflects "was everything released", never "did the
+        // monitor also come up" (`hasReleasedForModeHotkeyRecording`'s own note).
+        hasReleasedForModeHotkeyRecording = true
+        modeHotkeyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) {
+            [weak self] event in
+            self?.handleModeHotkeyEvent(event)
+            // Returning nil swallows the event -- the press being recorded must not also reach
+            // whatever field or button happens to be focused behind the Record button.
+            return nil
+        }
+    }
+
+    /// Stops listening, with or without a shortcut having been accepted. Idempotent: called from
+    /// every exit of a recording (``handleModeHotkeyEvent(_:)``'s two terminal outcomes), from
+    /// `closeEditor()` and from `ModesPaneView`'s `.onDisappear` -- safe when nothing is running,
+    /// because the restore below is gated on `hasReleasedForModeHotkeyRecording`, not run
+    /// unconditionally.
+    func stopRecordingModeHotkey() {
+        if let modeHotkeyEventMonitor {
+            NSEvent.removeMonitor(modeHotkeyEventMonitor)
+        }
+        modeHotkeyEventMonitor = nil
+        isRecordingModeHotkey = false
+        guard hasReleasedForModeHotkeyRecording else { return }
+        hasReleasedForModeHotkeyRecording = false
+        restoreToggleHotkey()
+    }
+
+    /// Clears the draft's shortcut. Never touches Carbon: nothing is registered for a mode's
+    /// `hotkey` at editor time, only at Save, through `refreshModes()` -- see the field's own
+    /// doc comment on why the editor writes the draft and nothing more.
+    ///
+    /// **Also clears `modeHotkeyRecordingMessage`.** A refusal sentence left standing after
+    /// Clear would read as a complaint about the "None" the row now shows, rather than about the
+    /// combo it used to hold.
+    func clearModeHotkey() {
+        draft?.mode.hotkey = nil
+        modeHotkeyRecordingMessage = nil
+    }
+
+    /// One captured event, handed to the same stateful recorder `GeneralPaneModel.handle(_:)`
+    /// uses. The seam is identical to that method's own; only the destination of an accepted combo
+    /// differs -- written straight into the draft here, rather than sent through a Carbon rebind,
+    /// because nothing needs registering until Save runs `refreshModes()`.
+    private func handleModeHotkeyEvent(_ event: NSEvent) {
+        let captured: CapturedKeyEvent = event.type == .flagsChanged
+            ? .flagsChanged(keyCode: event.keyCode, appKitModifierFlags: event.modifierFlags.rawValue)
+            : .keyDown(keyCode: event.keyCode, appKitModifierFlags: event.modifierFlags.rawValue)
+
+        switch modeHotkeyRecordingSession.observe(captured) {
+        case .stillPressing:
+            return
+
+        case .refused(let message):
+            modeHotkeyRecordingMessage = message
+            stopRecordingModeHotkey()
+
+        case .accepted(let combo):
+            draft?.mode.hotkey = combo
+            stopRecordingModeHotkey()
+        }
     }
 
     /// Starts a new mode from a preset. Not written yet: it appears as an expanded card at the

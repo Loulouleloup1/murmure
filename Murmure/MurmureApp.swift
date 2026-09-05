@@ -136,9 +136,15 @@ struct MurmureApp: App {
         // **`didChangeModes` is what makes the editor's Save reach the rest of the app**, and a
         // model built with the no-op default would look identical, compile identically and leave
         // the menu offering the list from before the edit.
+        // `settings` plus `controller.releaseToggleHotkey`/`.restoreToggleHotkey` -- the exact
+        // same closures `generalModel` below is handed, for the identical reason: recording a
+        // mode's own shortcut needs every live binding released first, the same as recording the
+        // toggle, and only `MurmureApp.init` can close over both this pane and the controller.
         _modesModel = StateObject(
             wrappedValue: ModesPaneModel(
-                supportFolder: Storage.url(), modelsStore: Storage.url(subfolder: "models")
+                supportFolder: Storage.url(), modelsStore: Storage.url(subfolder: "models"),
+                settings: settings, releaseToggleHotkey: controller.releaseToggleHotkey,
+                restoreToggleHotkey: controller.restoreToggleHotkey
             ) { renamed in
                 // The rename first, so the stored selection has already followed the key by the
                 // time the list it is checked against is replaced. `ModePreference.selection` is

@@ -81,6 +81,34 @@ public enum HotkeyAssignments {
         }
     }
 
+    /// Every mode's own shortcut, with `draft` standing in for whichever one is being edited --
+    /// what an editor calls before ``resolve(toggle:modes:)`` so a combo just typed, not yet
+    /// saved, is checked against the same live table a real save would resolve.
+    ///
+    /// **Matches by `previousKey`, never by `name`.** `key` is the mode's file name and the one
+    /// `HotkeyBindingID.mode(_:)` registers under (`ModeHotkey`'s own doc comment); `name` is a
+    /// display string the editor lets you change on the very same draft this substitutes. Matching
+    /// on `name` instead would silently miss a mode mid-rename -- its entry in `modes` still
+    /// carries the OLD name, the draft already carries the new one -- and this function would then
+    /// append a second, duplicate candidate for the same mode rather than replacing its one entry,
+    /// which is exactly the case a caller reaches this for.
+    ///
+    /// `previousKey` is `nil` for a mode not yet on disk (`ModeDraft.previousKey`'s own doc
+    /// comment) and non-nil but absent from `modes` for one whose key just changed in the same
+    /// edit -- both fall through to the same append, because either way there is no existing entry
+    /// left to replace.
+    public static func substituting(
+        _ draft: ModeHotkey, in modes: [ModeHotkey], previousKey: String?
+    ) -> [ModeHotkey] {
+        var result = modes
+        if let previousKey, let index = result.firstIndex(where: { $0.key == previousKey }) {
+            result[index] = draft
+        } else {
+            result.append(draft)
+        }
+        return result
+    }
+
     /// The name a conflict sentence uses for the toggle -- it is not a mode, so it has no
     /// `Mode.name` of its own to borrow.
     private static let toggleName = "the dictation shortcut"
@@ -90,13 +118,14 @@ public enum HotkeyAssignments {
     /// **A mode hotkey `HotkeyRecording` would refuse is excluded before it can contend for
     /// anything, and reported as a refusal, not a conflict.** The toggle can only ever be set by
     /// rebinding it through `HotkeyRecording.evaluate`/`HotkeyRecordingSession` (General's own
-    /// recorder), so it is always already legal by construction. A mode's `hotkey`, today, has no
-    /// recorder at all -- the only way to set one is hand-editing the mode's JSON file
-    /// (`docs/plans/2026-09-backlog.md` §7, pending an editor) -- so nothing has ever asked whether
-    /// it should be allowed. A bare Escape written there would otherwise reach `HotkeyManager` as a
-    /// permanent global chord, fighting `CancelHotkey` for the same key on every single recording;
-    /// `HotkeyRecording.wouldRefuse(_:)` is the same rule General's own Record button already
-    /// enforces, asked here of a value that never went through it.
+    /// recorder), so it is always already legal by construction. A mode's `hotkey` now has a
+    /// recorder of its own too (`ModesPaneModel`'s Shortcut row, over the same
+    /// `HotkeyRecordingSession`), so most of the time it is equally already legal -- but a
+    /// hand-edited mode JSON file bypasses that recorder entirely, the same way it always could,
+    /// and this check is what stands between a bare Escape written there and `HotkeyManager`
+    /// taking it as a permanent global chord, fighting `CancelHotkey` for the same key on every
+    /// single recording; `HotkeyRecording.wouldRefuse(_:)` is the same rule both Record buttons
+    /// already enforce, asked here of a value that may never have gone through either one.
     ///
     /// **The toggle always wins a genuine clash.** It is the one shortcut every dictation depends
     /// on and the one Louis did not just set by editing a mode file, so a clash between it and a
