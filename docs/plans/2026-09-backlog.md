@@ -87,22 +87,27 @@ engine default and passes anything else through; `WhisperKitEngine` keeps one mo
 by variant, and warm-starts on an exact match. `HistoryRecord.sttModel` now records what ran, not
 what was asked.
 
-## 5. Installing a model the app did not ship with — CLOSED 2026-09-04 (`c6e1525`)
+## 5. Installing a model the app did not ship with — CLOSED, then generalised 2026-09-05
 
-Paste an `owner/repo` or a `huggingface.co` URL and the app lists the speech-model variants that
-repo actually contains (a top-level folder holding every required bundle), then downloads one.
-Refiner models come through `/api/pull` against the local Ollama, streamed as NDJSON.
+One field takes anything -- an `owner/repo` id, a `huggingface.co` URL, or an Ollama name -- and a
+press of "Inspect" classifies it: `ModelClassifier` (`MurmureCore`) reads the repository's own
+Hugging Face blob listing (`?blobs=true`) and sorts it into speech variants (a folder holding every
+required bundle), `.gguf` refiner candidates (one per quantisation, tagged from the filename), both
+at once (the user picks the role in the sheet), or not runnable at all (safetensors-only, with a
+Hugging Face search offering GGUF conversions as "Inspect this instead" rows). An Ollama name skips
+classification entirely and is pulled as typed. Install dispatches to
+`WhisperKit.download(variant:downloadBase:from:)` for a speech pick or `/api/pull` for a refiner
+pick, exactly as before; nothing reaches the network before a press. `SpeechModelCatalog` (the
+original, `WhisperKit.fetchAvailableModels`-based listing) is deleted, not merely unused: it was
+the one remaining call to `fetchAvailableModels` in the app, and that call is what silently
+substitutes Argmax's own fallback table on a repository with no `config.json` — the trap
+`ModelClassifier`'s own doc comment describes. Deleting the file rather than leaving it orphaned
+takes that trap out of the live path entirely, rather than leaving a second, unreachable copy of it
+sitting in the tree for a future call site to wire back in by accident.
 
-Two traps found and handled rather than discovered later:
-
-- `WhisperKit.fetchAvailableModels` **silently substitutes Argmax's fallback table** when a repo has
-  no `config.json` — a plausible-looking wrong answer, worse than an empty one. `SpeechModelCatalog`
-  detects the `whisperkit-coreml-fallback` sentinel and falls back to a raw file listing.
-- Nothing reaches the network on `onAppear`. Every call is behind a press.
-
-`ModelInventory.removal(for:in:namedByModes:)` says something different when a mode still names the
-model you are deleting. It is decided and tested but **deliberately not wired to the delete
-button** — see the open items below.
+`ModelInventory.removal(for:in:namedByModes:)` (speech) and its language sibling
+`removal(forLanguageModel:namedByModes:)` are wired to a real Delete button behind a confirmation
+`.alert` — see the item below.
 
 ## 6. The start/stop shortcut is yours to change — CLOSED 2026-09-04 (`3122f5d`)
 
@@ -157,12 +162,30 @@ rather than a gradient: `mdi` 3 077 occurrences, median words ×2.54, decode tim
   migrates an old mode file on load, `WhisperKitEngine` and the Models pane both read the one
   reference, and the mode editor's Speech/Refiner model fields are now pickers over what is
   actually installed rather than free text.
-- **Deleting a model does not warn when a mode still names it.** The sentence exists and is tested
-  (`ModelInventory.removal(for:in:namedByModes:)`); wiring it means actuating a destructive button,
-  which was not done on a machine holding real models.
-- **Four network paths shipped unexecuted**: listing a Hugging Face repo, downloading a speech
-  model, pulling an Ollama model, and the fallback file listing. The parsing and classification
-  around each is tested against fixtures; no request was ever sent.
+- ~~**Deleting a model does not warn when a mode still names it.**~~ CLOSED 2026-09-05. The Delete
+  button on both families now calls `ModelInventory.removal`/`removal(forLanguageModel:)`, shows
+  the confirmation `.alert` it computes, and only then removes the two speech directories or calls
+  Ollama's own `DELETE /api/delete` (`OllamaDelete`, new, tested). **What actually ran**: the
+  Ollama half of this, end to end — a real pull followed by a real `DELETE /api/delete`, confirmed
+  gone from `/api/tags` (`benchmark/modelnettest`, below). The speech half — removing the variant
+  folder and its `.cache` sidecar — is wired and unit-tested (`ModelInventoryTests`) but was NOT
+  exercised against the real store: the shipped default's own files under
+  `argmaxinc/whisperkit-coreml` were never touched, deliberately, and the confirmation `.alert`
+  itself was never seen on screen, since that requires the GUI, which this session never launched.
+  Both remain open for Louis to confirm by hand: open the Models pane, delete a speech model (any
+  one other than the shipped default -- pressing "Add a model" against a small repository and
+  installing it first gives a safe one to delete) and confirm the row, the `.alert`'s wording, and
+  the removed directories all look right; separately, pull a small model through "Add a model" and
+  delete it from the table, confirming Ollama's own `ollama list` no longer shows it.
+- ~~**Four network paths shipped unexecuted**~~ CLOSED 2026-09-05, all four actually run
+  (`benchmark/modelnettest`, gated by `MURMURE_NETWORK_TESTS=1`, one recorded pass): Hugging Face
+  listing classified `argmaxinc/whisperkit-coreml` (27 speech variants), `superwhisper/s1-mini-GGUF`
+  (refiner, `Q4_K_M` among the quants) and `XHToken/Spark-X2.5-4B` (not runnable, safetensors, 8 GGUF
+  conversions found) — fixtures re-saved from these live responses; `openai_whisper-tiny` downloaded
+  into a temp dir and deleted; `hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M` (491 MB) pulled,
+  confirmed in `/api/tags`, then removed, none of the five pre-existing Ollama models touched; the
+  `config.json`-fallback path fired for real against `tomAndJetty/whisperkit-coreml` (4 variants
+  derived from its raw file listing).
 - **`Mode.hotkey` is a dead field.** A mode declares a per-mode shortcut that nothing reads. Either
   wire it or remove it; leaving it is the same lie as the three settings removed in §2.
 

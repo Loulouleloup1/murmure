@@ -9,9 +9,12 @@ import Foundation
 /// holds CoreML folders with no `config.json` gets a plausible-looking list of variant names that
 /// describes `argmaxinc/whisperkit-coreml`, not the repository asked about. That is a wrong answer
 /// wearing the shape of a right one, which is worse than an empty list -- an empty list at least
-/// says "nothing here". The app-target caller (`SpeechModelCatalog`) is what detects that the
-/// fallback fired; what is here is the honest alternative once it has: read the repository's own
-/// file listing and decide from that.
+/// says "nothing here". `SpeechModelCatalog`, the app-target caller that used to detect the
+/// fallback firing and call this, is deleted -- `ModelClassifier` bypasses `fetchAvailableModels`
+/// entirely now, reading the same raw blob listing every classification uses, so the fallback
+/// never fires in the live app at all. What is here still detects and repairs it directly, for
+/// whichever caller needs to (`benchmark/modelnettest` exercises it against a real repository) --
+/// it is the mechanism, not the app-target wiring, that survives.
 public enum SpeechModelListing {
     /// Every top-level folder in `filenames` that holds, somewhere under it, a path for EACH name
     /// in `requiredBundles` -- the same three bundles `ModelInventory.requiredBundles` and

@@ -444,34 +444,50 @@ public enum ModelInventory {
     /// store that will not re-download and will not load either.
     /// `namedByModes` is which modes' `stt.model` resolves to this variant (``modesNaming``),
     /// empty when none do. It changes the question asked and not merely a footnote to it: deleting
-    /// a model nobody names costs a re-download; deleting one a mode still names leaves that mode
-    /// falling back to Murmure's shipped default at the next dictation with nothing on screen
-    /// saying so -- the difference `WhisperKitEngine.load`'s own fallback is silent about. A
-    /// confirmation that did not say which of the two this delete is would let Louis press it not
-    /// knowing a mode goes with it.
+    /// a model nobody names costs a re-download at the next dictation with no warning first;
+    /// deleting one a mode still names costs that SAME mode a re-download before its next
+    /// dictation can run, and the confirmation is where Louis is told that before pressing Delete
+    /// rather than mid-recording. (`WhisperKitEngine.load` only substitutes the shipped default
+    /// silently for a reference the Hub has never heard of -- a typo'd variant name -- which
+    /// deleting a real, previously-installed folder never produces: the reference stays valid, so
+    /// the engine simply redownloads it.)
     public static func removal(
         for descriptor: SpeechModelDescriptor, in store: URL, namedByModes modeNames: [String] = []
+    ) -> ModelRemoval {
+        removal(
+            for: descriptor.reference, in: store, expectedBytes: descriptor.expectedBytes,
+            namedByModes: modeNames)
+    }
+
+    /// The same removal, for a reference nothing has measured a size for in advance -- every model
+    /// "Add a model" installed outside the two descriptors this package knows about, or one only a
+    /// mode names but that was never downloaded through a descriptor at all. `expectedBytes` is
+    /// `nil` in exactly that case, and the question says so honestly (`ModelRow.size`'s own rule
+    /// for the same absence) rather than printing a size nobody measured.
+    public static func removal(
+        for reference: SpeechModelReference, in store: URL, expectedBytes: Int64?,
+        namedByModes modeNames: [String] = []
     ) -> ModelRemoval {
         // The full reference, not `ModelDisplayName.readable(descriptor.variant)`: that rule
         // exists to drop a language model's registry prefix, and a speech model's "prefix" IS the
         // repository -- the one part of this string that says a delete followed by a reinstall
         // would fetch from the same place. This is what a speech row's own name column shows.
-        let name = descriptor.reference.string
-        let size = ModelSize.readable(descriptor.expectedBytes)
+        let name = reference.string
+        let sizeClause = expectedBytes.map { "Murmure will download \(ModelSize.readable($0)) again" }
+            ?? "Murmure will need to download it again"
         let question: String
         if modeNames.isEmpty {
-            question = "Delete \(name)? Murmure will download \(size) again before the next dictation."
+            question = "Delete \(name)? \(sizeClause) before the next dictation."
         } else {
             let modes = modeNames.joined(separator: ", ")
             let verb = modeNames.count == 1 ? "names" : "name"
             question = """
                 Delete \(name)? \(modes) still \(verb) it -- without it, dictation there will \
-                silently fall back to Murmure's default model until you point it at another one. \
-                Murmure will download \(size) again if you reinstall it.
+                pause to redownload it first. \(sizeClause) before it can run.
                 """
         }
         return ModelRemoval(
-            directories: [variant(for: descriptor, in: store), cache(for: descriptor, in: store)],
+            directories: [variant(for: reference, in: store), cache(for: reference, in: store)],
             question: question)
     }
 
@@ -487,6 +503,46 @@ public enum ModelInventory {
         modes.filter {
             SpeechModelResolution.reference(storedAs: $0.stt.model, engineDefault: engineDefault) == reference
         }.map(\.name)
+    }
+
+    /// The language half of ``modesNaming(reference:in:engineDefault:)`` -- which enabled modes'
+    /// `llm.model` names this Ollama identifier.
+    ///
+    /// Compared through ``OllamaProbe/tagged(_:)`` rather than as raw strings, for the reason that
+    /// function exists: a mode may store `"gemma4"` while the row it should match is
+    /// `"gemma4:latest"` (Ollama's own listing always spells the tag), and a literal comparison
+    /// would tell Louis nothing names a model one of his modes plainly does.
+    public static func modesNaming(languageModel identifier: String, in modes: [Mode]) -> [String] {
+        modes.filter { $0.llm.enabled && OllamaProbe.tagged($0.llm.model) == OllamaProbe.tagged(identifier) }
+            .map(\.name)
+    }
+
+    /// The question to ask before deleting a language model through Ollama's own `DELETE
+    /// /api/delete` -- ``removal(for:in:namedByModes:)``'s rule, extended to the family that has
+    /// no directories of its own to remove.
+    ///
+    /// Returns a ``ModelRemoval`` with an empty `directories` list rather than a bare `String`:
+    /// the view already knows how to ask `question` and act on a removal, and a second, almost
+    /// identical type for this one family would be a second thing to keep in agreement with the
+    /// first. The empty list is not a lie about what deleting does -- it says correctly that
+    /// nothing under `Application Support/Murmure` has to go; Ollama's own store, which this app
+    /// never writes to, is what the DELETE call removes.
+    public static func removal(
+        forLanguageModel name: String, namedByModes modeNames: [String] = []
+    ) -> ModelRemoval {
+        let question: String
+        if modeNames.isEmpty {
+            question = "Delete \(name)? Ollama will need to pull it again before it can be used."
+        } else {
+            let modes = modeNames.joined(separator: ", ")
+            let verb = modeNames.count == 1 ? "names" : "name"
+            question = """
+                Delete \(name)? \(modes) still \(verb) it -- there is no default refiner to fall \
+                back to: that mode will insert the raw transcript, with a notice, until you point \
+                it at another model. Ollama will need to pull it again before it can be used.
+                """
+        }
+        return ModelRemoval(directories: [], question: question)
     }
 
     /// The whole table, in the order it is drawn.

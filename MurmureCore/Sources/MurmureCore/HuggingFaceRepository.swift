@@ -31,11 +31,32 @@ public enum HuggingFaceRepository {
 
         // Not a recognised URL, so read it as a bare id. Leading/trailing slashes are stripped
         // rather than refused -- a paste that picked up a trailing "/" is still unambiguously
-        // "owner/repo" -- but anything that leaves more or fewer than two components is refused:
-        // a third segment is not part of an id typed by hand, and one segment is a model name
-        // with no owner, which is not the shape this field asks for.
+        // "owner/repo".
         let segments = trimmed.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        guard segments.count == 2 else { return nil }
+        guard let first = segments.first else { return nil }
+
+        // A first segment carrying a dot reads as a HOST, not an owner name -- `huggingface.co/
+        // owner/repo` pasted with no scheme (so `URL(string:)` above sees no host and never takes
+        // the branch that already handles this), `hf.co/<owner>/<repo>[:<tag>]` (Ollama's own
+        // convention for a Hugging Face GGUF pull, Louis's own second example for "Add a model"),
+        // and `registry.ollama.ai/library/gemma` (an Ollama registry name) are the three real
+        // pastes this rules on. Checked ONLY on the first segment: a repo name legitimately
+        // contains a dot (`my_org-1/model.name-v2`, tested below), and that must keep working when
+        // the dot is not in the position an owner/host occupies.
+        if first.contains(".") {
+            guard first.lowercased() == "huggingface.co" || first.lowercased() == "www.huggingface.co"
+            else { return nil }  // Any other dotted host -- hf.co, an Ollama registry -- is not one.
+            let rest = Array(segments.dropFirst())
+            guard rest.count >= 2 else { return nil }
+            return validated(owner: rest[0], repo: rest[1])
+        }
+
+        guard segments.count == 2 || segments.count == 3 else { return nil }
+
+        // A `SpeechModelReference`'s own display string is `owner/repo/variant` -- the exact shape
+        // `ModelRow` shows for an installed speech model -- so pasting it straight back into
+        // "Add a model" must still find the repository, one segment folded away, rather than
+        // falling through to being read as an unrecognised Ollama name.
         return validated(owner: segments[0], repo: segments[1])
     }
 

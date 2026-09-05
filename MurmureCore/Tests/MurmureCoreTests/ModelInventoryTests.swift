@@ -277,13 +277,14 @@ final class ModelInventoryTests: XCTestCase {
     }
 
     /// A different question, not a footnote to the same one: deleting a model a mode still names
-    /// leaves that mode falling back to Murmure's default with nothing on screen saying so, and
-    /// the confirmation is the one place that can say it before it happens.
-    func testDeletingAModelNamedByAModeWarnsAboutTheFallback() {
+    /// costs that same mode a redownload before its next dictation can run (not a silent
+    /// substitution -- `WhisperKitEngine.load` only does that for a reference the Hub has never
+    /// heard of), and the confirmation is the one place that can say it before it happens.
+    func testDeletingAModelNamedByAModeWarnsItWillRedownload() {
         let removal = ModelInventory.removal(for: descriptor, in: store, namedByModes: ["Voice"])
 
         XCTAssertTrue(removal.question.contains("Voice"), removal.question)
-        XCTAssertTrue(removal.question.contains("fall back"), removal.question)
+        XCTAssertTrue(removal.question.contains("redownload"), removal.question)
         XCTAssertTrue(removal.question.contains("names it"), removal.question)
     }
 
@@ -300,7 +301,7 @@ final class ModelInventoryTests: XCTestCase {
     func testDeletingAModelNamedByNoModeAsksTheOriginalQuestion() {
         let removal = ModelInventory.removal(for: descriptor, in: store, namedByModes: [])
 
-        XCTAssertFalse(removal.question.contains("fall back"), removal.question)
+        XCTAssertFalse(removal.question.contains("redownload"), removal.question)
     }
 
     // MARK: - Which modes name a reference
@@ -439,6 +440,74 @@ final class ModelInventoryTests: XCTestCase {
                 .init(identifier: "gemma4:12b", endpoint: "http://localhost:11434"),
                 .init(identifier: "gemma4:12b", endpoint: "http://mini.local:11434"),
             ])
+    }
+
+    /// A model installed through "Add a model" rather than through a known descriptor -- nothing
+    /// measured its size in advance, and the question says so honestly rather than printing a
+    /// size nobody measured.
+    func testRemovalWithNoExpectedBytesAsksToDownloadWithoutASize() {
+        let reference = SpeechModelReference(repository: "someowner/somerepo", variant: "some-variant")
+
+        let removal = ModelInventory.removal(for: reference, in: store, expectedBytes: nil)
+
+        XCTAssertEqual(
+            removal.directories,
+            [ModelInventory.variant(for: reference, in: store), ModelInventory.cache(for: reference, in: store)])
+        XCTAssertTrue(removal.question.contains("need to download it again"), removal.question)
+        XCTAssertFalse(removal.question.contains(" B "), removal.question)
+    }
+
+    // MARK: - Deleting a language model
+
+    /// The language sibling of `testRemovalTakesTheVariantAndItsCacheAndNotTheRepository`: no
+    /// directories to remove -- Ollama's own store, never this app's -- but the same confirmation
+    /// shape.
+    func testLanguageRemovalHasNoDirectoriesAndAsksToPullAgain() {
+        let removal = ModelInventory.removal(forLanguageModel: "gemma4:12b-it-qat")
+
+        XCTAssertEqual(removal.directories, [])
+        XCTAssertTrue(removal.question.contains("gemma4:12b-it-qat"), removal.question)
+        XCTAssertTrue(removal.question.contains("pull it again"), removal.question)
+    }
+
+    /// There is no default refiner (unlike speech's shipped default): a mode whose model is gone
+    /// inserts the raw transcript with a `RefinementNotice`, per `DictationController.refine` /
+    /// `TranscriptRefiner`. The question must say that, not invent a model to fall back to.
+    func testLanguageRemovalNamedByAModeWarnsItWillInsertRawText() {
+        let removal = ModelInventory.removal(forLanguageModel: "gemma4:12b-it-qat", namedByModes: ["Prompt"])
+
+        XCTAssertTrue(removal.question.contains("Prompt"), removal.question)
+        XCTAssertTrue(removal.question.contains("raw transcript"), removal.question)
+        XCTAssertTrue(removal.question.contains("names it"), removal.question)
+    }
+
+    func testLanguageRemovalNamedByTwoModesUsesThePluralVerb() {
+        let removal = ModelInventory.removal(
+            forLanguageModel: "gemma4:12b-it-qat", namedByModes: ["Voice", "Prompt"])
+
+        XCTAssertTrue(removal.question.contains("Voice, Prompt"), removal.question)
+        XCTAssertTrue(removal.question.contains("name it"), removal.question)
+    }
+
+    // MARK: - Which modes name a language model
+
+    func testModesNamingLanguageModelMatchesOnTheTaggedIdentifier() {
+        let modes = [
+            mode(key: "voice", enabled: true, model: "gemma4", endpoint: "http://localhost:11434"),
+            mode(key: "raw", enabled: false, model: "gemma4:12b-it-qat", endpoint: "http://localhost:11434"),
+        ]
+
+        XCTAssertEqual(
+            ModelInventory.modesNaming(languageModel: "gemma4:latest", in: modes), ["voice"],
+            "a mode storing the bare name still resolves to the tag Ollama's own listing spells")
+    }
+
+    func testModesNamingLanguageModelIsEmptyWhenNoEnabledModeNamesIt() {
+        let modes = [
+            mode(key: "raw", enabled: false, model: "gemma4:12b-it-qat", endpoint: "http://localhost:11434"),
+        ]
+
+        XCTAssertEqual(ModelInventory.modesNaming(languageModel: "gemma4:12b-it-qat", in: modes), [])
     }
 
     // MARK: - Sizes

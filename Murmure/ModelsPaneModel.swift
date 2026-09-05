@@ -26,24 +26,71 @@ final class ModelsPaneModel: ObservableObject {
     /// "not checked yet" and an answer -- see `OllamaProbe.row(for:outcome:)`.
     @Published private(set) var hasChecked = false
 
-    // MARK: - Adding a speech model
+    // MARK: - Adding a model
 
-    /// What Louis has typed into "add a speech model" so far -- a repository id or a pasted URL,
-    /// unparsed. Parsing happens on press (`fetchSpeechModelListing`), not on every keystroke: a
-    /// half-typed id is not an error, it is just not a repository yet.
-    @Published var repositoryInput = ""
-    @Published private(set) var isFetchingListing = false
-    @Published private(set) var listing: SpeechModelCatalog.Listing?
-    /// Set only when `repositoryInput` itself could not be read as a repository -- distinct from
-    /// `listing`'s own `.failure`, which means the repository WAS well-formed and the network or
-    /// the Hub said no.
-    @Published private(set) var repositoryInputError: String?
+    /// What "Inspect" concluded, or `nil` when the sheet is dismissed. Louis's own words on the
+    /// old, speech-only version of this field: *"je veux ajouter N'IMPORTE QUEL modèle et choisir
+    /// moi-même s'il s'agit d'un modèle de parole ou d'un modèle de raffinement"* -- so the field
+    /// takes anything, and this is what a press of Inspect read it as.
+    enum Inspection: Equatable {
+        /// `repository` is `HuggingFaceRepository.parse`'s output -- the canonical `owner/repo`.
+        case huggingFace(repository: String, classification: HuggingFaceClassification)
+        /// The input did not parse as a Hugging Face id or URL, so it is read as an Ollama model
+        /// name (`gemma4:12b-it-qat`, `hf.co/owner/repo:QUANT`) and pulled exactly as typed --
+        /// there is nothing further to classify about a name Ollama itself will resolve.
+        case ollamaName(String)
+        /// The repository looked well-formed but Hugging Face could not answer for it -- distinct
+        /// from a repository classified `.notRunnable`, which DID answer.
+        case failure(detail: String)
+    }
+
+    /// What Louis has typed into "Add a model" so far -- a Hugging Face id, a pasted
+    /// `huggingface.co` URL, or an Ollama model name, unparsed. Parsing and classification happen
+    /// on press (`inspect()`), not on every keystroke: a half-typed id is not an error, it is just
+    /// not a repository yet.
+    @Published var addModelInput = ""
+    @Published private(set) var isInspecting = false
+    @Published private(set) var inspection: Inspection?
+    /// Which engine the selected candidate would install under. Pre-selected when `inspection` is
+    /// unambiguous (`.speechOnly`/`.refinerOnly`/`.ollamaName`), left `nil` for `.both` so Louis
+    /// chooses -- see design notes on the sheet for why the radio still shows in the unambiguous
+    /// case rather than being hidden.
+    @Published var selectedRole: ModelRole?
+    /// The variant name (speech) or `.gguf` filename (refiner) currently chosen from the candidate
+    /// list, or `nil` before anything is picked.
+    @Published var selectedCandidateID: String?
+    @Published private(set) var isSearchingSuggestions = false
+    /// Repository ids `ModelInspector.searchGGUFConversions` found for a `.notRunnable` repository
+    /// that publishes safetensors -- each an "Inspect this instead" affordance.
+    @Published private(set) var ggufSuggestions: [String] = []
 
     /// The variant currently downloading, or `nil`. One at a time: a second press while the first
     /// is still running would start a second multi-gigabyte transfer into the same store.
     @Published private(set) var installingVariant: String?
-    @Published private(set) var installProgress: ModelPreparation?
+    /// The last install OR delete failure with something to say -- `installSpeech`'s own catch,
+    /// and now `confirmDeletion`'s. One field rather than two: both are "the last thing this pane
+    /// tried to do to a model's files or to Ollama's store failed, and here is why" -- an install
+    /// failure only ever shows while the sheet the failure belongs to is still open, and a delete
+    /// failure is drawn beside the row it came from (`ModelsPaneView`'s own error line), so the
+    /// two are never on screen making different claims about the same field at once.
     @Published private(set) var installError: String?
+
+    /// A refiner pull started from the Inspect sheet -- distinct from `pullingModels`/`pullStatus`
+    /// below, which are keyed on a `LanguageModelReference` a mode already names. A model typed
+    /// into "Add a model" has no mode and no known endpoint yet, so it gets its own single-flight
+    /// flag rather than a dictionary entry for a reference that does not exist.
+    @Published private(set) var isInstallingRefiner = false
+    @Published private(set) var refinerInstallStatus: String?
+
+    // MARK: - Deleting
+
+    /// A delete Louis pressed but has not confirmed yet -- the row it came from, and the question
+    /// and directories `ModelInventory.removal`/`removal(forLanguageModel:)` computed for it. The
+    /// view reads this to drive its confirmation `.alert`; nothing is removed until
+    /// `confirmDeletion()` is called.
+    @Published private(set) var pendingRemoval: (row: ModelRow, removal: ModelRemoval)?
+
+    private let deleter = OllamaDeleter()
 
     // MARK: - Pulling a language model
 
@@ -71,6 +118,11 @@ final class ModelsPaneModel: ObservableObject {
     /// mode still holding the shipped alias or a bare variant is compared as the reference it
     /// actually means rather than as the raw string in its file.
     private let speechModels: () -> [SpeechModelReference]
+    /// Every mode, re-read on every call rather than frozen at construction -- the same reasoning
+    /// as `language` and `speechModels` above. This is what a delete confirmation asks
+    /// `ModelInventory.modesNaming`/`modesNaming(languageModel:in:)` about: which modes, right now,
+    /// still name the model about to be removed.
+    private let modes: () -> [Mode]
     private var outcomes: [LanguageModelReference: OllamaProbe.Outcome] = [:]
     private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "models")
 
@@ -96,12 +148,14 @@ final class ModelsPaneModel: ObservableObject {
         store: URL,
         speech: [SpeechModelDescriptor],
         language: @escaping () -> [LanguageModelReference],
-        speechModels: @escaping () -> [SpeechModelReference]
+        speechModels: @escaping () -> [SpeechModelReference],
+        modes: @escaping () -> [Mode]
     ) {
         self.store = store
         self.speech = speech
         self.language = language
         self.speechModels = speechModels
+        self.modes = modes
     }
 
     /// The one speech model this app runs, described from `WhisperKitEngine`'s own constants.
@@ -252,49 +306,289 @@ final class ModelsPaneModel: ObservableObject {
         }
     }
 
-    // MARK: - Adding a speech model
+    // MARK: - Adding a model
 
-    /// Reads `repositoryInput` and asks that repository what it offers. A press, like
-    /// `checkOllama` -- listing a repository is a read, but it is still a request this pane must
-    /// not make on its own just because it was opened.
-    func fetchSpeechModelListing() async {
-        guard let repository = HuggingFaceRepository.parse(repositoryInput) else {
-            listing = nil
-            repositoryInputError =
-                "That doesn't look like a Hugging Face repository. Paste \"owner/repo\", or its huggingface.co URL."
-            return
+    /// Reads `addModelInput` and classifies it -- a Hugging Face repository's blob listing through
+    /// `ModelInspector`, or, when it does not parse as one, an Ollama name taken as-is. A press,
+    /// like `checkOllama` -- inspecting is a read, but it is still a request this pane must not
+    /// make on its own just because it was opened.
+    func inspect() async {
+        let trimmed = addModelInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isInspecting else { return }
+        isInspecting = true
+        inspection = nil
+        selectedRole = nil
+        selectedCandidateID = nil
+        ggufSuggestions = []
+        installError = nil
+        refinerInstallStatus = nil
+
+        if let repository = HuggingFaceRepository.parse(trimmed) {
+            switch await ModelInspector.classify(repository: repository) {
+            case .success(let classification):
+                inspection = .huggingFace(repository: repository, classification: classification)
+                selectedRole = Self.preselectedRole(for: classification)
+                // Only worth searching when the reason IS safetensors: an empty or unreadable
+                // repository has no conversion to look for either, and a search for it would be a
+                // request nobody's press asked for.
+                if case .notRunnable(_, true) = classification {
+                    isSearchingSuggestions = true
+                    ggufSuggestions = await ModelInspector.searchGGUFConversions(
+                        of: repository.split(separator: "/").last.map(String.init) ?? repository)
+                    isSearchingSuggestions = false
+                }
+            case .failure(let failure):
+                inspection = .failure(detail: Self.describe(failure))
+            }
+        } else {
+            // Not a Hugging Face shape -- Louis's own two examples, `gemma4:12b-it-qat` and
+            // `hf.co/owner/repo:QUANT`, are both Ollama names and neither needs classifying: an
+            // Ollama name IS the refiner candidate, pulled exactly as typed.
+            inspection = .ollamaName(trimmed)
+            selectedRole = .refiner
         }
-        repositoryInputError = nil
-        isFetchingListing = true
-        listing = await SpeechModelCatalog.fetchListing(repository: repository)
-        isFetchingListing = false
+        isInspecting = false
     }
 
-    /// Downloads `variant` from the repository named in `repositoryInput` -- which
-    /// `fetchSpeechModelListing` must already have parsed successfully, since `variant` only
-    /// exists as a choice offered from its result.
+    /// Re-runs `inspect()` against a repository `ggufSuggestions` offered -- the "Inspect this
+    /// instead" affordance on a `.notRunnable` result.
+    func inspectSuggestion(_ repository: String) async {
+        addModelInput = repository
+        await inspect()
+    }
+
+    /// Closes the sheet and clears everything it was showing, so the next press of "Inspect"
+    /// starts from nothing rather than from whatever the last repository left behind.
+    func dismissInspection() {
+        addModelInput = ""
+        inspection = nil
+        selectedRole = nil
+        selectedCandidateID = nil
+        ggufSuggestions = []
+        installError = nil
+        refinerInstallStatus = nil
+    }
+
+    /// The role a classification leaves no real choice about, or the default the radio shows for
+    /// `.both` -- a control has to display SOMETHING selected, and Louis can still change it before
+    /// pressing Install. `.notRunnable` alone has nothing to default to.
+    private static func preselectedRole(for classification: HuggingFaceClassification) -> ModelRole? {
+        switch classification {
+        case .speechOnly: .speech
+        case .refinerOnly: .refiner
+        case .both: .speech
+        case .notRunnable: nil
+        }
+    }
+
+    /// The sheet's own way of changing the role radio -- resets the candidate selection along
+    /// with it, since a candidate id from the speech list means nothing once the refiner list is
+    /// showing.
+    func selectRole(_ role: ModelRole) {
+        guard role != selectedRole else { return }
+        selectedRole = role
+        selectedCandidateID = nil
+    }
+
+    private static func describe(_ failure: ModelInspector.Failure) -> String {
+        switch failure {
+        case .notReachable(let detail): "Could not reach Hugging Face: \(detail)"
+        case .notFound: "That repository does not exist on Hugging Face, or is private."
+        }
+    }
+
+    /// Whether the Install button in the sheet may be pressed: a role is chosen, a candidate is
+    /// chosen when the role's family offers more than one shape of "as is", and nothing is already
+    /// installing.
+    var canInstallSelection: Bool {
+        guard let role = selectedRole, installingVariant == nil, !isInstallingRefiner else { return false }
+        switch inspection {
+        case .huggingFace(_, let classification):
+            switch role {
+            case .speech: return selectedCandidateID != nil
+            case .refiner: return refinerCandidate(selectedCandidateID, in: classification) != nil
+            }
+        case .ollamaName:
+            return role == .refiner
+        case .failure, .none:
+            return false
+        }
+    }
+
+    /// The one Install button in the sheet, dispatching on whichever role and candidate are
+    /// currently selected.
+    func installSelection() async {
+        guard let role = selectedRole else { return }
+        switch inspection {
+        case .huggingFace(let repository, let classification):
+            switch role {
+            case .speech:
+                guard let variant = selectedCandidateID else { return }
+                let bytes = speechCandidate(variant, in: classification)?.bytes
+                await installSpeech(repository: repository, variant: variant, expectedBytes: bytes ?? 0)
+            case .refiner:
+                guard let candidate = refinerCandidate(selectedCandidateID, in: classification) else { return }
+                await pullRefiner(name: OllamaModelName.huggingFace(repository: repository, tag: candidate.tag))
+            }
+        case .ollamaName(let name):
+            await pullRefiner(name: name)
+        case .failure, .none:
+            return
+        }
+    }
+
+    private func refinerCandidate(
+        _ filename: String?, in classification: HuggingFaceClassification
+    ) -> RefinerCandidate? {
+        guard let filename else { return nil }
+        let candidates: [RefinerCandidate]
+        switch classification {
+        case .refinerOnly(let refiner): candidates = refiner
+        case .both(_, let refiner): candidates = refiner
+        case .speechOnly, .notRunnable: candidates = []
+        }
+        return candidates.first { $0.filename == filename }
+    }
+
+    /// The `SpeechCandidate` `selectedCandidateID` names, so `installSelection()` can hand its own
+    /// measured size to `installSpeech` instead of an unconditional `0` -- `ModelClassifier` already
+    /// measured it (`totalSize(under:in:)`) whenever the blob listing reported a size for every
+    /// file in the variant's folder, and a real number here is what lets the sheet's progress bar
+    /// show an actual percentage instead of one permanently stuck at the guard in
+    /// `ModelDownload.observe` (`expectedBytes > 0`).
+    private func speechCandidate(
+        _ variant: String?, in classification: HuggingFaceClassification
+    ) -> SpeechCandidate? {
+        guard let variant else { return nil }
+        let candidates: [SpeechCandidate]
+        switch classification {
+        case .speechOnly(let speech): candidates = speech
+        case .both(let speech, _): candidates = speech
+        case .refinerOnly, .notRunnable: candidates = []
+        }
+        return candidates.first { $0.variant == variant }
+    }
+
+    /// Downloads `variant` from `repository` into Murmure's own store -- the speech half of
+    /// `installSelection()`.
     ///
-    /// The size is NOT known in advance for a repository picked this way: `WhisperKit`'s listing
-    /// API answers with names, never sizes (`SpeechModelCatalog`'s own doc comment). `0` is passed
-    /// rather than a guess, and it is what makes the size column read "size unknown" instead of a
-    /// fabricated number -- see `ModelsPaneView` for where that reads as a sentence.
-    func install(variant: String) async {
-        guard let repository = HuggingFaceRepository.parse(repositoryInput) else { return }
+    /// `expectedBytes` is `0` exactly when `speechCandidate(_:in:)` found no measured size (the
+    /// blob listing was missing a size for at least one file under the variant's folder) -- the
+    /// same "nothing was measured, so nothing is claimed" rule `ModelRow.size` and
+    /// `ModelClassifier.totalSize(under:in:)` already follow. It still feeds `ModelRow.size` and a
+    /// delete confirmation's byte count once the model is installed; the sheet itself has no use
+    /// for it while downloading -- see the footer's own comment on why that stays an indeterminate
+    /// spinner.
+    private func installSpeech(repository: String, variant: String, expectedBytes: Int64) async {
         installingVariant = variant
         installError = nil
-        let descriptor = SpeechModelDescriptor(repository: repository, variant: variant, expectedBytes: 0)
+        let descriptor = SpeechModelDescriptor(
+            repository: repository, variant: variant, expectedBytes: expectedBytes)
         do {
-            _ = try await WhisperKitEngine.installSpeechModel(descriptor) { [weak self] preparation in
-                self?.installProgress = preparation
-            }
+            _ = try await WhisperKitEngine.installSpeechModel(descriptor) { _ in }
             installingVariant = nil
-            installProgress = nil
-            listing = nil
-            repositoryInput = ""
+            dismissInspection()
         } catch {
             installingVariant = nil
-            installProgress = nil
             installError = error.localizedDescription
+        }
+        await reload()
+    }
+
+    /// The endpoint an ad-hoc pull or delete from the Inspect sheet targets when nothing more
+    /// specific is known -- Ollama's own loopback default, the one every shipped mode already
+    /// points at (`Mode.LLM.endpoint`'s own default).
+    private static let localOllama = URL(string: "http://localhost:11434")!
+
+    /// Pulls `name` on the local Ollama -- the refiner half of `installSelection()`, and also what
+    /// an Ollama-name input pulls as is.
+    private func pullRefiner(name: String) async {
+        guard !isInstallingRefiner else { return }
+        isInstallingRefiner = true
+        refinerInstallStatus = "Starting -- pulling manifest"
+        let outcome = await puller.pull(model: name, endpoint: Self.localOllama) { [weak self] line in
+            Task { @MainActor in self?.refinerInstallStatus = Self.describe(line) }
+        }
+        isInstallingRefiner = false
+        switch outcome {
+        case .succeeded:
+            refinerInstallStatus = nil
+            dismissInspection()
+            await checkOllama()
+        case .failed(let failure):
+            refinerInstallStatus = failure.remedy
+        case .progress:
+            break
+        }
+    }
+
+    // MARK: - Deleting
+
+    /// Computes what deleting `row` would do and asks before doing it -- the view reads
+    /// `pendingRemoval` to drive its confirmation `.alert`.
+    func requestDeletion(of row: ModelRow) {
+        switch row.kind {
+        case .speech:
+            guard let reference = SpeechModelReference(parsing: row.identifier) else { return }
+            let namedByModes = ModelInventory.modesNaming(
+                reference: reference, in: modes(), engineDefault: .shippedDefault)
+            let removal = ModelInventory.removal(
+                for: reference, in: store, expectedBytes: row.expectedBytes, namedByModes: namedByModes)
+            pendingRemoval = (row, removal)
+        case .language:
+            let namedByModes = ModelInventory.modesNaming(languageModel: row.identifier, in: modes())
+            let removal = ModelInventory.removal(forLanguageModel: row.identifier, namedByModes: namedByModes)
+            pendingRemoval = (row, removal)
+        }
+    }
+
+    func cancelDeletion() {
+        pendingRemoval = nil
+    }
+
+    /// Actually removes what `requestDeletion` computed -- never called except from the
+    /// confirmation `.alert`'s destructive button.
+    ///
+    /// Speech removes the two directories `ModelRemoval.directories` names (the variant and its
+    /// `.cache` sidecars); language asks Ollama's own `DELETE /api/delete` -- this app never
+    /// writes to Ollama's store directly. A failure leaves the row exactly as it was, and
+    /// `reload()` reports that honestly -- but the failure ALSO reaches `installError`, published
+    /// rather than only logged: Louis pressed a destructive button and is owed the reason it did
+    /// not happen, the same reasoning `installSpeech`'s own catch already acts on.
+    func confirmDeletion() async {
+        guard let pending = pendingRemoval else { return }
+        pendingRemoval = nil
+        installError = nil
+        switch pending.row.kind {
+        case .speech:
+            // `fileExists` first, not a caught "no such file": a directory this removal never
+            // wrote to begin with (a variant installed with no `.cache` sidecar) is not a failure
+            // to report, and treating it as one would raise an alarm over nothing every time.
+            var failures: [String] = []
+            for directory in pending.removal.directories
+            where FileManager.default.fileExists(atPath: directory.path) {
+                do {
+                    try FileManager.default.removeItem(at: directory)
+                } catch {
+                    failures.append(error.localizedDescription)
+                }
+            }
+            if !failures.isEmpty {
+                installError = "Could not delete \(pending.row.name): \(failures.joined(separator: "; "))"
+            }
+        case .language:
+            // The endpoint a mode naming this model points at, when one does -- the same limited
+            // lookup `pull(modelIdentifier:)` already accepts (`reference(forRowIdentifier:)`'s
+            // own doc comment): a model on two endpoints only ever resolves to the first. Falls
+            // back to the local default for a row nothing names, which is the only endpoint this
+            // pane's own automatic listing ever reads from.
+            let endpoint = reference(forRowIdentifier: pending.row.identifier)
+                .flatMap { URL(string: $0.endpoint) } ?? Self.localOllama
+            let outcome = await deleter.delete(model: pending.row.identifier, endpoint: endpoint)
+            if case .failed(let failure) = outcome {
+                log.info("delete of \(pending.row.identifier, privacy: .public) failed -- \(failure.description, privacy: .public)")
+                installError = failure.remedy
+            }
         }
         await reload()
     }

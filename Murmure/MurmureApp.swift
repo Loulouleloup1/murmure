@@ -169,7 +169,8 @@ struct MurmureApp: App {
                         SpeechModelResolution.reference(
                             storedAs: $0.stt.model, engineDefault: .shippedDefault)
                     }
-                }))
+                },
+                modes: { state.availableModes }))
         // `controller.rebindToggleHotkey` rather than a copy of the logic: the pane decides
         // whether a captured press is legal (`HotkeyRecording`), the controller decides whether
         // Carbon will actually take it and rolls back a refusal -- and it can only do that from

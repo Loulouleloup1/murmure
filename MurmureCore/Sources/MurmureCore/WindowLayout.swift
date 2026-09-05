@@ -89,4 +89,14 @@ public enum WindowLayout {
     /// per heading) -- wide enough that "Words to recognise" and "Corrections" read as two
     /// separate sections, never as two halves of one.
     public static let vocabularyGroupSpacing: CGFloat = 20
+
+    /// The "Add a model" Inspect sheet's own width -- fixed, unlike the window itself, because a
+    /// sheet is not resized by the user and a candidate list reads better at one settled width
+    /// than reflowing with whatever the main window happens to be.
+    public static let inspectSheetWidth: CGFloat = 440
+
+    /// The Inspect sheet's height range: short enough that a one-line "not runnable" result does
+    /// not open a mostly-empty sheet, tall enough that `argmaxinc/whisperkit-coreml`'s longest
+    /// candidate list (27 speech variants) scrolls rather than growing the sheet past the window.
+    public static let inspectSheetHeight: (minimum: CGFloat, maximum: CGFloat) = (minimum: 160, maximum: 420)
 }
