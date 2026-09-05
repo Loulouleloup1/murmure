@@ -7,11 +7,16 @@ private let logger = Logger(subsystem: "com.louiscourcier.Murmure", category: "h
 /// Escape, held only while a recording is running. The Carbon half of `CancelHotkey`.
 ///
 /// **A second `HotkeyManager` instance, and not a second mechanism.** That class was written to be
-/// one of several: its `nextID` is static, its handler goes on the *application* event target so
-/// it sees every hot key the process registers, and it filters on the id precisely "so two
-/// managers do not fire each other's callbacks". Nothing about it had to change to hold two
-/// registrations at once, and the alternative -- teaching one manager two combinations -- would
-/// have doubled every field it owns for the sake of one caller.
+/// one of several: its `nextNumericID` is static (so this instance and `DictationController`'s
+/// never hand out the same Carbon id), its handler goes on the *application* event target so it
+/// sees every hot key the process registers -- including the OTHER instance's -- and its shared
+/// handler answers Carbon with `eventNotHandledErr`, not `noErr`, for any id its OWN `fireChord`
+/// does not recognise (`HotkeyManager.swift`'s own note on `fireChord`'s `Bool` return), so a press
+/// this instance does not own falls through to whichever handler on the target actually does. That
+/// is what "two managers do not fire each other's callbacks" means in practice: not that one never
+/// SEES the other's event, but that it never CLAIMS one that is not its own. Nothing about it had
+/// to change to hold two registrations at once, and the alternative -- teaching one manager two
+/// combinations -- would have doubled every field it owns for the sake of one caller.
 ///
 /// **`register`/`unregister` are called on Louis's behalf dozens of times a day, and that is the
 /// whole risk of this file.** A globally registered Escape is taken from every application on the
@@ -58,11 +63,11 @@ final class EscapeCancelKey: CancelKeyRegistering {
                     """)
                 return false
             }
-            return manager.register(.cancelRecording, onPress: onPress)
+            return manager.register(id: .cancel, combo: .cancelRecording, onPress: onPress)
         }
     }
 
     func releaseCancelKey() {
-        MainActor.assumeIsolated { manager.unregister() }
+        MainActor.assumeIsolated { manager.unregister(id: .cancel) }
     }
 }

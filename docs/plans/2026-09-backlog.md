@@ -128,6 +128,17 @@ constants were checked by hand and the tests were mutation-proved (swapping ⌃/
 
 ---
 
+## 7. A mode can have its own shortcut — CLOSED 2026-09-05
+
+`Mode.hotkey` was a dead field; it is wired now. Pressing a mode's own shortcut starts a dictation
+IN THAT MODE while idle (a one-shot override of `appState.manualModeKey`, restored the moment the
+recording starts) and stops the recording exactly like the global toggle while one is running.
+`HotkeyManager` now holds a table of bindings, not one; `HotkeyAssignments.resolve` (`MurmureCore`,
+tested, mutation-proved) settles a combo two bindings both want -- the toggle always wins, a
+mode-vs-mode tie goes to the alphabetically last key -- and reports every loser as a sentence
+appended to the same `appState.modeProblems` the menu already shows. The editor UI for recording a
+per-mode shortcut is the next step; everything under it is already in place.
+
 ## Measured, and deliberately NOT shipped
 
 **A logits bias on the vocabulary list** (`docs/benchmarks/2026-09-vocabulary-logits-bias.md`,
@@ -192,8 +203,6 @@ rather than a gradient: `mdi` 3 077 occurrences, median words ×2.54, decode tim
   confirmed in `/api/tags`, then removed, none of the five pre-existing Ollama models touched; the
   `config.json`-fallback path fired for real against `tomAndJetty/whisperkit-coreml` (4 variants
   derived from its raw file listing).
-- **`Mode.hotkey` is a dead field.** A mode declares a per-mode shortcut that nothing reads. Either
-  wire it or remove it; leaving it is the same lie as the three settings removed in §2.
 
 ## Known, argued, and deliberately not scheduled
 

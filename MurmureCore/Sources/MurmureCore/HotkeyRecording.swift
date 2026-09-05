@@ -64,6 +64,14 @@ public enum HotkeyRecordingOutcome: Equatable {
 /// the one place this package converts a foreign bitmask, and is tested there directly against
 /// the real AppKit literals.
 public enum HotkeyRecording {
+    /// Named once so ``evaluate(_:)`` and ``wouldRefuse(_:)`` -- which asks the same question
+    /// about a `KeyCombo` that never passed through this recorder at all -- can never drift to two
+    /// different sentences for what is one and the same rule.
+    private static let escapeRefusal =
+        "Escape can't be the shortcut -- it already cancels a recording in progress."
+    private static let bareKeyRefusal =
+        "Add ⌃, ⌥, ⇧ or ⌘ -- a bare key would be taken from every app on your Mac."
+
     public static func evaluate(_ event: CapturedKeyEvent) -> HotkeyRecordingOutcome {
         switch event {
         case .flagsChanged:
@@ -77,8 +85,7 @@ public enum HotkeyRecording {
             // Checked before the modifier rule below: Escape is refused whether or not something
             // else is held with it, so a modified Escape must not fall through to "accepted".
             if code == KeyCombo.cancelRecording.keyCode {
-                return .refused(
-                    "Escape can't be the shortcut -- it already cancels a recording in progress.")
+                return .refused(escapeRefusal)
             }
             if carbonModifiers != 0 {
                 return .accepted(KeyCombo(keyCode: code, carbonModifiers: carbonModifiers))
@@ -86,8 +93,44 @@ public enum HotkeyRecording {
             if KeyCombo.functionKeyCodes.contains(code) {
                 return .accepted(KeyCombo(keyCode: code, carbonModifiers: 0))
             }
-            return .refused(
-                "Add ⌃, ⌥, ⇧ or ⌘ -- a bare key would be taken from every app on your Mac.")
+            return .refused(bareKeyRefusal)
         }
+    }
+
+    /// Whether `combo` is one this recorder would refuse if it were ever captured through it, and
+    /// the sentence to show if so -- `nil` when it would be accepted.
+    ///
+    /// **Exists because a mode's `hotkey` can bypass the recorder entirely.** There is no editor
+    /// for it yet (`docs/plans/2026-09-backlog.md` §7) -- today the only way to set one is
+    /// hand-editing the mode's JSON file, which ``evaluate(_:)`` above never sees at all: nothing
+    /// stands between a bare Escape written into `modes/prompt.json` and `HotkeyManager.register`
+    /// actually taking the key from every application on the Mac, fighting `CancelHotkey` for it on
+    /// every recording. `HotkeyAssignments.resolve` calls this on every mode's `hotkey` for exactly
+    /// that reason -- a mode-file value is not a value this recorder has ever approved, unlike the
+    /// toggle, which can only ever be set by rebinding it through `evaluate(_:)`/
+    /// `HotkeyRecordingSession` in the first place.
+    ///
+    /// **Modifier-only combos are legal here too**, unlike asking ``evaluate(_:)`` about the same
+    /// combo as a synthetic `.keyDown`. A modifier-only combo's own acceptance is decided by
+    /// `HotkeyRecordingSession`, watching a RUN of `.flagsChanged` events (the tap gesture itself,
+    /// `KeyCombo.isModifierOnly`'s own doc comment) -- `evaluate(_:)` only ever sees one `.keyDown`
+    /// at a time and would refuse a modifier-only combo as "no modifier held", which is exactly
+    /// backwards for the one binding shape that IS legal with none.
+    public static func wouldRefuse(_ combo: KeyCombo) -> String? {
+        // Checked first, matching `evaluate(_:)`'s own order: Escape is refused whether or not
+        // something else is held with it.
+        if combo.keyCode == KeyCombo.cancelRecording.keyCode {
+            return escapeRefusal
+        }
+        if combo.carbonModifiers != 0 {
+            return nil
+        }
+        if combo.isModifierOnly {
+            return nil
+        }
+        if KeyCombo.functionKeyCodes.contains(combo.keyCode) {
+            return nil
+        }
+        return bareKeyRefusal
     }
 }

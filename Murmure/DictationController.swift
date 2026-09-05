@@ -91,6 +91,20 @@ final class DictationController {
     /// window and the dictation pipeline are looking at one store.
     let settings: AppSettings
 
+    /// The mode keys currently holding a live per-mode hotkey binding -- "currently holding" means
+    /// `HotkeyManager` actually accepted the registration, not merely that `HotkeyAssignments`
+    /// picked this key as a winner: a winner whose `register` call itself failed (typically a
+    /// modifier-only combo attempted without Accessibility) is never added here. So the next
+    /// ``updateModeHotkeys()`` can tell a stale registration (a mode whose hotkey changed, was
+    /// removed, or newly lost a conflict) from one that is still both a winner and actually live,
+    /// and only needs replacing.
+    private var registeredModeHotkeyKeys: Set<String> = []
+    /// The hotkey-problem sentences ``updateModeHotkeys()`` most recently appended to
+    /// `appState.modeProblems` -- conflicts, refusals, and registration failures alike -- kept so
+    /// the next call can remove exactly those before appending the fresh ones. See that method's
+    /// own note on why this list is appended to rather than owned.
+    private var lastReportedHotkeyProblems: [String] = []
+
     init(appState: AppState, settings: AppSettings) {
         self.appState = appState
         self.settings = settings
@@ -578,24 +592,174 @@ final class DictationController {
     /// Re-reads `modes/` into the list the menu draws, so a mode file added, renamed or deleted by
     /// hand is offered without restarting Murmure.
     ///
-    /// Deliberately does NOT touch `appState.modeProblems`. That list is owned by the resolution
-    /// of a dictation, and a mode chosen then deleted is reported there by `ModeSelection` and
-    /// nowhere else: overwriting it here -- from the very act of opening the menu to read it --
-    /// would erase the explanation at the instant it is being looked at. A broken file's own
-    /// problem still reaches the menu, on the next dictation, which is when it starts to matter.
+    /// **Does touch `appState.modeProblems` now, through `updateModeHotkeys()` below -- but only
+    /// its OWN sentences.** That list is also owned by the resolution of a dictation, and a mode
+    /// chosen then deleted is reported there by `ModeSelection` and nowhere else this method
+    /// knows about: `updateModeHotkeys()` removes exactly the hotkey-problem sentences IT
+    /// previously appended (`lastReportedHotkeyProblems`), never `ModeSelection`'s own, so
+    /// overwriting the list wholesale from the very act of opening the menu would still be wrong
+    /// and is not what happens. A broken mode FILE's own problem is unaffected by this method at
+    /// all, and still only reaches the menu on the next dictation, which is when it starts to
+    /// matter -- only a hotkey clash, refusal, or registration failure is refreshed here, on
+    /// every call.
     func refreshModes() {
         guard let modesDirectory else { return }
         appState.availableModes = ModeStore(directory: modesDirectory) { [log] problem in
             log.error("mode file problem: \(problem.description, privacy: .public)")
         }.loadAll()
+        updateModeHotkeys()
     }
 
     /// `hotkeys.register`'s one caller with an opinion on what a press does: both `init` and
     /// `rebindToggleHotkey(to:)` need the same closure, and writing it twice is how the two would
     /// drift the day `session.toggle()` needs a parameter.
     private func registerToggle(_ combo: KeyCombo) -> Bool {
-        hotkeys.register(combo) { [session] in
+        hotkeys.register(id: .toggle, combo: combo) { [session] in
             Task { await session.toggle() }
+        }
+    }
+
+    /// Recomputes which combo goes with which per-mode hotkey binding, and registers the table
+    /// `HotkeyAssignments.resolve` decides -- called from `refreshModes()` (launch, a Modes-pane
+    /// save, and every menu opening, per that method's own comment) and from
+    /// `rebindToggleHotkey(to:)`/`restoreToggleHotkey()`, because a mode's hotkey can start or stop
+    /// clashing the moment the TOGGLE changes rather than a mode file.
+    ///
+    /// **A binding no longer among the winners is torn down, not merely left unregistered.** A
+    /// mode hotkey that lost a fresh conflict, was refused (see `HotkeyAssignments.resolve`'s own
+    /// note on a bare Escape written into a mode file), was removed from a mode file, or had its
+    /// combo changed must not keep firing the STALE combo `HotkeyManager` last registered for it
+    /// -- `registeredModeHotkeyKeys` is what this method remembers to know which ones those are.
+    /// `hotkeys.register(id:combo:onPress:)` already replaces a same-id binding on its own, so the
+    /// explicit `unregister` below only ever runs for a key that is NOT being re-registered this
+    /// round.
+    ///
+    /// **A binding whose id already holds the exact combo `resolve` just picked is left alone --
+    /// `register` is not called again for it.** This method runs on every menu opening
+    /// (`refreshModes()`'s own comment), and on an ordinary opening nothing has changed at all:
+    /// re-registering anyway would unregister and re-register every live per-mode binding for no
+    /// behavioural difference, and on the modifier-only path that round trip throws away a
+    /// `ModifierTapDetector` mid-hold (`HotkeyManager.combo(for:)`'s own note). "Unchanged" is
+    /// read from `HotkeyManager` itself, not from a table kept here, so it is never stale relative
+    /// to what is actually registered.
+    ///
+    /// **Every mode's own `.mode(key)` registration failure is reported and excluded from
+    /// ``registeredModeHotkeyKeys``, not just logged.** A failure here is typically a
+    /// modifier-only combo attempted without Accessibility -- the same failure
+    /// `GeneralPaneModel` already surfaces for the toggle -- and leaving it log-only would tell
+    /// Louis nothing while a mode he believes has a shortcut silently has none.
+    ///
+    /// **Conflict, refusal and failure sentences are appended to, not replacing,
+    /// `appState.modeProblems`** -- the one list the menu already draws mode-file problems from,
+    /// per the ruling that a hotkey clash gets no banner system of its own. That list is replaced
+    /// wholesale by the next dictation's own resolution (`ModeAwareRefinement.modeForNewDictation()`'s
+    /// own comment on `appState.modeProblems`), so a problem reported here can go stale the moment
+    /// a dictation runs and reappear only at the next call to this method -- the same "stale by at
+    /// most one dictation" tolerance `refreshModes()`'s own comment already accepts for
+    /// `availableModes`. `lastReportedHotkeyProblems` is what lets this method remove exactly the
+    /// sentences IT added on the previous call, rather than either duplicating them on every menu
+    /// opening or clobbering a problem `modeForNewDictation()` put there instead.
+    private func updateModeHotkeys() {
+        // `mode.hotkey` passes straight through as the optional it already is -- a mode with no
+        // hotkey is `HotkeyAssignments.resolve`'s own concern to skip silently
+        // (`testAModeWithNoHotkeyIsSkippedRatherThanRefused`), not a filter this caller applies
+        // first. Filtering here would also have hidden a bare-Escape `hotkey` from the refusal
+        // check below entirely -- `resolve` cannot refuse a value it never receives.
+        let modeHotkeys = appState.availableModes.map { mode in
+            HotkeyAssignments.ModeHotkey(key: mode.key, name: mode.name, hotkey: mode.hotkey)
+        }
+        let resolved = HotkeyAssignments.resolve(toggle: settings.toggleHotkey, modes: modeHotkeys)
+
+        let winningKeys = Set(resolved.bindings.compactMap { binding -> String? in
+            guard case .mode(let key) = binding.id else { return nil }
+            return key
+        })
+        for staleKey in registeredModeHotkeyKeys.subtracting(winningKeys) {
+            hotkeys.unregister(id: .mode(staleKey))
+        }
+
+        var liveKeys: Set<String> = []
+        var failureMessages: [String] = []
+        for binding in resolved.bindings {
+            guard case .mode(let key) = binding.id else { continue }
+            if hotkeys.combo(for: .mode(key)) == binding.combo {
+                liveKeys.insert(key)
+                continue
+            }
+            if hotkeys.register(
+                id: .mode(key), combo: binding.combo, onPress: modeHotkeyAction(forModeKey: key)) {
+                liveKeys.insert(key)
+            } else {
+                log.error("mode hotkey registration failed for \(key, privacy: .public)")
+                let name = appState.availableModes.first { $0.key == key }?.name ?? key
+                failureMessages.append(Self.registrationFailureMessage(modeName: name, combo: binding.combo))
+            }
+        }
+        registeredModeHotkeyKeys = liveKeys
+
+        let messages = resolved.conflicts.map(\.message) + resolved.refusals.map(\.message) + failureMessages
+        appState.modeProblems.removeAll { lastReportedHotkeyProblems.contains($0) }
+        appState.modeProblems.append(contentsOf: messages)
+        lastReportedHotkeyProblems = messages
+    }
+
+    /// The one sentence for a per-mode hotkey whose `HotkeyManager.register` call itself failed --
+    /// worded after `GeneralPaneModel`'s own two toggle-registration-failure sentences, minus
+    /// their "your previous shortcut is still active" clause: a mode hotkey being registered for
+    /// the first time (or changed) has no earlier working combo of its own to reassure Louis
+    /// about, so that clause would be reporting a fact that is not true here.
+    private static func registrationFailureMessage(modeName: String, combo: KeyCombo) -> String {
+        combo.isModifierOnly
+            ? "\(modeName): macOS did not let Murmure watch for that key on its own. Check that "
+                + "Murmure is allowed under System Settings › Privacy & Security › Accessibility."
+            : "\(modeName): macOS refused that combination -- it may already be in use by another app."
+    }
+
+    /// The action behind one mode's own shortcut (`Mode.hotkey`) -- built once per mode key by
+    /// `updateModeHotkeys()` and handed to `HotkeyManager` under `.mode(key)`.
+    ///
+    /// **What a press does is `ModeHotkeyPress.action(for:)`'s answer, not a switch written out
+    /// here.** The mapping from `DictationSession.State` to stop/ignore/start-in-mode is exactly
+    /// the kind of decision with one catastrophic wrong answer (`ModeHotkeyPress`'s own doc
+    /// comment) that belongs in `MurmureCore`, tested, rather than inline in a closure this
+    /// target -- `Murmure` has no test bundle -- never exercises directly. `.stop` and `.ignore`
+    /// reproduce `session.toggle()`'s own busy-state handling exactly, because that IS what a
+    /// press does while recording or mid-pipeline: the SAME gesture the global toggle already
+    /// performs, not a second one this closure invents.
+    ///
+    /// **`.startInMode` is the one-shot override: `appState.manualModeKey`, saved and restored
+    /// around the one call that reads it.** `ModeAwareRefinement.modeForNewDictation()` reads
+    /// `appState.manualModeKey` exactly once, synchronously within the `await session.toggle()`
+    /// below, and nothing reads it again for THIS dictation afterwards -- `DictationSession
+    /// .activeMode` is fixed at that point (`DictationSession.swift`'s own note on the mode
+    /// resolution being a suspension point a second press can land inside, and the ~0.45 ms
+    /// median timing tolerance that makes doing so rare rather than impossible) and untouched by
+    /// anything `appState` holds from then on. So the override window is not "for the whole
+    /// dictation" -- it is open only from the line below until `session.toggle()` actually
+    /// transitions to `.recording`, after the microphone starts and the frontmost application is
+    /// captured, and closes the instant that suspension point resolves. Restoring via `defer`
+    /// rather than a bare assignment after the call means a future `try` inserted into this
+    /// `Task` cannot skip the restore and leak the override into the mode picked by whatever
+    /// comes next. A concurrent menu click landing inside that same window sets
+    /// `appState.manualModeKey` itself (`AppState.modeSelection`'s own setter) and is simply
+    /// overwritten by whichever of the two writes runs last -- the same "rare, timing-bounded,
+    /// and never a torn state" tolerance the suspension point above already accepts, not a new
+    /// hazard this override introduces.
+    private func modeHotkeyAction(forModeKey key: String) -> () -> Void {
+        { [session, appState] in
+            Task { @MainActor in
+                switch ModeHotkeyPress.action(for: await session.state) {
+                case .stop:
+                    await session.toggle()
+                case .ignore:
+                    break // pipeline already running -- ignore, exactly like the toggle does
+                case .startInMode:
+                    let previous = appState.manualModeKey
+                    appState.manualModeKey = key
+                    defer { appState.manualModeKey = previous }
+                    await session.toggle()
+                }
+            }
         }
     }
 
@@ -626,11 +790,22 @@ final class DictationController {
             return false
         }
         settings.toggleHotkey = combo
+        // The toggle just changed, which is the other half of what a per-mode hotkey can clash
+        // with (`HotkeyAssignments.resolve`) -- recomputed here rather than waiting for the next
+        // `refreshModes()`, so a mode that now clashes with the new toggle stops firing at once.
+        updateModeHotkeys()
         return true
     }
 
-    /// Releases the live toggle entirely while `GeneralPaneModel` is capturing a new shortcut.
-    /// Called at the START of a recording, from `GeneralPaneModel.startRecordingHotkey()`.
+    /// Releases every hotkey binding this manager holds -- the toggle AND every mode's own --
+    /// while `GeneralPaneModel` is capturing a new toggle shortcut. Called at the START of a
+    /// recording, from `GeneralPaneModel.startRecordingHotkey()`.
+    ///
+    /// **All of them, not the toggle alone.** A per-mode chord left live while Louis records a new
+    /// toggle combo would consume the very keys he is trying to capture -- Carbon delivers a
+    /// registered chord to ITS OWN registrant before an `NSEvent` monitor ever sees it, whichever
+    /// binding holds it -- reproducing the exact bug this whole release/restore pair exists to fix
+    /// for the toggle alone.
     ///
     /// **Unregisters, rather than merely ignoring what fires** -- an earlier version suspended a
     /// flag inside `HotkeyManager` and left the live registration untouched, reasoning that a
@@ -638,21 +813,26 @@ final class DictationController {
     /// missed the actual consequence: Carbon still CONSUMES the keys of a registered chord before
     /// they ever reach an `NSEvent` monitor, suspended flag or not -- so recording while the
     /// CURRENT chord is bound and pressing that same chord produced nothing, reproducing the
-    /// original bug this whole feature exists to fix. Releasing the registration outright, and
+    /// original bug this whole feature exists to fix. Releasing every registration outright, and
     /// re-registering on every exit (`restoreToggleHotkey()`), is what lets the very keys already
     /// bound be captured and re-accepted like any other combination.
     func releaseToggleHotkey() {
-        hotkeys.unregister()
+        hotkeys.unregisterAll()
     }
 
     /// The other half of `releaseToggleHotkey()` -- called from every exit of
     /// `GeneralPaneModel.stopRecordingHotkey()`, idempotent, safe even when nothing was released.
-    /// A failure here is the same shape as a launch-time failure -- the old combo is simply gone
-    /// -- so it is reported the same way, through `appState.hotkeyUnavailable`.
+    /// A toggle failure here is the same shape as a launch-time failure -- the old combo is simply
+    /// gone -- so it is reported the same way, through `appState.hotkeyUnavailable`. Every per-mode
+    /// binding is recomputed and re-registered the same pass, through the same
+    /// `updateModeHotkeys()` `refreshModes()` already calls -- `releaseToggleHotkey()` tore all of
+    /// them down too, and `registeredModeHotkeyKeys` still names every key that needs restoring.
     func restoreToggleHotkey() {
-        guard !registerToggle(settings.toggleHotkey) else { return }
-        log.fault("toggle hotkey restore FAILED after a recording closed -- Murmure has no working toggle")
-        appState.hotkeyUnavailable = true
+        if !registerToggle(settings.toggleHotkey) {
+            log.fault("toggle hotkey restore FAILED after a recording closed -- Murmure has no working toggle")
+            appState.hotkeyUnavailable = true
+        }
+        updateModeHotkeys()
     }
 
     /// History's "Process again" (D12): a stored transcript, a mode, and the refinement that
