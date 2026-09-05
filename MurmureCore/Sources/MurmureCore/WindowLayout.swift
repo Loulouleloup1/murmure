@@ -65,7 +65,19 @@ public enum WindowLayout {
     /// test beside it is the one that matters: sidebar + this + the three fixed columns has to
     /// fit inside `minimumSize.width`, or the table's last column falls off the smallest window
     /// the app can be resized to.
-    public static let modelsNameMinimum: CGFloat = 200
+    ///
+    /// Widened from 200 to 260: a speech row's name is now the full `owner/name/variant` Hugging
+    /// Face reference (`SpeechModelReference/string`) rather than a bare variant folder --
+    /// `"argmaxinc/whisperkit-coreml/openai_whisper-large-v3-v20240930_turbo"`, 68 characters,
+    /// against the ~40 the bare folder name topped out at. 260 still does not show every
+    /// character of that worst case at the window's absolute floor (`minimumSize.width`) -- no
+    /// width that also respects the fit-inside-the-smallest-window test could -- but it shows
+    /// enough of the prefix to read as the `owner/name/…` shape Louis asked to see, where 200 cut
+    /// it off after little more than the owner alone. At the app's actual default width
+    /// (`defaultSize`, and every size in between), the column takes whatever is left
+    /// (`.frame(maxWidth: .infinity)` in `ModelsPaneView`) and the full string fits with room to
+    /// spare; this constant only ever governs the floor.
+    public static let modelsNameMinimum: CGFloat = 260
 
     /// The gap between the lines INSIDE one Vocabulary group's header block -- its heading (with
     /// count) and its subtitle. Tighter than `vocabularyGroupSpacing`, the gap between the two

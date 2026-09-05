@@ -189,4 +189,55 @@ final class OllamaProbeTests: XCTestCase {
         XCTAssertEqual(row.size, "4.6 MB")
         XCTAssertNil(row.detail, "an installed model has nothing to explain")
     }
+
+    // MARK: - The whole listing (every model Ollama has, independent of any one mode)
+
+    /// Every entry, name and size both -- for a row set that shows what Ollama actually has rather
+    /// than only what a mode happens to name.
+    func testListReturnsEveryEntryWithItsSize() {
+        let outcome = OllamaProbe.list(
+            status: 200,
+            body: listing("\(entry("gemma4:12b-it-qat")),\(entry("gemma4:e2b-it-qat", size: 4_300_000_000))"))
+
+        XCTAssertEqual(
+            outcome,
+            .listed([
+                .init(name: "gemma4:12b-it-qat", bytes: 8_581_748_736),
+                .init(name: "gemma4:e2b-it-qat", bytes: 4_300_000_000),
+            ]))
+    }
+
+    /// A listing without a size still lists the model -- the same "lose the number, not the row"
+    /// rule `testAListingWithNoSizeStillCountsAsPulled` proves for a single-model probe.
+    func testListToleratesAnEntryWithNoSize() {
+        let body = Data("{\"models\":[{\"name\":\"gemma4:12b\"}]}".utf8)
+
+        XCTAssertEqual(OllamaProbe.list(status: 200, body: body), .listed([.init(name: "gemma4:12b", bytes: 0)]))
+    }
+
+    /// An empty listing is a listing, not a failure -- a server with nothing pulled yet answers
+    /// 200 with an empty array, and reading that as a failure would say something false about
+    /// Ollama being unreachable.
+    func testAnEmptyListingIsListedAndNotFailed() {
+        XCTAssertEqual(OllamaProbe.list(status: 200, body: Data("{\"models\":[]}".utf8)), .listed([]))
+    }
+
+    /// A non-200 status is read the same way `outcome(status:body:model:)` reads it -- the
+    /// listing route can be unreachable or misconfigured exactly like the generation ones.
+    func testListReadsANonSuccessStatusAsAFailure() {
+        let outcome = OllamaProbe.list(status: 500, body: Data("boom".utf8))
+
+        guard case .failed(.malformedResponse) = outcome else {
+            return XCTFail("\(outcome)")
+        }
+    }
+
+    /// A 200 whose body this client cannot parse is an unreadable body, not silently zero models.
+    func testListReadsAnUnparsableBodyAsAFailure() {
+        let outcome = OllamaProbe.list(status: 200, body: Data("not json".utf8))
+
+        guard case .failed(.malformedResponse) = outcome else {
+            return XCTFail("\(outcome)")
+        }
+    }
 }

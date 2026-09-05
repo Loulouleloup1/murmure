@@ -96,7 +96,10 @@ final class ModelInventoryTests: XCTestCase {
         XCTAssertEqual(row.installation, .installed(bytes: 3_360))
         XCTAssertEqual(row.action, .delete)
         XCTAssertEqual(row.kind, .speech)
-        XCTAssertEqual(row.name, "openai_whisper-large-v3-v20240930_turbo")
+        // The full reference, not the bare variant: Louis asked for the Hugging Face structure to
+        // show, and a speech row's name is no longer put through `ModelDisplayName.readable`'s
+        // last-slash strip the way a language row's still is.
+        XCTAssertEqual(row.name, "argmaxinc/whisperkit-coreml/openai_whisper-large-v3-v20240930_turbo")
         XCTAssertNil(row.detail, "an installed model has nothing to explain")
         XCTAssertEqual(row.size, "3 kB")
     }
@@ -135,6 +138,21 @@ final class ModelInventoryTests: XCTestCase {
         XCTAssertEqual(
             row().installation,
             .partiallyDownloaded(bytes: 2_300, expected: ModelDownload.transcriptionModelBytes))
+    }
+
+    /// A reference nothing has measured a size for in advance (the `speechRow(for: reference:)`
+    /// overload's default) drops the "of X" clause entirely rather than print it against `0` --
+    /// `"Incomplete -- 3 kB of 0 B on disk."` would read as a download that is somehow both in
+    /// progress and already finished.
+    func testAPartialModelWithNoExpectedSizeOmitsTheOfClause() throws {
+        try writeCompleteModel()
+        try manager.removeItem(at: variantURL.appendingPathComponent("TextDecoder.mlmodelc"))
+
+        let row = ModelInventory.speechRow(for: descriptor.reference, in: store, fileManager: manager)
+
+        XCTAssertEqual(row.installation, .partiallyDownloaded(bytes: 2_300, expected: nil))
+        XCTAssertNil(row.size, "no number was ever measured for this reference")
+        XCTAssertEqual(row.detail, "Incomplete -- 2 kB on disk.")
     }
 
     /// A bundle whose weights are gone but whose folder is there reads as installed, and that is
@@ -189,6 +207,60 @@ final class ModelInventoryTests: XCTestCase {
             .partiallyDownloaded(bytes: 64, expected: ModelDownload.transcriptionModelBytes))
     }
 
+    // MARK: - What is actually installed, found by walking the store
+
+    /// The real tree, verified: `writeCompleteModel()` builds exactly the layout
+    /// `~/Library/Application Support/Murmure/models/models/argmaxinc/whisperkit-coreml/<variant>/`
+    /// carries on the installed machine, and the walk has to find it two levels down.
+    func testInstalledSpeechModelsFindsAModelTwoLevelsUnderTheRepositorySplit() throws {
+        try writeCompleteModel()
+
+        XCTAssertEqual(ModelInventory.installedSpeechModels(in: store, fileManager: manager), [descriptor.reference])
+    }
+
+    /// The repository's own `.cache` directory sits at the same level as a variant folder and
+    /// must not be mistaken for one -- it never holds `requiredBundles`, so it is discarded by the
+    /// ordinary check rather than by name.
+    func testInstalledSpeechModelsSkipsTheCacheDirectory() throws {
+        try writeCompleteModel()
+
+        let found = ModelInventory.installedSpeechModels(in: store, fileManager: manager)
+
+        XCTAssertFalse(found.contains { $0.variant == ".cache" })
+        XCTAssertEqual(found, [descriptor.reference])
+    }
+
+    /// A half-downloaded variant is not "actually installed" -- the same rule `speechRow` applies,
+    /// asked from the other direction: a walk that returned it would offer a picker item for a
+    /// model that cannot transcribe a word.
+    func testInstalledSpeechModelsExcludesAPartiallyDownloadedVariant() throws {
+        try writeCompleteModel()
+        try manager.removeItem(at: variantURL.appendingPathComponent("TextDecoder.mlmodelc"))
+
+        XCTAssertEqual(ModelInventory.installedSpeechModels(in: store, fileManager: manager), [])
+    }
+
+    /// Two repositories, two variants -- proving the two-level walk does not stop at the first
+    /// repository it finds, and that it sorts rather than depending on directory order.
+    func testInstalledSpeechModelsFindsModelsAcrossRepositoriesSortedByOwnerThenName() throws {
+        try writeCompleteModel()
+        let second = SpeechModelDescriptor(
+            repository: "someowner/somerepo", variant: "some-variant", expectedBytes: 100)
+        for bundle in ModelInventory.requiredBundles {
+            try write(10, to: ModelInventory.variant(for: second, in: store).appendingPathComponent(bundle))
+        }
+
+        XCTAssertEqual(
+            ModelInventory.installedSpeechModels(in: store, fileManager: manager),
+            [descriptor.reference, second.reference])
+    }
+
+    /// A store that has never downloaded anything -- or a fixture that only builds part of a tree
+    /// -- is not a broken store; it has nothing installed yet.
+    func testInstalledSpeechModelsIsEmptyForAStoreThatDoesNotExist() {
+        XCTAssertEqual(ModelInventory.installedSpeechModels(in: store, fileManager: manager), [])
+    }
+
     // MARK: - Deleting
 
     /// Two directories, and never the repository root: a store holding a second variant would
@@ -231,9 +303,13 @@ final class ModelInventoryTests: XCTestCase {
         XCTAssertFalse(removal.question.contains("fall back"), removal.question)
     }
 
-    // MARK: - Which modes name a variant
+    // MARK: - Which modes name a reference
 
-    func testModesNamingReturnsOnlyTheModesThatResolveToThisVariant() {
+    /// `descriptor.reference` is `SpeechModelReference.shippedDefault`, so it doubles as the
+    /// engine default every one of these tests resolves against.
+    private var defaultReference: SpeechModelReference { descriptor.reference }
+
+    func testModesNamingReturnsOnlyTheModesThatResolveToThisReference() {
         let modes = [
             mode(key: "voice", enabled: false, model: "never-run:7b", endpoint: "http://localhost:11434"),
             mode(key: "other", enabled: true, model: "gemma4:12b", endpoint: "http://localhost:11434"),
@@ -245,8 +321,7 @@ final class ModelInventoryTests: XCTestCase {
 
         XCTAssertEqual(
             ModelInventory.modesNaming(
-                variant: "openai_whisper-large-v3-v20240930_turbo", in: [voice, other],
-                engineDefault: "openai_whisper-large-v3-v20240930_turbo"),
+                reference: defaultReference, in: [voice, other], engineDefault: defaultReference),
             ["voice"])
     }
 
@@ -257,20 +332,16 @@ final class ModelInventoryTests: XCTestCase {
         mode.stt.model = "large-v3-turbo"
 
         XCTAssertEqual(
-            ModelInventory.modesNaming(
-                variant: "openai_whisper-large-v3-v20240930_turbo", in: [mode],
-                engineDefault: "openai_whisper-large-v3-v20240930_turbo"),
+            ModelInventory.modesNaming(reference: defaultReference, in: [mode], engineDefault: defaultReference),
             ["voice"])
     }
 
-    func testModesNamingIsEmptyWhenNoModeResolvesToTheVariant() {
+    func testModesNamingIsEmptyWhenNoModeResolvesToTheReference() {
         var mode = mode(key: "voice", enabled: false, model: "x", endpoint: "http://localhost:11434")
         mode.stt.model = "a-completely-different-variant"
 
         XCTAssertEqual(
-            ModelInventory.modesNaming(
-                variant: "openai_whisper-large-v3-v20240930_turbo", in: [mode],
-                engineDefault: "openai_whisper-large-v3-v20240930_turbo"),
+            ModelInventory.modesNaming(reference: defaultReference, in: [mode], engineDefault: defaultReference),
             [])
     }
 

@@ -69,6 +69,48 @@ public enum OllamaProbe {
         .failed(OllamaChat.failure(transport: error, elapsed: elapsed))
     }
 
+    /// One model in Ollama's own listing: its name exactly as Ollama spells it, and the size it
+    /// reports (0 when the listing carries none).
+    public struct Listed: Equatable {
+        public let name: String
+        public let bytes: Int64
+
+        public init(name: String, bytes: Int64) {
+            self.name = name
+            self.bytes = bytes
+        }
+    }
+
+    /// What reading the whole listing concluded -- mirrors ``Outcome`` in shape rather than using
+    /// `Swift.Result`, because `OllamaFailure` carries no `Error` conformance and adding one just
+    /// to satisfy `Result`'s generic constraint would be a second reason for that type to exist.
+    public enum ListingOutcome: Equatable {
+        case listed([Listed])
+        case failed(OllamaFailure)
+    }
+
+    /// Every model Ollama's own listing carries -- for the Models pane's "every model Ollama has,
+    /// independent of which mode names one" row set and the mode editor's Refiner model picker,
+    /// neither of which is ``outcome(status:body:model:)``'s question ("is THIS one model
+    /// pulled"). Reads the same `/api/tags` body that function does, through the same
+    /// `Listing`/`Entry` decode, so the two cannot disagree about what "the listing" contains.
+    ///
+    /// `model` in ``OllamaChat/statusFailure(status:body:model:)`` names the model a 404 might be
+    /// about -- irrelevant to a listing, which asks about none in particular, so it is passed as
+    /// an empty string. The one 404 shape that check exists to catch, "model not found", cannot be
+    /// this route's answer to begin with: `/api/tags` takes no model parameter to have not found.
+    public static func list(status: Int, body: Data) -> ListingOutcome {
+        if let failure = OllamaChat.statusFailure(status: status, body: body, model: "") {
+            return .failed(failure)
+        }
+        do {
+            let listing = try JSONDecoder().decode(Listing.self, from: body)
+            return .listed(listing.models.map { Listed(name: $0.name, bytes: $0.size ?? 0) })
+        } catch {
+            return .failed(OllamaChat.unreadableBody(error, body))
+        }
+    }
+
     /// The table row a probe produces — or the row before any probe has run, when `outcome` is
     /// `nil`.
     ///

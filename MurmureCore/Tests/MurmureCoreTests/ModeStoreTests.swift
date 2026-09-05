@@ -231,4 +231,141 @@ final class ModeStoreTests: XCTestCase {
         XCTAssertEqual(store.loadAll().map(\.key), store.loadAll().map(\.key))
         XCTAssertEqual(store.loadAll().map(\.key), ["custom", "prompt", "voice"])
     }
+
+    // MARK: - Speech-model migration
+
+    /// Writes a mode whose `stt.model` is exactly `raw`, bypassing `save()` so an otherwise-blank
+    /// field is not refused by `Mode.validate()` before `loadAll()` ever sees it -- the shape a
+    /// hand-cleared real mode file is in.
+    private func writeMode(key: String, sttModel raw: String) throws {
+        var mode = handWritten(key)
+        mode.stt.model = raw
+        let encoded = try String(decoding: ModeStore.encoder.encode(mode), as: UTF8.self)
+        try write(encoded, as: "\(key).json")
+    }
+
+    private func readSTTModel(_ key: String) throws -> String {
+        try JSONDecoder().decode(Mode.self, from: Data(contentsOf: directory.appendingPathComponent("\(key).json")))
+            .stt.model
+    }
+
+    /// The alias every mode shipped with before `SpeechModelReference` existed. Loading it once
+    /// rewrites both the in-memory mode AND the file on disk to the full reference.
+    func testTheShippedAliasIsMigratedInMemoryAndOnDisk() throws {
+        try writeMode(key: "legacy", sttModel: "large-v3-turbo")
+
+        let modes = store.loadAll()
+
+        XCTAssertEqual(modes.first { $0.key == "legacy" }?.stt.model, SpeechModelReference.shippedDefault.string)
+        XCTAssertEqual(try readSTTModel("legacy"), SpeechModelReference.shippedDefault.string)
+        XCTAssertEqual(problems, [])
+    }
+
+    /// A hand-cleared field means the same thing as the alias, and `Mode.validate()` would
+    /// otherwise refuse it outright (`.emptySTTModel`) -- migration has to run BEFORE validation
+    /// or a blank field is reported as broken instead of repaired.
+    func testABlankSTTModelIsMigratedRatherThanRejectedAsInvalid() throws {
+        try writeMode(key: "blank", sttModel: "   ")
+
+        let modes = store.loadAll()
+
+        XCTAssertEqual(modes.first { $0.key == "blank" }?.stt.model, SpeechModelReference.shippedDefault.string)
+        XCTAssertEqual(problems, [])
+    }
+
+    /// A bare variant folder with no repository -- the shape every mode file carried before this
+    /// migration, for a variant that is not the shipped default -- is assumed to live in
+    /// `argmaxinc/whisperkit-coreml`, the same assumption `SpeechModelResolution` makes for an
+    /// unmigrated caller.
+    func testABareVariantIsMigratedAssumingTheDefaultRepository() throws {
+        try writeMode(key: "custom", sttModel: "openai_whisper-tiny")
+
+        let modes = store.loadAll()
+
+        XCTAssertEqual(
+            modes.first { $0.key == "custom" }?.stt.model,
+            "argmaxinc/whisperkit-coreml/openai_whisper-tiny")
+        XCTAssertEqual(try readSTTModel("custom"), "argmaxinc/whisperkit-coreml/openai_whisper-tiny")
+    }
+
+    /// A mode already carrying a full reference is left untouched -- both the in-memory value AND
+    /// the file on disk, which is the idempotence a migration run on every launch depends on.
+    ///
+    /// **Proven by the file's modification date, not by its bytes.** `writeMode` encodes with the
+    /// same `ModeStore.encoder` a rewrite would use, so a rewrite that reproduces byte-identical
+    /// content is invisible to a before/after `Data` comparison -- that comparison would pass
+    /// whether or not `loadAll()` actually skipped the write. The mtime does not have that blind
+    /// spot: it is set to a known, far-past date right before the second `loadAll()`, so ANY write
+    /// -- rewriting the same bytes included -- moves it forward and is caught.
+    func testAFullReferenceIsNotRewritten() throws {
+        try writeMode(key: "already", sttModel: "someowner/somerepo/some-variant")
+        _ = store.loadAll()
+
+        let path = directory.appendingPathComponent("already.json").path
+        let past = Date(timeIntervalSince1970: 0)
+        try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: path)
+
+        let modes = store.loadAll()
+
+        XCTAssertEqual(modes.first { $0.key == "already" }?.stt.model, "someowner/somerepo/some-variant")
+        let mtimeAfter = try FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date
+        XCTAssertEqual(mtimeAfter, past, "an already-migrated file must not be rewritten")
+    }
+
+    /// The shape `classifySTTModel` must never complete by guessing a third segment: a
+    /// two-component `"owner/name"` with no variant. Rewriting it into
+    /// `argmaxinc/whisperkit-coreml/owner/name` (treating the whole string as if it were shape 3's
+    /// single bare variant) would silently turn a hand-typed value like `openai/whisper-large-v3`
+    /// into a reference for a DIFFERENT model in a repository it never named. Left untouched, in
+    /// memory and on disk, and reported instead.
+    func testATwoComponentStoredValueIsLeftUntouchedAndReported() throws {
+        try writeMode(key: "twopart", sttModel: "openai/whisper-large-v3")
+
+        let modes = store.loadAll()
+
+        XCTAssertEqual(modes.first { $0.key == "twopart" }?.stt.model, "openai/whisper-large-v3")
+        XCTAssertEqual(try readSTTModel("twopart"), "openai/whisper-large-v3")
+        XCTAssertEqual(
+            problems,
+            [.sttModelNotAReference(name: "twopart.json", stored: "openai/whisper-large-v3")])
+    }
+
+    /// A modes folder that has gone read-only still dictates correctly for THIS launch -- the
+    /// migrated value stands in memory regardless of whether the write below succeeds -- but the
+    /// failed write is reported through `report`, once, rather than swallowed by a bare `try?`.
+    func testAnUnwritableDirectoryStillMigratesInMemoryAndReportsTheFailedWrite() throws {
+        try XCTSkipIf(getuid() == 0, "chmod is not enforced for root")
+        try writeMode(key: "legacy", sttModel: "large-v3-turbo")
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path) }
+
+        let modes = store.loadAll()
+
+        XCTAssertEqual(
+            modes.first { $0.key == "legacy" }?.stt.model, SpeechModelReference.shippedDefault.string,
+            "dictation must keep working on the migrated value even though the file could not be updated")
+        XCTAssertEqual(problems.count, 1, "the failed write must be reported exactly once, not swallowed")
+        guard case .sttModelMigrationNotSaved(let name, _) = problems.first else {
+            return XCTFail("expected sttModelMigrationNotSaved, got \(problems)")
+        }
+        XCTAssertEqual(name, "legacy.json")
+    }
+
+    /// A mode whose `stt.model` would migrate but which is invalid for an unrelated reason
+    /// (`llm.model` blank while `llm.enabled` is true) must be reported and skipped exactly as any
+    /// other invalid mode -- and its file must NOT have been rewritten first: the migration write
+    /// happens only after `validationError` has already passed.
+    func testAnInvalidModeIsNotRewrittenEvenThoughSTTModelWouldMigrate() throws {
+        var mode = handWritten("broken")
+        mode.stt.model = "large-v3-turbo"
+        mode.llm.enabled = true
+        mode.llm.model = ""
+        try write(String(decoding: ModeStore.encoder.encode(mode), as: UTF8.self), as: "broken.json")
+
+        let modes = store.loadAll()
+
+        XCTAssertNil(modes.first { $0.key == "broken" }, "an invalid mode must be skipped, not returned")
+        XCTAssertEqual(try readSTTModel("broken"), "large-v3-turbo", "the file must not have been rewritten")
+        XCTAssertEqual(problems, [.invalidField(name: "broken.json", error: .emptyLLMModel)])
+    }
 }

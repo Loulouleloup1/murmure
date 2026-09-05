@@ -132,10 +132,13 @@ final class ModeEditingTests: XCTestCase {
     /// object. Every field is set to something other than its default, because a field lost in the
     /// round trip is only visible if it had a value to lose.
     func testAModeSavedFromTheEditorReadsBackAsTheSameObject() throws {
+        // A full reference, not the legacy display alias: `ModeStore` migrates that alias on
+        // load (its own test coverage lives in `ModeStoreTests`), which would make this round-trip
+        // test about migration rather than about the editor -- two different claims.
         let edited = Mode(
             key: "review", name: "Review",
             hotkey: KeyCombo(keyCode: 15, carbonModifiers: 2304),
-            stt: .init(model: "large-v3-turbo", language: "en"),
+            stt: .init(model: "argmaxinc/whisperkit-coreml/openai_whisper-tiny", language: "en"),
             llm: .init(enabled: true, endpoint: "http://localhost:11434",
                        model: "gemma4:12b-it-qat", api: .chat),
             instructions: "Rewrite the transcript as a review comment.",

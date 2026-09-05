@@ -30,10 +30,10 @@ struct ModelsPaneView: View {
                 footer
             }
         }
-        // The disk, and only the disk. The Ollama probe is a press (`checkOllama`), never an
-        // appearance -- opening a settings pane must not start a conversation with another
-        // process.
-        .onAppear { model.reload() }
+        // The disk, plus one listing read of the local Ollama -- `reload()`'s own doc comment
+        // has the reasoning that read is safe on appear. What stays a press (`checkOllama`) is a
+        // per-model reachability probe with its own remedy wording, and any download or pull.
+        .onAppear { Task { await model.reload() } }
     }
 
     // MARK: - The columns

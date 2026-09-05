@@ -8,6 +8,16 @@ public enum ModeLoadProblem: Equatable, CustomStringConvertible {
     case malformedJSON(name: String, message: String)
     case invalidField(name: String, error: ModeValidationError)
     case keyDoesNotMatchFilename(name: String, key: String)
+    /// `stt.model` is neither a full `SpeechModelReference` nor a bare variant name the migration
+    /// can complete on its own (``ModeStore/STTModelMigration/unresolvable(_:)``) -- most often a
+    /// two-component `"owner/name"` with no variant. The mode still loads; this is a warning, not
+    /// a rejection, and dictation for it falls back to `SpeechModelReference.shippedDefault` until
+    /// the field is corrected by hand.
+    case sttModelNotAReference(name: String, stored: String)
+    /// A mode's `stt.model` was migrated in memory but the write to disk failed -- a read-only
+    /// modes folder, most often. The mode still loads and dictates correctly on the migrated value
+    /// for this launch; only the file stays stale, and the next launch that can write tries again.
+    case sttModelMigrationNotSaved(name: String, message: String)
 
     public var description: String {
         switch self {
@@ -17,6 +27,13 @@ public enum ModeLoadProblem: Equatable, CustomStringConvertible {
         case .invalidField(let name, let error): "\(name): \(error)"
         case .keyDoesNotMatchFilename(let name, let key):
             "\(name): declares key \(key.debugDescription); rename the file or the key so they match"
+        case .sttModelNotAReference(let name, let stored):
+            """
+            \(name): "stt.model" \(stored.debugDescription) is not a speech model reference \
+            (owner/name/variant); the mode keeps it, dictation falls back to the shipped model.
+            """
+        case .sttModelMigrationNotSaved(let name, let message):
+            "\(name): \"stt.model\" was migrated in memory but the file could not be updated -- \(message)"
         }
     }
 }
@@ -191,7 +208,7 @@ public struct ModeStore {
             return nil
         }
 
-        let mode: Mode
+        var mode: Mode
         do {
             mode = try JSONDecoder().decode(Mode.self, from: data)
         } catch {
@@ -205,11 +222,115 @@ public struct ModeStore {
             report(.keyDoesNotMatchFilename(name: name, key: mode.key))
             return nil
         }
+
+        // Before `validationError`, deliberately: a blank `stt.model` is one of the shapes this
+        // rewrites, and `Mode.validate()` refuses a blank field outright (`.emptySTTModel`). Left
+        // until after, a hand-cleared field would be reported as broken instead of repaired.
+        //
+        // Only the IN-MEMORY value is touched here. The write, when there is one, happens below
+        // -- after `validationError`, not before -- so a mode that fails validation on some other
+        // field (an invalid `llm.endpoint`, say) and is about to be reported and skipped never has
+        // its file rewritten first. A rewritten-then-discarded mode would leave the migrated
+        // `stt.model` on disk for a mode `loadAll()` is telling the caller does not exist.
+        let migration = Self.classifySTTModel(mode.stt.model)
+        switch migration {
+        case .noChange:
+            break
+        case .migrate(let migrated):
+            mode.stt.model = migrated
+        case .unresolvable(let stored):
+            // Neither a full reference nor a bare variant this migration knows how to complete
+            // (`classifySTTModel`'s own doc comment has the shapes) -- left exactly as written,
+            // never guessed at, and reported so it does not fail silently. The mode still loads:
+            // this is not `Mode.validate()`'s business, and `stt.model` being unresolvable does not
+            // make the rest of the mode unusable.
+            report(.sttModelNotAReference(name: name, stored: stored))
+        }
+
         if let error = mode.validationError {
             report(.invalidField(name: name, error: error))
             return nil
         }
+
+        if case .migrate = migration {
+            writeMigratedSTTModel(mode, fileName: name)
+        }
         return mode
+    }
+
+    /// Writes a mode whose `stt.model` ``load(_:)`` just migrated in memory. Called only after
+    /// `validationError` has already passed, so this never rewrites a file for a mode that is
+    /// about to be reported invalid and skipped.
+    ///
+    /// **Best-effort.** The migrated value already stands in `mode`, in memory, regardless of
+    /// whether this write succeeds -- so a read-only modes folder still dictates correctly for
+    /// this launch, on the resolved model rather than the stale alias. It is only the on-disk copy
+    /// that stays stale, and the next launch that CAN write tries again. This mirrors
+    /// ``SpeechModelResolution``'s own stance: resolving what a file means must never depend on
+    /// being able to write it back. A failure here is not swallowed, though -- unlike the earlier
+    /// `try?` version of this method, it is reported through the same `report` channel every other
+    /// load problem goes through, once per load, so a modes folder that has gone read-only says so
+    /// instead of silently never catching up.
+    ///
+    /// **One more consequence of writing through `Self.encoder`, worth stating rather than
+    /// discovering later.** This is the same encoder `save(_ draft:)` uses, and it always encodes
+    /// every field `Mode`/`LLM` currently declare -- so the FIRST migrating write to a file also
+    /// normalises it to the encoder's current shape: a `voice.json` written before `api` existed on
+    /// `LLM` (`LLM.init(from:)`'s own doc comment) gains an explicit `"api" : "chat"` it did not
+    /// carry before, the same way any `save()` from the editor already would. Not a migration
+    /// side effect -- the same thing happens whenever ANY field on an old file is edited and saved.
+    private func writeMigratedSTTModel(_ mode: Mode, fileName: String) {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Self.encoder.encode(mode).write(to: directory.appendingPathComponent(fileName), options: .atomic)
+        } catch {
+            report(.sttModelMigrationNotSaved(name: fileName, message: error.localizedDescription))
+        }
+    }
+
+    /// What a stored `stt.model` needs, decided once and used both to change `mode` in memory and
+    /// to decide whether `writeMigratedSTTModel` runs at all.
+    enum STTModelMigration: Equatable {
+        /// Already a full reference (``SpeechModelReference/init(parsing:)`` parsed it) -- nothing
+        /// to do.
+        case noChange
+        /// Rewrite `stt.model` to this string, in memory and (once validation passes) on disk.
+        case migrate(String)
+        /// Neither a full reference nor a single bare variant name -- most often a two-component
+        /// `"owner/name"` with no variant, which this migration must not complete by guessing a
+        /// third segment: that would silently turn a hand-typed value nobody asked to change into
+        /// a *different* model reference. Left untouched; `stored` is what gets reported.
+        case unresolvable(String)
+    }
+
+    /// Classifies a stored `stt.model` into what ``load(_:)`` should do with it, by reading
+    /// ``StoredSTTModelShape`` -- the SAME classification `SpeechModelResolution.reference` reads,
+    /// so this migration and the engine's own fallback cannot silently disagree about which shape
+    /// a stored string is (that type's own doc comment has the defect this shared reading fixes).
+    ///
+    /// What each shape becomes:
+    /// 1. Blank, or the legacy alias -- becomes ``SpeechModelReference/shippedDefault``.
+    /// 2. A full reference already -- `.noChange`.
+    /// 3. A bare variant folder with no repository at all (`openai_whisper-tiny`, something typed
+    ///    by hand before this migration existed) -- assumed to live in the shipped default's own
+    ///    repository, `argmaxinc/whisperkit-coreml`. That assumption is the one every mode file in
+    ///    the wild already makes implicitly: every variant a mode has ever named by hand has come
+    ///    from that one repository, because installing from another one is a later lot's feature.
+    /// 4. Unresolvable (in practice, a two-component `"owner/name"` with no variant) -- `stored` is
+    ///    left exactly as written and reported, never guessed at.
+    static func classifySTTModel(_ stored: String) -> STTModelMigration {
+        switch StoredSTTModelShape.classify(stored) {
+        case .blankOrLegacyAlias:
+            return .migrate(SpeechModelReference.shippedDefault.string)
+        case .reference:
+            return .noChange
+        case .bareVariant(let variant):
+            return .migrate(SpeechModelReference(
+                repository: SpeechModelReference.shippedDefault.repository, variant: variant
+            ).string)
+        case .unresolvable(let stored):
+            return .unresolvable(stored)
+        }
     }
 
     static let encoder: JSONEncoder = {

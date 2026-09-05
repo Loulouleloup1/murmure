@@ -46,7 +46,12 @@ public enum ModelInstallation: Equatable, Sendable {
     /// around**: `WhisperKitEngine` sends a folder in this state back to the Hub, so a table
     /// that called it installed would offer a delete button for something the app is about to
     /// re-download, and would say "installed" about a model that cannot transcribe a word.
-    case partiallyDownloaded(bytes: Int64, expected: Int64)
+    ///
+    /// `expected` is `nil` when nothing measured this reference's full size in advance -- a
+    /// reference `installedSpeechModels(in:fileManager:)` found rather than one of the known
+    /// descriptors. `size` and `detail` both drop the "of X" clause rather than print it against
+    /// `0`, which would read as a download that is somehow both in progress and already complete.
+    case partiallyDownloaded(bytes: Int64, expected: Int64?)
 
     /// Nothing on disk.
     case absent
@@ -63,9 +68,10 @@ public enum ModelInstallation: Equatable, Sendable {
 /// reason this package exists: the app target has no test bundle, so a rule written in a
 /// `Text(...)` is a rule nothing can check.
 public struct ModelRow: Equatable, Sendable, Identifiable {
-    /// The identifier as it is configured and stored — the WhisperKit variant folder, or the
-    /// Ollama model id. Kept whole because it is what a `ollama pull` command has to be spelled
-    /// with, and because it is the row's identity.
+    /// The identifier as it is configured and stored — a speech row's full
+    /// ``SpeechModelReference/string``, or a language row's Ollama model id. Kept whole because a
+    /// language identifier is what a `ollama pull` command has to be spelled with, and because
+    /// either way it is the row's identity.
     public let identifier: String
     public let kind: ModelKind
     public let installation: ModelInstallation
@@ -74,9 +80,10 @@ public struct ModelRow: Equatable, Sendable, Identifiable {
     public let expectedBytes: Int64?
 
     /// A second sentence, independent of ``detail``, for an installed speech model that has not
-    /// been proven fast on THIS Mac -- see ``ModelInventory/speechRow(for:in:fileManager:knownWarm:)``
-    /// for who sets it and why it cannot be computed from ``installation`` alone. `nil` covers both
-    /// "nothing to say" and "not applicable", the same way ``detail`` does for every other row.
+    /// been proven fast on THIS Mac -- see `ModelInventory.speechRow`'s `knownWarm` parameter
+    /// (either overload -- both take one) for who sets it and why it cannot be computed from
+    /// ``installation`` alone. `nil` covers both "nothing to say" and "not applicable", the same
+    /// way ``detail`` does for every other row.
     public let firstUseNotice: String?
 
     public var id: String { identifier }
@@ -92,10 +99,23 @@ public struct ModelRow: Equatable, Sendable, Identifiable {
         self.firstUseNotice = firstUseNotice
     }
 
-    /// The name column. ``ModelDisplayName/readable(_:)`` and not a second rule: Louis asked for
-    /// the model and not the path it was pulled from, and that question has one answer in this
-    /// package.
-    public var name: String { ModelDisplayName.readable(identifier) }
+    /// The name column.
+    ///
+    /// **Two rules, one per family, and that is deliberate rather than an inconsistency.** For a
+    /// language model, Louis asked for the model and not the path it was pulled from --
+    /// ``ModelDisplayName/readable(_:)`` drops everything up to the last slash for exactly that
+    /// reason, and it still does. For a speech model the request was the opposite: reviewing an
+    /// earlier build of this pane, Louis's own words were *"les modèles installés n'affichent pas
+    /// la structure d'un lien Hugging Face"* -- so `identifier` there IS the full
+    /// `SpeechModelReference/string` (``ModelInventory/speechRow(for:in:expectedBytes:fileManager:knownWarm:)``
+    /// builds it that way), and stripping it back down to the bare variant would restore the
+    /// exact thing he asked to stop seeing.
+    public var name: String {
+        switch kind {
+        case .speech: identifier
+        case .language: ModelDisplayName.readable(identifier)
+        }
+    }
 
     /// The action column.
     ///
@@ -128,7 +148,7 @@ public struct ModelRow: Equatable, Sendable, Identifiable {
     public var size: String? {
         switch installation {
         case .installed(let bytes): bytes > 0 ? ModelSize.readable(bytes) : nil
-        case .partiallyDownloaded(_, let expected): ModelSize.readable(expected)
+        case .partiallyDownloaded(_, let expected): expected.map(ModelSize.readable)
         case .absent: expectedBytes.map(ModelSize.readable)
         case .undetermined: nil
         }
@@ -140,7 +160,11 @@ public struct ModelRow: Equatable, Sendable, Identifiable {
         switch installation {
         case .installed: nil
         case .partiallyDownloaded(let bytes, let expected):
-            "Incomplete -- \(ModelSize.readable(bytes)) of \(ModelSize.readable(expected)) on disk."
+            if let expected {
+                "Incomplete -- \(ModelSize.readable(bytes)) of \(ModelSize.readable(expected)) on disk."
+            } else {
+                "Incomplete -- \(ModelSize.readable(bytes)) on disk."
+            }
         case .absent:
             switch kind {
             case .speech: "Not downloaded."
@@ -176,6 +200,12 @@ public struct SpeechModelDescriptor: Equatable, Sendable {
         self.repository = repository
         self.variant = variant
         self.expectedBytes = expectedBytes
+    }
+
+    /// The namespace half of this descriptor, without the byte count -- for handing to the
+    /// functions below that only ever need to name the model, never to size it.
+    public var reference: SpeechModelReference {
+        SpeechModelReference(repository: repository, variant: variant)
     }
 }
 
@@ -223,27 +253,41 @@ public enum ModelInventory {
     ///
     /// Appended one component at a time because a repository id contains a slash, and
     /// `appendingPathComponent` is documented to add *one* component.
-    public static func repository(for descriptor: SpeechModelDescriptor, in store: URL) -> URL {
+    public static func repository(for reference: SpeechModelReference, in store: URL) -> URL {
         var url = store.appendingPathComponent("models", isDirectory: true)
-        for component in descriptor.repository.split(separator: "/") {
+        for component in reference.repository.split(separator: "/") {
             url = url.appendingPathComponent(String(component), isDirectory: true)
         }
         return url
     }
 
+    /// Same path, from a descriptor rather than the bare reference -- kept for callers that only
+    /// ever had a descriptor (the byte count is not used here) rather than making every one of
+    /// them spell `descriptor.reference` themselves.
+    public static func repository(for descriptor: SpeechModelDescriptor, in store: URL) -> URL {
+        repository(for: descriptor.reference, in: store)
+    }
+
     /// The variant folder: the model itself.
+    public static func variant(for reference: SpeechModelReference, in store: URL) -> URL {
+        repository(for: reference, in: store).appendingPathComponent(reference.variant, isDirectory: true)
+    }
+
     public static func variant(for descriptor: SpeechModelDescriptor, in store: URL) -> URL {
-        repository(for: descriptor, in: store)
-            .appendingPathComponent(descriptor.variant, isDirectory: true)
+        variant(for: descriptor.reference, in: store)
     }
 
     /// Where the Hub keeps this variant's bookkeeping: one `.metadata` sidecar per downloaded
     /// file, and the `.<etag>.incomplete` file of whatever is being transferred right now
     /// (`HubApi.snapshot`, which builds `<repo>/.cache/huggingface/download/`).
-    public static func cache(for descriptor: SpeechModelDescriptor, in store: URL) -> URL {
-        repository(for: descriptor, in: store)
+    public static func cache(for reference: SpeechModelReference, in store: URL) -> URL {
+        repository(for: reference, in: store)
             .appendingPathComponent(".cache/huggingface/download", isDirectory: true)
-            .appendingPathComponent(descriptor.variant, isDirectory: true)
+            .appendingPathComponent(reference.variant, isDirectory: true)
+    }
+
+    public static func cache(for descriptor: SpeechModelDescriptor, in store: URL) -> URL {
+        cache(for: descriptor.reference, in: store)
     }
 
     // MARK: - The row
@@ -278,14 +322,20 @@ public enum ModelInventory {
     /// THIS Mac's Neural Engine already compiled this variant. See
     /// ``firstUseNotice(installation:knownWarm:)`` for why that has to travel in rather than be
     /// derived here.
+    /// `expectedBytes` is `nil` for a reference nothing has measured in advance -- every model
+    /// found by ``installedSpeechModels(in:fileManager:)`` is already installed, so nothing about
+    /// drawing its row needs a number nobody fetched. It stays a parameter rather than always
+    /// `nil` because the shipped default DOES have one (`ModelDownload.transcriptionModelBytes`),
+    /// and an installed-but-partial row still wants to say what the download will finish costing.
     public static func speechRow(
-        for descriptor: SpeechModelDescriptor,
+        for reference: SpeechModelReference,
         in store: URL,
+        expectedBytes: Int64? = nil,
         fileManager: FileManager = .default,
         knownWarm: Bool = false
     ) -> ModelRow {
-        let variantURL = variant(for: descriptor, in: store)
-        let cacheURL = cache(for: descriptor, in: store)
+        let variantURL = variant(for: reference, in: store)
+        let cacheURL = cache(for: reference, in: store)
         let interrupted = hasIncompleteFile(under: cacheURL, fileManager: fileManager)
         let bytes = bytesOnDisk(in: variantURL, fileManager: fileManager)
             + bytesOnDisk(in: cacheURL, fileManager: fileManager)
@@ -294,15 +344,74 @@ public enum ModelInventory {
         if bytes == 0 && !interrupted {
             installation = .absent
         } else if interrupted || !hasRequiredBundles(in: variantURL, fileManager: fileManager) {
-            installation = .partiallyDownloaded(bytes: bytes, expected: descriptor.expectedBytes)
+            installation = .partiallyDownloaded(bytes: bytes, expected: expectedBytes)
         } else {
             installation = .installed(bytes: bytes)
         }
 
         return ModelRow(
-            identifier: descriptor.variant, kind: .speech, installation: installation,
-            expectedBytes: descriptor.expectedBytes,
+            identifier: reference.string, kind: .speech, installation: installation,
+            expectedBytes: expectedBytes,
             firstUseNotice: firstUseNotice(installation: installation, knownWarm: knownWarm))
+    }
+
+    /// Same row, from a descriptor that already carries the one expected byte count this package
+    /// knows in advance -- the shipped default's. Kept so every existing caller of the descriptor
+    /// form keeps compiling unchanged.
+    public static func speechRow(
+        for descriptor: SpeechModelDescriptor,
+        in store: URL,
+        fileManager: FileManager = .default,
+        knownWarm: Bool = false
+    ) -> ModelRow {
+        speechRow(
+            for: descriptor.reference, in: store, expectedBytes: descriptor.expectedBytes,
+            fileManager: fileManager, knownWarm: knownWarm)
+    }
+
+    /// Every speech model actually installed under `store`, found by walking it rather than by
+    /// asking a mode file or a catalogue -- the answer to "what does Louis actually have", which a
+    /// list of what the app SHIPS or what a mode NAMES cannot give: an install from a repository
+    /// this package has no descriptor for is still a folder on disk with the three bundles in it.
+    ///
+    /// **The two-level walk is the repository split, not a guess.** A Hugging Face repository id
+    /// is always exactly `owner/name` (``SpeechModelReference/init(parsing:)`` makes the same
+    /// assumption), so under `store/models/` the first level is owners, the second is repository
+    /// names, and everything below THAT is a variant folder -- including the repository's own
+    /// `.cache` directory, which sits at the same level as a variant and is discarded here for the
+    /// ordinary reason every other leftover is: it never holds ``requiredBundles``, so it never
+    /// passes the check that decides a folder is a variant at all.
+    ///
+    /// Sorted at each level so the result -- and therefore a picker built from it -- does not
+    /// depend on the directory listing's own, unspecified order.
+    public static func installedSpeechModels(
+        in store: URL, fileManager: FileManager = .default
+    ) -> [SpeechModelReference] {
+        let modelsRoot = store.appendingPathComponent("models", isDirectory: true)
+        var found: [SpeechModelReference] = []
+        for owner in subdirectories(of: modelsRoot, fileManager: fileManager) {
+            for name in subdirectories(of: owner, fileManager: fileManager) {
+                let repository = "\(owner.lastPathComponent)/\(name.lastPathComponent)"
+                for candidate in subdirectories(of: name, fileManager: fileManager)
+                where hasRequiredBundles(in: candidate, fileManager: fileManager) {
+                    found.append(SpeechModelReference(repository: repository, variant: candidate.lastPathComponent))
+                }
+            }
+        }
+        return found
+    }
+
+    /// The directories directly inside `folder`, sorted by name -- empty, rather than throwing,
+    /// when `folder` does not exist at all. A store that has never downloaded anything, or a
+    /// temporary directory a test built only part of, is not a broken store; it is one with
+    /// nothing in it yet.
+    private static func subdirectories(of folder: URL, fileManager: FileManager) -> [URL] {
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: [.isDirectoryKey])
+        else { return [] }
+        return entries
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     /// The sentence an installed speech model carries about the machine-specific compile it has
@@ -343,7 +452,11 @@ public enum ModelInventory {
     public static func removal(
         for descriptor: SpeechModelDescriptor, in store: URL, namedByModes modeNames: [String] = []
     ) -> ModelRemoval {
-        let name = ModelDisplayName.readable(descriptor.variant)
+        // The full reference, not `ModelDisplayName.readable(descriptor.variant)`: that rule
+        // exists to drop a language model's registry prefix, and a speech model's "prefix" IS the
+        // repository -- the one part of this string that says a delete followed by a reinstall
+        // would fetch from the same place. This is what a speech row's own name column shows.
+        let name = descriptor.reference.string
         let size = ModelSize.readable(descriptor.expectedBytes)
         let question: String
         if modeNames.isEmpty {
@@ -362,15 +475,17 @@ public enum ModelInventory {
             question: question)
     }
 
-    /// The names of the modes whose `stt.model` resolves to `variant`, in file order.
+    /// The names of the modes whose `stt.model` resolves to `reference`, in file order.
     ///
     /// Resolved through ``SpeechModelResolution`` rather than compared as raw strings: a mode's
     /// stored field is very often the shipped alias (`Mode.defaultSTTModel`) or blank, and neither
-    /// is the exact folder name a row's `identifier` carries -- comparing them literally would
-    /// never catch the common case, which is exactly the one the delete confirmation exists for.
-    public static func modesNaming(variant: String, in modes: [Mode], engineDefault: String) -> [String] {
+    /// is the full reference a row's `identifier` carries -- comparing them literally would never
+    /// catch the common case, which is exactly the one the delete confirmation exists for.
+    public static func modesNaming(
+        reference: SpeechModelReference, in modes: [Mode], engineDefault: SpeechModelReference
+    ) -> [String] {
         modes.filter {
-            SpeechModelResolution.variant(storedAs: $0.stt.model, engineDefault: engineDefault) == variant
+            SpeechModelResolution.reference(storedAs: $0.stt.model, engineDefault: engineDefault) == reference
         }.map(\.name)
     }
 

@@ -152,12 +152,11 @@ rather than a gradient: `mdi` 3 077 occurrences, median words ×2.54, decode tim
 
 ## Open
 
-- **`Mode.stt.model` holds a display name from a different namespace than the engine's variant id.**
-  A mode declares `"large-v3-turbo"`; the installed folder is `openai_whisper-large-v3-v20240930_turbo`.
-  `SpeechModelResolution` bridges the two safe cases (blank, and the default name) deliberately,
-  bypassing WhisperKit's fuzzy Hub matcher — which does **not** match that folder and would have
-  triggered a multi-GB re-download plus ~7 minutes of ANE compilation on the next dictation. A
-  picker in the mode editor is the real fix, and it needs that namespace decided first.
+- ~~**`Mode.stt.model` holds a display name from a different namespace than the engine's variant id.**~~
+  Replaced by `SpeechModelReference` (`owner/name/variant`, the Hugging Face form): `ModeStore`
+  migrates an old mode file on load, `WhisperKitEngine` and the Models pane both read the one
+  reference, and the mode editor's Speech/Refiner model fields are now pickers over what is
+  actually installed rather than free text.
 - **Deleting a model does not warn when a mode still names it.** The sentence exists and is tested
   (`ModelInventory.removal(for:in:namedByModes:)`); wiring it means actuating a destructive button,
   which was not done on a machine holding real models.

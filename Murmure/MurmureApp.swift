@@ -137,7 +137,9 @@ struct MurmureApp: App {
         // model built with the no-op default would look identical, compile identically and leave
         // the menu offering the list from before the edit.
         _modesModel = StateObject(
-            wrappedValue: ModesPaneModel(supportFolder: Storage.url()) { renamed in
+            wrappedValue: ModesPaneModel(
+                supportFolder: Storage.url(), modelsStore: Storage.url(subfolder: "models")
+            ) { renamed in
                 // The rename first, so the stored selection has already followed the key by the
                 // time the list it is checked against is replaced. `ModePreference.selection` is
                 // the rule; this is only the moment it is applied, and it is applied HERE because
@@ -161,7 +163,13 @@ struct MurmureApp: App {
             wrappedValue: ModelsPaneModel(
                 store: Storage.url(subfolder: "models"),
                 speech: [ModelsPaneModel.dictationModel],
-                language: { ModelInventory.languageModels(in: state.availableModes) }))
+                language: { ModelInventory.languageModels(in: state.availableModes) },
+                speechModels: {
+                    state.availableModes.map {
+                        SpeechModelResolution.reference(
+                            storedAs: $0.stt.model, engineDefault: .shippedDefault)
+                    }
+                }))
         // `controller.rebindToggleHotkey` rather than a copy of the logic: the pane decides
         // whether a captured press is legal (`HotkeyRecording`), the controller decides whether
         // Carbon will actually take it and rolls back a refusal -- and it can only do that from

@@ -60,25 +60,31 @@ actor WhisperKitEngine {
     /// is WhisperKit's own compute variant on top of it. Getting this string wrong fails at
     /// download time with a confusing "model not found", so it is verified, not remembered.
     ///
-    /// **The default, not the only possibility.** A mode's `stt.model` names the variant to load
+    /// A read of ``SpeechModelReference/shippedDefault/variant``, not a second copy of it -- kept
+    /// as its own constant because it, and ``modelRepo`` beside it, are what every doc comment and
+    /// log line in this file already names.
+    ///
+    /// **The default, not the only possibility.** A mode's `stt.model` names the reference to load
     /// (``SpeechModelResolution`` decides what that resolves to); this constant is what a mode
-    /// gets when it names nothing usable, and what an unresolvable variant falls back to rather
-    /// than failing the dictation outright -- see ``load(variant:report:)``.
-    static let dictationModel = "openai_whisper-large-v3-v20240930_turbo"
+    /// gets when it names nothing usable, and what an unresolvable reference falls back to rather
+    /// than failing the dictation outright -- see ``load(reference:report:)``.
+    static let dictationModel = SpeechModelReference.shippedDefault.variant
 
-    /// The Hugging Face repository the variant above lives in. Same default WhisperKit uses; it
-    /// is spelled out here because the cached-folder check below has to resolve the exact same
-    /// local path WhisperKit would have downloaded into.
+    /// The Hugging Face repository the variant above lives in. A read of
+    /// ``SpeechModelReference/shippedDefault/repository``, spelled out as its own constant because
+    /// the cached-folder check below has to resolve the exact same local path WhisperKit would
+    /// have downloaded into.
     ///
     /// Not private, so the Models pane describes THIS repository rather than a second copy of the
     /// string: a table that named a repository the engine does not download from would be a table
     /// about a model nobody has.
-    static let modelRepo = "argmaxinc/whisperkit-coreml"
+    static let modelRepo = SpeechModelReference.shippedDefault.repository
 
-    /// The one model slot this engine keeps -- keyed by the variant it was asked for, so a second
-    /// caller asking for the SAME variant shares the one load already in flight (the property
-    /// `loadedKit(for:)` existed to give, preserved) while a caller asking for a DIFFERENT one
-    /// gets its own task and replaces this slot rather than being handed the wrong model.
+    /// The one model slot this engine keeps -- keyed by the reference (repository AND variant) it
+    /// was asked for, so a second caller asking for the SAME reference shares the one load already
+    /// in flight (the property `loadedKit(for:)` existed to give, preserved) while a caller asking
+    /// for a DIFFERENT one gets its own task and replaces this slot rather than being handed the
+    /// wrong model.
     ///
     /// **What replacing the slot does and does not do.** Storing a new entry drops this actor's
     /// own reference to the old task; it does NOT reach into a `transcribe` call already in
@@ -94,7 +100,7 @@ actor WhisperKitEngine {
     /// only ever runs one dictation at a time (`AudioRecorder.start()` refuses a second recording),
     /// so no caller of this actor can currently ask for two variants concurrently. This comment is
     /// for the day something else calls it that isn't bound by that rule.
-    private var loaded: (variant: String, task: Task<(model: LoadedModel, resolvedVariant: String), Error>)?
+    private var loaded: (reference: SpeechModelReference, task: Task<(model: LoadedModel, resolvedReference: SpeechModelReference), Error>)?
 
     /// Where "how far into the audio has the decoder got" is left for the interface to pull.
     ///
@@ -176,11 +182,12 @@ actor WhisperKitEngine {
     /// decide.
     ///
     /// `model` is `activeMode.stt.model` -- a request, not a promise. What comes back names the
-    /// variant that actually ran (``TranscriptionOutcome/model``), which is `model` resolved
-    /// through ``SpeechModelResolution`` whenever that could be honoured, and ``dictationModel``
-    /// when it could not (see ``load(variant:report:)``). `DictationSession` archives this value,
-    /// never `model` itself, so a fallback is visible in the history it would otherwise be
-    /// invisible from the outside.
+    /// full reference that actually ran (``TranscriptionOutcome/model``, a
+    /// ``SpeechModelReference/string``), which is `model` resolved through
+    /// ``SpeechModelResolution`` whenever that could be honoured, and
+    /// ``SpeechModelReference/shippedDefault`` when it could not (see
+    /// ``load(reference:report:)``). `DictationSession` archives this value, never `model` itself,
+    /// so a fallback is visible in the history it would otherwise be invisible from the outside.
     func transcribe(
         wav: URL, language: String, model: String, initialPrompt: String?
     ) async throws -> TranscriptionOutcome {
@@ -192,9 +199,10 @@ actor WhisperKitEngine {
         progress.begin()
 
         // Resolved once, up front, and used both for the empty-audio early return below and for
-        // the real load: a pure string decision, no I/O, so computing it before knowing whether
-        // there is even speech to decode costs nothing.
-        let variant = SpeechModelResolution.variant(storedAs: model, engineDefault: Self.dictationModel)
+        // the real load: a pure decision, no I/O, so computing it before knowing whether there is
+        // even speech to decode costs nothing.
+        let reference = SpeechModelResolution.reference(
+            storedAs: model, engineDefault: SpeechModelReference.shippedDefault)
 
         let samples: [Float]
         do {
@@ -219,10 +227,10 @@ actor WhisperKitEngine {
                 no speech in \(wav.lastPathComponent, privacy: .public) -- \
                 \(reason, privacy: .public); not transcribed
                 """)
-            // No model was loaded to answer this -- `variant` names what WOULD have run, not a
+            // No model was loaded to answer this -- `reference` names what WOULD have run, not a
             // claim that it did. `HistoryRecord.sttModel` on a `.nothingHeard` row has never meant
             // "and here is proof it loaded"; the row already carries no transcript either.
-            return TranscriptionOutcome(text: "", model: variant)
+            return TranscriptionOutcome(text: "", model: reference.string)
         }
 
         let audio = Self.audioWorthDecoding(samples: samples, voiced: voiced)
@@ -234,7 +242,7 @@ actor WhisperKitEngine {
                 """)
         }
 
-        let resolved = try await loadedKit(for: variant)
+        let resolved = try await loadedKit(for: reference)
 
         let results: [TranscriptionResult]
         do {
@@ -252,7 +260,7 @@ actor WhisperKitEngine {
         if text.isEmpty {
             logger.warning("no text from \(wav.lastPathComponent, privacy: .public)")
         }
-        return TranscriptionOutcome(text: text, model: resolved.resolvedVariant)
+        return TranscriptionOutcome(text: text, model: resolved.resolvedReference.string)
     }
 
     /// Downloads and loads the engine's own default model, transcribing nothing.
@@ -273,11 +281,11 @@ actor WhisperKitEngine {
     /// caches is keyed on the configuration it compiled, so a warm-up that opened another variant,
     /// another `downloadBase` or another `WhisperKit.init` would warm nothing and would report
     /// that it had -- a wait that looks paid and still happens, which is worse than one that does
-    /// not pretend. Fixed to `dictationModel` rather than taking a variant: the script has no mode
-    /// to read one from, and warming the shipped default is the one thing every install needs
-    /// regardless of which modes somebody goes on to create.
+    /// not pretend. Fixed to the shipped default rather than taking a reference: the script has no
+    /// mode to read one from, and warming it is the one thing every install needs regardless of
+    /// which modes somebody goes on to create.
     func prepare() async throws {
-        _ = try await loadedKit(for: Self.dictationModel)
+        _ = try await loadedKit(for: SpeechModelReference.shippedDefault)
     }
 
     /// Downloads a speech model the Models pane's "add a model" flow chose, into the same store
@@ -360,34 +368,36 @@ actor WhisperKitEngine {
         try AudioProcessor.loadAudioAsFloatArray(fromPath: wav.path)
     }
 
-    /// The loaded model for `variant`, loading it exactly once per variant.
+    /// The loaded model for `reference`, loading it exactly once per reference.
     ///
     /// Creating the task and storing it happen with no `await` between them, so no second caller
-    /// asking for the SAME variant can observe `loaded` not yet holding it while a load is in
+    /// asking for the SAME reference can observe `loaded` not yet holding it while a load is in
     /// flight. A failed load clears the slot -- but only if a THIRD caller has not already
-    /// replaced it while this one was failing, which is why the check is `loaded?.variant ==
-    /// variant` rather than an unconditional `nil` -- so the next dictation on this variant
+    /// replaced it while this one was failing, which is why the check is `loaded?.reference ==
+    /// reference` rather than an unconditional `nil` -- so the next dictation on this reference
     /// retries: a dropped Wi-Fi connection must not disable transcription for the lifetime of the
     /// process.
     ///
     /// The `report(nil)` on both exits is what hands the surfaces back to the dictation: whichever
     /// way the load ends, the model is no longer being prepared, and a preparation left standing
     /// would sit on screen saying "Loading model" for the whole of the transcription that follows.
-    /// It is deliberately NOT on the early return above -- a second dictation on the same variant
+    /// It is deliberately NOT on the early return above -- a second dictation on the same reference
     /// finds it already loaded, reports nothing at all, and its card is the dictation's from the
     /// first frame.
-    private func loadedKit(for variant: String) async throws -> (model: LoadedModel, resolvedVariant: String) {
-        if let loaded, loaded.variant == variant {
+    private func loadedKit(
+        for reference: SpeechModelReference
+    ) async throws -> (model: LoadedModel, resolvedReference: SpeechModelReference) {
+        if let loaded, loaded.reference == reference {
             return try await loaded.task.value
         }
-        let task = Task { [report] in try await Self.load(variant: variant, report: report) }
-        loaded = (variant, task)
+        let task = Task { [report] in try await Self.load(reference: reference, report: report) }
+        loaded = (reference, task)
         do {
             let result = try await task.value
             await report(nil)
             return result
         } catch {
-            if loaded?.variant == variant { loaded = nil }
+            if loaded?.reference == reference { loaded = nil }
             // Before the throw, so the failure the session is about to turn into `.failed` reaches
             // a card that is no longer showing a percentage frozen where the connection died.
             await report(nil)
@@ -408,18 +418,18 @@ actor WhisperKitEngine {
     /// own doc comment measures at several minutes is paid again, in full, the first time THIS
     /// machine sees a new variant, and this is the only place that wait is announced.
     ///
-    /// A variant that does not resolve to anything the repository has -- ``WhisperError
+    /// A variant that does not resolve to anything its repository has -- ``WhisperError
     /// .modelsUnavailable``, thrown by `WhisperKit.download`'s own glob search before a single byte
-    /// moves -- falls back to ``dictationModel`` once rather than failing the dictation outright:
-    /// spec chose a free-text field for `stt.model`, so a typo or a stale variant name is something
-    /// a mode file can carry with nothing to catch it at save time. A real network failure
-    /// (`Failure.modelDownloadStalled`, `.modelDownloadFailed`) is NOT caught here and must not be:
-    /// silently retrying an unrelated variant on a dropped connection would either mask the real
-    /// error or start a second multi-gigabyte download while offline.
+    /// moves -- falls back to ``SpeechModelReference/shippedDefault`` once rather than failing the
+    /// dictation outright: spec chose a free-text field for `stt.model`, so a typo or a stale
+    /// variant name is something a mode file can carry with nothing to catch it at save time. A
+    /// real network failure (`Failure.modelDownloadStalled`, `.modelDownloadFailed`) is NOT caught
+    /// here and must not be: silently retrying an unrelated reference on a dropped connection
+    /// would either mask the real error or start a second multi-gigabyte download while offline.
     private static func load(
-        variant: String,
+        reference: SpeechModelReference,
         report: @escaping @MainActor @Sendable (ModelPreparation?) -> Void
-    ) async throws -> (model: LoadedModel, resolvedVariant: String) {
+    ) async throws -> (model: LoadedModel, resolvedReference: SpeechModelReference) {
         let modelStore = try Storage.directory(subfolder: "models")
 
         // Warm start: the model is already on disk, so skip WhisperKit.download entirely.
@@ -428,23 +438,26 @@ actor WhisperKitEngine {
         // every process start even when nothing needs fetching -- paid before the first
         // dictation of every session, in an app whose whole value is being fast.
         //
-        // This is an EXACT match on `variant`, not a fuzzy one: `SpeechModelResolution` has
-        // already turned a blank field or the shipped default alias into the exact folder name
-        // this engine verified, and a variant somebody typed by hand is the exact string
-        // `WhisperKit.download` will have named the folder after IF it was a full, unambiguous
-        // folder name to begin with. A genuinely fuzzy alias for a variant this store has never
-        // seen resolved (the case the future "add a model" task exists for) will not warm-start
-        // hit here and pays the Hub round trip below instead -- which does not re-download bytes
-        // already on disk, only re-confirms them, so the cost of that miss is seconds, not
-        // gigabytes.
-        if let cached = cachedModelFolder(in: modelStore, variant: variant) {
+        // This is an EXACT match on `reference`, not a fuzzy one: `SpeechModelResolution` has
+        // already turned a blank field or the shipped default alias into the exact repository and
+        // variant this engine verified, and a reference somebody typed by hand is the exact
+        // repository and folder name `WhisperKit.download` will have named things after IF it was
+        // a full, unambiguous reference to begin with. A genuinely fuzzy alias for a variant this
+        // store has never seen resolved (the case the future "add a model" task exists for) will
+        // not warm-start hit here and pays the Hub round trip below instead -- which does not
+        // re-download bytes already on disk, only re-confirms them, so the cost of that miss is
+        // seconds, not gigabytes.
+        if let cached = cachedModelFolder(in: modelStore, reference: reference) {
             do {
                 // Announced on the warm path too, and that is not belt-and-braces: this is the
                 // branch Louis's OWN Mac takes on the first dictation of every session, and the
                 // load behind it was measured at 112 s cold. The machine with the model already on
                 // disk has the same right to know what it is waiting for as the one downloading it.
                 await report(.loading)
-                return (try await loadKit(from: cached, variant: variant, downloadBase: modelStore), variant)
+                return (
+                    try await loadKit(from: cached, variant: reference.variant, downloadBase: modelStore),
+                    reference
+                )
             } catch {
                 // The folder looked complete but CoreML would not load it -- a truncated or
                 // corrupted file inside one of the .mlmodelc bundles. Fall through to the normal
@@ -459,53 +472,73 @@ actor WhisperKitEngine {
 
         let modelFolder: URL
         do {
-            modelFolder = try await downloadModel(into: modelStore, variant: variant, report: report)
+            modelFolder = try await downloadModel(
+                into: modelStore, variant: reference.variant, repo: reference.repository, report: report)
         } catch WhisperError.modelsUnavailable(let detail) {
-            guard variant != dictationModel else {
+            guard reference != SpeechModelReference.shippedDefault else {
                 logger.error("""
                     default model unavailable (\(detail, privacy: .public))
                     """)
                 throw Failure.modelDownloadFailed(WhisperError.modelsUnavailable(detail))
             }
             logger.warning("""
-                stt model \(variant, privacy: .public) is not a variant \
-                \(modelRepo, privacy: .public) has (\(detail, privacy: .public)) -- falling back \
-                to \(dictationModel, privacy: .public)
+                stt model \(reference.string, privacy: .public) is not a variant \
+                \(reference.repository, privacy: .public) has (\(detail, privacy: .public)) -- \
+                falling back to \(SpeechModelReference.shippedDefault.string, privacy: .public)
                 """)
-            // Known, accepted cost: `loaded` caches this result under the ORIGINAL `variant`, not
-            // under `dictationModel`. Two modes each naming a different unresolvable variant would
-            // each independently fall back and each independently pay `loadKit`'s init -- not the
-            // multi-minute CoreML compile, which is cached on disk and keyed on the configuration
-            // (this file's own note on `prepare()`), just the few seconds that init still costs.
-            // Not worth a second cache keyed on the resolved name for a case this rare.
-            return try await load(variant: dictationModel, report: report)
+            // Known, accepted cost: `loaded` caches this result under the ORIGINAL `reference`,
+            // not under the shipped default. Two modes each naming a different unresolvable
+            // reference would each independently fall back and each independently pay
+            // `loadKit`'s init -- not the multi-minute CoreML compile, which is cached on disk and
+            // keyed on the configuration (this file's own note on `prepare()`), just the few
+            // seconds that init still costs. Not worth a second cache keyed on the resolved
+            // reference for a case this rare.
+            return try await load(reference: SpeechModelReference.shippedDefault, report: report)
         }
 
         do {
             await report(.loading)
-            return (try await loadKit(from: modelFolder, variant: modelFolder.lastPathComponent, downloadBase: modelStore), modelFolder.lastPathComponent)
+            let resolvedReference = SpeechModelReference(
+                repository: reference.repository, variant: modelFolder.lastPathComponent)
+            return (
+                try await loadKit(
+                    from: modelFolder, variant: modelFolder.lastPathComponent, downloadBase: modelStore),
+                resolvedReference
+            )
         } catch {
             logger.error("model load failed: \(error.localizedDescription, privacy: .public)")
             throw Failure.modelLoadFailed(error)
         }
     }
 
-    /// The local folder WhisperKit would have downloaded `variant` into, if it holds a model.
+    /// The local folder WhisperKit would have downloaded `reference` into, if it holds a model.
     ///
     /// The path is asked of WhisperKit's own Hub client rather than spelled out here, so it
-    /// cannot drift from where `WhisperKit.download` puts things. The three `.mlmodelc` bundles
-    /// are the ones `loadModels` requires (`WhisperKit.swift:376-385`); anything less means an
-    /// interrupted first download, and the caller must go back to the Hub. This is a cheap
-    /// pre-filter, not a validation: a bundle can exist and still be corrupt, which is why the
-    /// caller also treats a failed load as "go to the Hub".
+    /// cannot drift from where `WhisperKit.download` puts things. **Built from `reference.repository`,
+    /// not from `modelRepo`.** Before `SpeechModelReference` existed, this lookup (and the download
+    /// call below it) were hard-coded to `modelRepo` -- which is `SpeechModelReference.shippedDefault
+    /// .repository`, so the shipped default itself warm-started correctly; there was no gap there.
+    /// The gap was for any OTHER repository: HEAD had no way to look a variant up, or download it,
+    /// from anywhere but `modelRepo`, so a variant that actually lived in a different repository
+    /// would miss this warm-start check (looked for under the wrong repository), fall through to
+    /// `downloadModel`, ask `WhisperKit.download(from: modelRepo)` for a variant that repository
+    /// does not have, hit `WhisperError.modelsUnavailable`, and be caught by this file's own
+    /// fallback to the shipped default -- so such a model could never actually be used, not merely
+    /// load slower. `SpeechModelReference` closes that gap by threading the reference's own
+    /// repository through both the warm-start lookup and the download call. The three `.mlmodelc`
+    /// bundles are the ones `loadModels` requires
+    /// (`WhisperKit.swift:376-385`); anything less means an interrupted first download, and the
+    /// caller must go back to the Hub. This is a cheap pre-filter, not a validation: a bundle can
+    /// exist and still be corrupt, which is why the caller also treats a failed load as "go to the
+    /// Hub".
     ///
     /// The list comes from `ModelInventory` rather than being spelled here, for the reason the
     /// path does: the Models pane decides whether a model reads as installed with the same
     /// constant, and two literals in two modules are two rules that can drift apart silently.
-    private static func cachedModelFolder(in modelStore: URL, variant: String) -> URL? {
+    private static func cachedModelFolder(in modelStore: URL, reference: SpeechModelReference) -> URL? {
         let folder = HubApiWrapper(downloadBase: modelStore)
-            .localRepoLocation(HubApiWrapper.Repo(id: modelRepo, type: .models))
-            .appending(path: variant)
+            .localRepoLocation(HubApiWrapper.Repo(id: reference.repository, type: .models))
+            .appending(path: reference.variant)
         let complete = ModelInventory.requiredBundles.allSatisfy {
             FileManager.default.fileExists(atPath: folder.appending(path: $0).path)
         }

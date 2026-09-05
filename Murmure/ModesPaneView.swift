@@ -34,7 +34,7 @@ struct ModesPaneView: View {
         // list left on screen since yesterday is how a stale copy gets saved over a hand-edited
         // prompt (plan §6, the risk table). The date check in `ModeStore.save(_ draft:)` is the
         // other half; this one is what keeps the list itself honest.
-        .onAppear { model.reload() }
+        .onAppear { Task { await model.reload() } }
         .alert(
             model.pendingRemoval?.removalConfirmation.title ?? "",
             isPresented: Binding(
@@ -221,7 +221,7 @@ struct ModesPaneView: View {
                 hairline
                 field("Name", text: text(\.name), placeholder: "Voice")
                 field("Language", text: text(\.stt.language), placeholder: "fr")
-                field("Speech model", text: text(\.stt.model), placeholder: "large-v3-turbo")
+                speechModelPicker(draft)
 
                 // The one switch that changes what the mode *is*, which is why it is here and not
                 // on the advanced screen: it decides whether what Louis says reaches a language
@@ -229,8 +229,7 @@ struct ModesPaneView: View {
                 toggle("Refine the transcript", isOn: flag(\.llm.enabled))
 
                 if draft.mode.llm.enabled {
-                    field("Refiner model", text: text(\.llm.model),
-                          placeholder: "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M")
+                    refinerModelPicker(draft)
                     // The note is the fix for Louis opening `Prompt`, reading
                     // `"[Context: general]"` and concluding there was no prompt at all: under
                     // `api: .s1` this field is a control line the model copies rather than reads,
@@ -411,6 +410,87 @@ struct ModesPaneView: View {
                 .pickerStyle(.segmented)
                 .frame(width: 140)
             }
+        }
+    }
+
+    /// One entry a `Picker` below can show: the value written into the mode, and the label drawn
+    /// for it. Distinct so a stored value absent from the live list can still be shown, tagged as
+    /// what it is, instead of leaving the control on a blank selection.
+    private struct PickerOption: Identifiable, Hashable {
+        let value: String
+        let label: String
+        var id: String { value }
+    }
+
+    /// The Speech model picker's own options, plus one more when `currentValue` names a reference
+    /// this machine has not installed. Dropping the stored value in that case (rather than only
+    /// ever offering what is installed) would rewrite a mode's `stt.model` the moment its editor
+    /// opened, before Louis touched anything -- picking *a* model when none of these is what the
+    /// file actually says would be its own silent rewrite.
+    private func speechModelOptions(currentValue: String) -> [PickerOption] {
+        var options = model.installedSpeechModels.map { PickerOption(value: $0.string, label: $0.string) }
+        if !options.contains(where: { $0.value == currentValue }) {
+            options.append(PickerOption(
+                value: currentValue,
+                label: currentValue.isEmpty ? "(none)" : "\(currentValue) (not installed)"))
+        }
+        return options
+    }
+
+    /// Same reasoning as ``speechModelOptions(currentValue:)``, over Ollama's own listing instead
+    /// of the speech-model store -- with one more distinction that store never needs: **unreachable
+    /// is not the same fact as "not installed".** When `model.ollamaUnreachableNote` is set, Ollama
+    /// was never actually asked, so the fallback item names the stored value plain, with no
+    /// "(not installed)" suffix -- the same line `ModelInventory`'s own `.undetermined` (a probe
+    /// that could not be run) draws against `.absent` (a probe that ran and said no).
+    private func refinerModelOptions(currentValue: String) -> [PickerOption] {
+        var options = model.ollamaModels.map { PickerOption(value: $0.name, label: $0.name) }
+        if !options.contains(where: { $0.value == currentValue }) {
+            let label: String
+            if currentValue.isEmpty {
+                label = "(none)"
+            } else if model.ollamaUnreachableNote != nil {
+                label = currentValue
+            } else {
+                label = "\(currentValue) (not installed)"
+            }
+            options.append(PickerOption(value: currentValue, label: label))
+        }
+        return options
+    }
+
+    /// The Speech model field, as a picker over what `ModelInventory.installedSpeechModels` finds
+    /// on disk rather than a text field a reference could be mistyped into. `ModeField.sttModel`'s
+    /// validation message still surfaces underneath (`labelled`'s own lookup), unchanged by this
+    /// being a picker rather than free text.
+    private func speechModelPicker(_ draft: ModeDraft) -> some View {
+        let options = speechModelOptions(currentValue: draft.mode.stt.model)
+        return labelled("Speech model", note: nil) {
+            Picker("", selection: text(\.stt.model)) {
+                ForEach(options) { option in
+                    Text(option.label).tag(option.value)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+        }
+    }
+
+    /// The Refiner model field, as a picker over Ollama's own `/api/tags` listing
+    /// (`ModesPaneModel.ollamaModels`). When Ollama could not be reached at all, the picker still
+    /// holds the mode's stored value (`refinerModelOptions`'s fallback) and the note below names
+    /// why, in `OllamaFailure`'s own wording -- the same sentence a dictation failure would show,
+    /// so there are not two vocabularies for one server being unreachable.
+    private func refinerModelPicker(_ draft: ModeDraft) -> some View {
+        let options = refinerModelOptions(currentValue: draft.mode.llm.model)
+        return labelled("Refiner model", note: model.ollamaUnreachableNote) {
+            Picker("", selection: text(\.llm.model)) {
+                ForEach(options) { option in
+                    Text(option.label).tag(option.value)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
         }
     }
 

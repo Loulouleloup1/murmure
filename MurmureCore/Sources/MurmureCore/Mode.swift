@@ -338,13 +338,16 @@ extension Mode {
         autoActivate: [], simulateKeypresses: false
     )
 
-    /// Spec §3: large-v3-turbo for live dictation.
+    /// Spec §3: large-v3-turbo for live dictation, in the Hugging Face reference form
+    /// (``SpeechModelReference/string``) rather than the display alias this constant held before
+    /// ``SpeechModelReference`` existed.
     ///
-    /// Not `private` any more: ``SpeechModelResolution`` reads this exact string to recognise
-    /// "this mode file still carries the shipped default" without a second copy of it -- two
-    /// literals in two files are two rules that can drift apart silently, the reason
-    /// ``ModelInventory/requiredBundles`` gives for the same choice.
-    static let defaultSTTModel = "large-v3-turbo"
+    /// A read of ``SpeechModelReference/shippedDefault``, not a second copy of its two component
+    /// strings -- two literals in two files are two rules that can drift apart silently, the
+    /// reason ``ModelInventory/requiredBundles`` gives for the same choice. Not `private`, so
+    /// ``ModeStore``'s migration and ``SpeechModelResolution``'s legacy-alias handling can both
+    /// point at it.
+    static let defaultSTTModel = SpeechModelReference.shippedDefault.string
 
     /// Pinned, not `"auto"`. Measured on the whole 1 449-dictation corpus: `detectLanguage` is
     /// re-evaluated per window and produced 9 non-Latin transcripts plus unseen language switches,

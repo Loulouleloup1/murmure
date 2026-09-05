@@ -9,12 +9,34 @@ import MurmureCore
 /// `MurmureCore` and is tested there: which field an error is shown under (`ModeField`), what
 /// saving does to the folder (`ModeStore.save(_ draft:)`), how many badges a row carries
 /// (`Mode.stages`), what key a new mode gets (`Mode.availableKey`). What is left below is the
-/// store call, the published state and one call into `FinderReveal`.
+/// store call, the published state, the two picker sources and one call into `FinderReveal`.
 @MainActor
 final class ModesPaneModel: ObservableObject {
     /// Every usable mode, in `ModeStore`'s own order -- by file name, which is the order the
     /// folder lists them in and therefore the one Louis sees in the Finder.
     @Published private(set) var modes: [Mode] = []
+
+    /// Every speech model actually installed under the models store -- the Speech model picker's
+    /// options (`ModesPaneView.speechModelPicker`). Re-read on every `reload()`, disk-only: this
+    /// is a directory walk, never a download.
+    @Published private(set) var installedSpeechModels: [SpeechModelReference] = []
+
+    /// Ollama's own listing, for the Refiner model picker -- refreshed on every `reload()`.
+    ///
+    /// **Fetched on appear, and that is a deliberate relaxation, not an oversight -- but only when
+    /// the endpoint actually is `localhost` (`OllamaEndpoint.isLoopback`).** `/api/tags` reads
+    /// Ollama's own manifest directory and loads nothing into memory, which is why a loopback read
+    /// is exempt from the "nothing on `onAppear`" rule elsewhere in this app; a mode is free to
+    /// name a remote server instead (`Mode.validationError` only requires an http(s) URL that is
+    /// its own root), and reaching THAT automatically on every appearance is exactly the silent
+    /// network access the rule protects against. `refreshOllamaListing` is where that gate is
+    /// applied. `ModelsPaneModel.reload()` documents the identical relaxation, and the identical
+    /// gate, for the same reason.
+    @Published private(set) var ollamaModels: [OllamaProbe.Listed] = []
+    /// Set instead of `ollamaModels` when the listing could not be read at all -- Ollama's own
+    /// remedy wording (`OllamaFailure.remedy`), the same sentence a dictation failure would show,
+    /// so there are not two vocabularies for one server being unreachable.
+    @Published private(set) var ollamaUnreachableNote: String?
 
     /// The mode files that could not be used, one line each. `ModeStore` reports them one by one
     /// for exactly that, and this pane is the surface D15 wanted for them: the menu can only say
@@ -53,6 +75,11 @@ final class ModesPaneModel: ObservableObject {
     /// directory. The PURE `Storage.url()` — nothing about building a settings pane may create a
     /// folder, and neither of the two things below needs it to exist beforehand.
     private let supportFolder: URL
+    /// Where the speech-model store lives -- the exact URL `ModelsPaneModel` reads
+    /// (`Storage.url(subfolder: "models")`), injected rather than derived a second time here so
+    /// the two panes cannot end up describing different folders. PURE, like `supportFolder`:
+    /// the picker only ever walks this, never creates it.
+    private let modelsStore: URL
     /// Told after every write, so the menu's mode list and the mode a dictation resolves stop
     /// being the ones from before the edit. `DictationController.refreshModes()` is what it calls.
     ///
@@ -60,6 +87,17 @@ final class ModesPaneModel: ObservableObject {
     /// that knows the old key became the new one, so it is the only place that can let the stored
     /// selection follow it (`ModePreference.selection(_:following:)`).
     private let didChangeModes: (_ renamedKey: (from: String, to: String)?) -> Void
+
+    /// A session of its own, short-timed, on the loopback address -- the same shape and the same
+    /// reason `ModelsPaneModel`'s own session gives: `OllamaChat.timeout`'s 120 s is sized for a
+    /// model generating text, not for finding out that nothing is listening.
+    private let ollamaSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 5
+        configuration.timeoutIntervalForResource = 5
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
 
     /// Lazy for the reason `VocabularyPaneModel`'s store is: the `report` closure captures `self`,
     /// which is not fully initialized until every stored property has a value.
@@ -83,24 +121,78 @@ final class ModesPaneModel: ObservableObject {
     /// reach the real folder.
     init(
         supportFolder: URL,
+        modelsStore: URL,
         didChangeModes: @escaping (_ renamedKey: (from: String, to: String)?) -> Void = { _ in }
     ) {
         self.supportFolder = supportFolder
+        self.modelsStore = modelsStore
         self.didChangeModes = didChangeModes
     }
 
-    /// Re-reads the folder. Called every time the pane appears, which is the plan's own answer to
-    /// the file being edited in two places: the window can be left open on another section for a
-    /// day, and coming back to a list from yesterday is how a stale copy gets saved over a
-    /// hand-edited prompt.
+    /// Re-reads the folder, the speech-model store and Ollama's own listing. Called every time
+    /// the pane appears, which is the plan's own answer to the file being edited in two places:
+    /// the window can be left open on another section for a day, and coming back to a list from
+    /// yesterday is how a stale copy gets saved over a hand-edited prompt.
     ///
     /// Does not touch `draft`: reloading under an open editor would throw away what is being
     /// typed. The mode that is open is protected by its own modification date instead
     /// (`ModeStore.save(_ draft:)`), which is the check that can tell a stale copy from a current
-    /// one -- a reload cannot.
-    func reload() {
+    /// one -- a reload cannot. The picker options DO refresh under an open editor, deliberately:
+    /// a model installed or pulled from the Models pane one click away should show up here without
+    /// closing and reopening the row.
+    func reload() async {
         problems = []
         modes = store.loadAll()
+        installedSpeechModels = ModelInventory.installedSpeechModels(in: modelsStore)
+        await refreshOllamaListing()
+    }
+
+    /// Asks Ollama's `/api/tags` on the first refining mode's own endpoint -- Ollama has always
+    /// been the one local server every mode on this machine points at, and a second, differently
+    /// configured endpoint is the same accepted limit `ModelsPaneModel.reference(forRowIdentifier:)`
+    /// already documents elsewhere for pulling. A machine with no refining mode at all has no
+    /// endpoint to ask, and the picker falls back to just the mode's own stored value
+    /// (`ModesPaneView.refinerModelPicker`'s "(not installed)" item).
+    ///
+    /// **Only when that endpoint is loopback.** A mode naming a remote server still passes
+    /// `Mode.validationError`, and this function runs from `reload()`, which runs on every
+    /// appearance -- so a non-loopback endpoint is left unread here, exactly like "no endpoint at
+    /// all", with a note saying why rather than the `OllamaFailure` vocabulary a real unreachable
+    /// server would get. Reaching a remote endpoint stays possible, just never automatic: it is
+    /// what `ModelsPaneModel.checkOllama()`'s press does, on the same mode's own endpoint.
+    private func refreshOllamaListing() async {
+        guard let endpoint = modes.first(where: \.llm.enabled)?.llm.endpoint,
+              let base = URL(string: endpoint)
+        else {
+            ollamaModels = []
+            ollamaUnreachableNote = nil
+            return
+        }
+        guard OllamaEndpoint.isLoopback(base) else {
+            ollamaModels = []
+            ollamaUnreachableNote = "\(endpoint) is not this machine -- Murmure does not read it automatically."
+            return
+        }
+        let url = OllamaProbe.endpoint(base: base)
+        do {
+            let (data, response) = try await ollamaSession.data(from: url)
+            guard let http = response as? HTTPURLResponse else {
+                ollamaModels = []
+                ollamaUnreachableNote = OllamaFailure.malformedResponse(detail: "not an HTTP response").remedy
+                return
+            }
+            switch OllamaProbe.list(status: http.statusCode, body: data) {
+            case .listed(let listed):
+                ollamaModels = listed
+                ollamaUnreachableNote = nil
+            case .failed(let failure):
+                ollamaModels = []
+                ollamaUnreachableNote = failure.remedy
+            }
+        } catch {
+            ollamaModels = []
+            ollamaUnreachableNote = OllamaChat.failure(transport: error, elapsed: 0).remedy
+        }
     }
 
     // MARK: - The editor
@@ -204,7 +296,7 @@ final class ModesPaneModel: ObservableObject {
                 draft.movesItsFile ? (from: previous, to: draft.mode.key) : nil
             }
             closeEditor()
-            reload()
+            Task { await reload() }
             didChangeModes(renamed)
         } catch let error as ModeWriteProblem {
             writeProblem = error.description
@@ -238,7 +330,7 @@ final class ModesPaneModel: ObservableObject {
         do {
             try store.delete(draft)
             closeEditor()
-            reload()
+            Task { await reload() }
             didChangeModes(nil)
         } catch let error as ModeWriteProblem {
             writeProblem = error.description

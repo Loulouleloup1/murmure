@@ -9,8 +9,8 @@ import os
 /// so anything decided here is verified by reading. Everything that is a decision lives in
 /// `MurmureCore` and is tested there: what a directory listing means (`ModelInventory`), whether a
 /// half-downloaded model counts as installed (same file), what a probe of Ollama concluded and
-/// which sentence that is (`OllamaProbe`). What is left below is one directory walk, one HTTP GET
-/// and the published state.
+/// which sentence that is (`OllamaProbe`). What is left below is the directory walks, the HTTP
+/// calls and the published state.
 @MainActor
 final class ModelsPaneModel: ObservableObject {
     /// The table, speech first (`ModelInventory.table`). Empty until `reload()` -- the pane is
@@ -65,6 +65,12 @@ final class ModelsPaneModel: ObservableObject {
     /// listing the models of the modes as they were when the window was first drawn, which is a
     /// pane that is quietly wrong rather than one that is visibly empty.
     private let language: () -> [LanguageModelReference]
+    /// The speech model every mode currently resolves to, one entry per mode -- the same
+    /// derived-from-modes reasoning as `language` above, and resolved the same way
+    /// `ModesPaneView`'s picker resolves a stored value: through `SpeechModelResolution`, so a
+    /// mode still holding the shipped alias or a bare variant is compared as the reference it
+    /// actually means rather than as the raw string in its file.
+    private let speechModels: () -> [SpeechModelReference]
     private var outcomes: [LanguageModelReference: OllamaProbe.Outcome] = [:]
     private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "models")
 
@@ -89,11 +95,13 @@ final class ModelsPaneModel: ObservableObject {
     init(
         store: URL,
         speech: [SpeechModelDescriptor],
-        language: @escaping () -> [LanguageModelReference]
+        language: @escaping () -> [LanguageModelReference],
+        speechModels: @escaping () -> [SpeechModelReference]
     ) {
         self.store = store
         self.speech = speech
         self.language = language
+        self.speechModels = speechModels
     }
 
     /// The one speech model this app runs, described from `WhisperKitEngine`'s own constants.
@@ -111,23 +119,87 @@ final class ModelsPaneModel: ObservableObject {
     /// has no language rows, and a check button that would probe nothing.
     var hasLanguageRows: Bool { !language().isEmpty }
 
-    /// Re-reads the disk. **Touches no network**: opening a settings pane must not wake another
-    /// process, and the language rows keep whatever the last probe said (nothing, on the first
-    /// call).
-    func reload() {
-        rows = ModelInventory.table(
-            speech: speech.map {
-                // Only the shipped default is known to have already paid the Neural Engine
-                // compile: `scripts/bootstrap.sh` warms exactly that one before Murmure is ever
-                // used (`ModelInventory.firstUseNotice`'s own doc comment). Anything else in
-                // `speech` -- today, nothing; after a pane-driven install, that variant -- has no
-                // such guarantee and says so.
-                ModelInventory.speechRow(
-                    for: $0, in: store, knownWarm: $0.variant == Self.dictationModel.variant)
-            },
-            language: language().map {
-                OllamaProbe.row(for: $0.identifier, outcome: hasChecked ? outcomes[$0] : nil)
-            })
+    /// Re-reads the disk, and reads (never probes) the local Ollama's own listing when it actually
+    /// is local. **The one relaxation of "touches no network" this pane makes, and a deliberate,
+    /// gated one**: `/api/tags` on `localhost` reads Ollama's manifest directory and loads
+    /// nothing, so it is the same kind of read `ModelInventory.installedSpeechModels` already makes
+    /// of the speech store just below -- not the multi-gigabyte download or model load the rest of
+    /// this file keeps behind a press. `languageRows()`'s own `OllamaEndpoint.isLoopback` check is
+    /// what keeps that true: a mode naming a remote server is left to the `checkOllama()` press
+    /// instead. `ModesPaneModel.reload()` documents the identical relaxation and the identical
+    /// gate, for the identical reason.
+    func reload() async {
+        rows = ModelInventory.table(speech: speechRows(), language: await languageRows())
+    }
+
+    /// Every speech row: what Murmure itself knows how to run (today, only the shipped default,
+    /// described from `WhisperKitEngine`'s own constants), every reference actually installed
+    /// under `store`, and every reference a mode currently resolves to but does not have on disk
+    /// -- the last two folded in without duplicating a reference already covered by the first.
+    /// `ModelInventory.speechRow` reads a reference's own folder to decide `.installed` versus
+    /// `.absent`, so a mode-named-but-missing reference needs no separate case here: the same call
+    /// that describes an installed one describes it correctly as absent too.
+    private func speechRows() -> [ModelRow] {
+        var rows: [ModelRow] = []
+        var seen: Set<SpeechModelReference> = []
+        for descriptor in speech {
+            // Only the shipped default is known to have already paid the Neural Engine compile:
+            // `scripts/bootstrap.sh` warms exactly that one before Murmure is ever used
+            // (`ModelInventory.firstUseNotice`'s own doc comment). Anything else -- an installed
+            // or mode-named reference below -- has no such guarantee and says so.
+            rows.append(ModelInventory.speechRow(
+                for: descriptor, in: store, knownWarm: descriptor.variant == Self.dictationModel.variant))
+            seen.insert(descriptor.reference)
+        }
+        for reference in ModelInventory.installedSpeechModels(in: store) where !seen.contains(reference) {
+            rows.append(ModelInventory.speechRow(for: reference, in: store))
+            seen.insert(reference)
+        }
+        for reference in speechModels() where !seen.contains(reference) {
+            rows.append(ModelInventory.speechRow(for: reference, in: store))
+            seen.insert(reference)
+        }
+        return rows
+    }
+
+    /// Every language row: Ollama's own listing, read once on the first enabled refining mode's
+    /// endpoint, plus a row for every mode-named model that listing does not carry -- shown
+    /// `.absent`, the same sentence `checkOllama()`'s own per-model probe already gives that case.
+    ///
+    /// Falls back to the pre-listing behaviour (`outcomes`, filled only by the `checkOllama()`
+    /// button, or "not checked yet" before it has ever run) when there is no endpoint to ask, the
+    /// endpoint is not loopback (`OllamaEndpoint.isLoopback` -- a mode may legitimately name a
+    /// remote server, and reaching it every time this pane appears is the silent network access
+    /// the automatic read must not make), or the listing could not be read -- a table must still
+    /// name the models Louis's modes point at even when the automatic read did not run, which is
+    /// exactly what `checkOllama()`'s own press is still there for.
+    private func languageRows() async -> [ModelRow] {
+        let named = language()
+        guard let endpoint = named.first?.endpoint, let base = URL(string: endpoint),
+              OllamaEndpoint.isLoopback(base)
+        else {
+            return named.map { OllamaProbe.row(for: $0.identifier, outcome: hasChecked ? outcomes[$0] : nil) }
+        }
+        let url = OllamaProbe.endpoint(base: base)
+        guard let (data, response) = try? await session.data(from: url),
+              let http = response as? HTTPURLResponse,
+              case .listed(let listed) = OllamaProbe.list(status: http.statusCode, body: data)
+        else {
+            return named.map { OllamaProbe.row(for: $0.identifier, outcome: hasChecked ? outcomes[$0] : nil) }
+        }
+        var rows = listed.map { OllamaProbe.row(for: $0.name, outcome: .pulled(bytes: $0.bytes)) }
+        for reference in named {
+            // Reads the SAME body against this one reference's own identifier, tag and all --
+            // `outcome(status:body:model:)` is the tested match (`OllamaProbeTests`'s implicit
+            // `:latest` cases) that keeps "gemma4" and the listing's "gemma4:latest" from becoming
+            // two rows for one model. `.pulled` here means the row above already covers it.
+            if case .failed(.modelNotPulled) =
+                OllamaProbe.outcome(status: http.statusCode, body: data, model: reference.identifier) {
+                rows.append(OllamaProbe.row(
+                    for: reference.identifier, outcome: .failed(.modelNotPulled(model: reference.identifier))))
+            }
+        }
+        return rows
     }
 
     /// Asks the local Ollama what it has, once, on demand.
@@ -147,7 +219,7 @@ final class ModelsPaneModel: ObservableObject {
         }
         hasChecked = true
         isChecking = false
-        reload()
+        await reload()
     }
 
     private func probe(_ reference: LanguageModelReference) async -> OllamaProbe.Outcome {
@@ -224,7 +296,7 @@ final class ModelsPaneModel: ObservableObject {
             installProgress = nil
             installError = error.localizedDescription
         }
-        reload()
+        await reload()
     }
 
     // MARK: - Pulling a language model
