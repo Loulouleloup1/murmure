@@ -44,4 +44,31 @@ final class OllamaEndpointTests: XCTestCase {
     func testAURLWithNoHostIsNotLoopback() {
         XCTAssertFalse(OllamaEndpoint.isLoopback(url("file:///tmp/whatever")))
     }
+
+    // MARK: - loopbackRoot(preferring:) -- lot 5 review, item 10
+
+    /// Moved here from `ModesPaneModel`'s own private `loopbackOllamaEndpoint`: the drafting
+    /// sheet's endpoint resolution is exactly this same rule, and a rule with only one caller in
+    /// the app target still belongs in `MurmureCore` when the app target has no test bundle of its
+    /// own to prove it in.
+    func testLoopbackRootPrefersALoopbackEndpointWhenGiven() {
+        XCTAssertEqual(
+            OllamaEndpoint.loopbackRoot(preferring: "http://127.0.0.1:11434"),
+            url("http://127.0.0.1:11434"))
+    }
+
+    func testLoopbackRootFallsBackToTheLocalRootWhenTheEndpointIsNotLoopback() {
+        XCTAssertEqual(
+            OllamaEndpoint.loopbackRoot(preferring: "http://192.168.1.50:11434"),
+            OllamaEndpoint.localRoot)
+    }
+
+    func testLoopbackRootFallsBackToTheLocalRootWhenNothingIsGiven() {
+        XCTAssertEqual(OllamaEndpoint.loopbackRoot(preferring: nil), OllamaEndpoint.localRoot)
+    }
+
+    func testLoopbackRootFallsBackToTheLocalRootWhenTheEndpointDoesNotParse() {
+        XCTAssertEqual(
+            OllamaEndpoint.loopbackRoot(preferring: "not a url"), OllamaEndpoint.localRoot)
+    }
 }

@@ -25,6 +25,7 @@ benchmark/run-*.local.log
 benchmark/vocabprobe/Package.resolved
 # Same reason as vocabprobe's, above: an SPM package's own resolved pin, not a measurement.
 benchmark/modelnettest/Package.resolved
+benchmark/modedraftconvo/Package.resolved
 benchmark/__pycache__/
 
 # Benchmark v2 generation log: results-v2.jsonl carries 8 rows generated on

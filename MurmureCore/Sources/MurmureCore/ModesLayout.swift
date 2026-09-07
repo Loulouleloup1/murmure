@@ -62,4 +62,14 @@ public enum ModesLayout {
     /// scrolls inside its own box rather than pushing Instructions and Context off the bottom of
     /// the card.
     public static let previewHeight: (minimum: CGFloat, maximum: CGFloat) = (minimum: 90, maximum: 220)
+
+    /// The "Draft a mode with help" sheet's chat log: the gap between two bubbles.
+    public static let draftBubbleSpacing: CGFloat = 10
+
+    /// How much of the sheet's own fixed width (`WindowLayout.draftSheetWidth`, not the log's own
+    /// -- scrollable, and narrower once its padding is subtracted) one bubble's `.frame(maxWidth:)`
+    /// may take -- wide enough that a fenced JSON block does not wrap on every third word, capped
+    /// so a one-line reply does not stretch edge to edge and read like a system message rather
+    /// than one side of a conversation.
+    public static let draftBubbleMaxWidthFraction: CGFloat = 0.86
 }

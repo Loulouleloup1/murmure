@@ -69,6 +69,21 @@ struct ModesPaneView: View {
         } message: { prompt in
             Text(prompt.message)
         }
+        // The drafting sheet's own model is held on `ModesPaneModel` (`draftingModel`) rather than
+        // built inside this closure -- a closure rebuilding it on every state change would throw
+        // away the conversation as it was typed. `isPresented` only mirrors whether that model
+        // currently exists.
+        .sheet(isPresented: Binding(
+            get: { model.draftingModel != nil },
+            set: { if !$0 { model.closeDraftingModeWithHelp() } }
+        )) {
+            if let draftingModel = model.draftingModel {
+                ModeDraftSheetView(
+                    paneModel: draftingModel,
+                    onCancel: { model.closeDraftingModeWithHelp() },
+                    onUseDraft: { model.useDraftedMode($0) })
+            }
+        }
     }
 
     // MARK: - The list
@@ -834,6 +849,31 @@ struct ModesPaneView: View {
             }
             .buttonStyle(.plain)
             .popover(isPresented: $model.isPickingPreset) { presetPicker }
+
+            // A conversation with a local model that ends, when it goes well, with a fenced JSON
+            // block Murmure turns into the SAME `ModeDraft` a preset does -- reviewed and saved in
+            // the ordinary editor, never written by the model itself
+            // (`ModesPaneModel.useDraftedMode`).
+            Button {
+                model.beginDraftingModeWithHelp()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Draft with help")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                }
+                .foregroundStyle(Color(role: .primaryText))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(
+                        cornerRadius: WindowLayout.chipCornerRadius, style: .continuous
+                    )
+                    .fill(Color(role: .cardBackground))
+                )
+            }
+            .buttonStyle(.plain)
 
             Spacer(minLength: 8)
 

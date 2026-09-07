@@ -12,4 +12,10 @@ final class ModesLayoutTests: XCTestCase {
     func testThePreviewHeightIsARange() {
         XCTAssertLessThan(ModesLayout.previewHeight.minimum, ModesLayout.previewHeight.maximum)
     }
+
+    func testADraftBubbleNeverTakesTheWholeLogWidth() {
+        XCTAssertGreaterThan(ModesLayout.draftBubbleSpacing, 0)
+        XCTAssertGreaterThan(ModesLayout.draftBubbleMaxWidthFraction, 0)
+        XCTAssertLessThan(ModesLayout.draftBubbleMaxWidthFraction, 1)
+    }
 }

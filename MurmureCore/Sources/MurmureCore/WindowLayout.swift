@@ -99,4 +99,16 @@ public enum WindowLayout {
     /// not open a mostly-empty sheet, tall enough that `argmaxinc/whisperkit-coreml`'s longest
     /// candidate list (27 speech variants) scrolls rather than growing the sheet past the window.
     public static let inspectSheetHeight: (minimum: CGFloat, maximum: CGFloat) = (minimum: 160, maximum: 420)
+
+    /// The "Draft a mode with help" sheet's own width -- wider than the Inspect sheet
+    /// (``inspectSheetWidth``): a conversation bubble holding a fenced JSON mode needs more room
+    /// than a candidate list's one line per row before it starts wrapping on every third word.
+    public static let draftSheetWidth: CGFloat = 560
+
+    /// The drafting sheet's height range -- taller than ``inspectSheetHeight`` at both ends, for
+    /// the same reason its width is wider: a multi-turn conversation with a model picker and an
+    /// input row above the log needs more resting height than a one-shot candidate list, and the
+    /// maximum still stops the sheet short of the main window so it never fights that window's own
+    /// resize.
+    public static let draftSheetHeight: (minimum: CGFloat, maximum: CGFloat) = (minimum: 380, maximum: 620)
 }

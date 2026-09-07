@@ -519,6 +519,35 @@ pane tears its monitor down (`.onDisappear`) before Modes' pane -- and its own m
 appear. Two recorders on screen together would each try to release and restore the same bindings
 independently, racing each other.
 
+### Drafting a mode with help -- shipped 2026-09-05
+
+A second button in the footer, beside "+ New mode": **"Draft with help"** (`wand.and.stars`, the
+same grey chip styling, `Color(role: .cardBackground)`). Opens a sheet (`ModeDraftSheetView`),
+fixed-width (`WindowLayout.draftSheetWidth`, wider than the Inspect sheet -- a conversation bubble
+holding a fenced JSON mode needs the room a candidate list's one-line rows do not):
+
+- A model picker over chat-capable Ollama models only (`ChatModelFilter.isChatCapable`) -- the
+  s1-mini model and the two embedding models never appear in it.
+- A scrolling conversation log, user/assistant bubbles on the existing palette
+  (`.selection`/`.cardBackground`), rounded font for prose and a monospaced one for whatever falls
+  inside a fenced code block -- purely cosmetic splitting, done in the view, never consulted by the
+  extractor itself.
+- A text field + Send, streaming the reply token by token as it arrives.
+- **"Use this draft"**, enabled only once the last reply's fenced block extracts and validates
+  cleanly (`ModeDraftExtraction`, `MurmureCore`) -- pressing it closes the sheet and opens the
+  ordinary inline editor on the candidate, prefilled, exactly the way a preset does. Nothing here
+  writes a file: the model never sees `ModeStore`.
+
+Notices under the log, plain sentences rather than a second alert vocabulary: a truncation-turns
+count when the conversation outgrew its character budget, a "cut off before the end" note when
+`num_predict` stopped the reply mid-sentence, and whatever ``ModeDraftProblem`` the last reply
+failed on (most often "no fenced block yet" -- a clarifying question, not an error).
+
+Nothing about this sheet reaches Ollama on its own appearance: the model listing and the installed
+speech models it shows are the same snapshot `ModesPaneModel` already loaded for its own pickers.
+See `docs/plans/2026-09-backlog.md` §8 for the model-gating rule, the extraction contract, and the
+two real conversations this was verified against.
+
 ---
 
 ## 6. On-disk mode schema vs the Murmure spec

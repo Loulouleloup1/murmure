@@ -22,4 +22,23 @@ public enum OllamaEndpoint {
         guard let host = url.host?.lowercased() else { return false }
         return host == "localhost" || host == "127.0.0.1" || host == "::1"
     }
+
+    /// Ollama's own local root -- what every shipped mode already points at
+    /// (`Mode.LLM.endpoint`'s own default), used whenever nothing more specific applies.
+    public static let localRoot = URL(string: "http://localhost:11434")!
+
+    /// The root to talk to when an automatic (never a pressed) call needs one: `preferring`'s own
+    /// root, when it parses as a URL AND is loopback, else ``localRoot``.
+    ///
+    /// **Never falls back to a parsed-but-remote endpoint.** `preferring` most often comes from a
+    /// mode's own `llm.endpoint`, which may legitimately name a remote server -- and reaching that
+    /// automatically is exactly what ``isLoopback(_:)``'s own doc comment says an on-appear call
+    /// must never do. A non-loopback (or unparsable, or absent) `preferring` therefore falls back
+    /// to ``localRoot`` rather than being read anyway.
+    public static func loopbackRoot(preferring endpoint: String?) -> URL {
+        if let endpoint, let url = URL(string: endpoint), isLoopback(url) {
+            return url
+        }
+        return localRoot
+    }
 }

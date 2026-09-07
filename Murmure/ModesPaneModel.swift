@@ -81,6 +81,12 @@ final class ModesPaneModel: ObservableObject {
     /// The preset picker is open.
     @Published var isPickingPreset = false
 
+    /// The "Draft a mode with help" sheet's own model, or nil while it is closed. Held here rather
+    /// than built fresh inside the view's `.sheet(content:)` closure -- that closure re-evaluates on
+    /// every state change while the sheet is up, and a fresh `ModeDraftPaneModel` each time would
+    /// throw away the conversation as it typed.
+    @Published private(set) var draftingModel: ModeDraftPaneModel?
+
     /// A save that was refused, or a folder that would not open. Never swallowed (ruling L7):
     /// silently dropping it would leave the editor showing a mode that is not on disk.
     @Published private(set) var writeProblem: String?
@@ -539,6 +545,58 @@ final class ModesPaneModel: ObservableObject {
 
     var isCreating: Bool {
         draft != nil && draft?.previousKey == nil
+    }
+
+    // MARK: - Drafting a mode with help
+
+    /// Opens the "Draft a mode with help" sheet -- behind the same discard guard `toggleEditor` and
+    /// `create(from:)` use, since opening it can throw away an unsaved draft exactly the way
+    /// opening another row does.
+    ///
+    /// Handed the same snapshot already loaded for this pane's own pickers (`installedSpeechModels`,
+    /// `ollamaModels`) -- never a fresh probe of its own, which is what lets the sheet open with
+    /// nothing on appear.
+    func beginDraftingModeWithHelp() {
+        requestingDiscardIfNeeded { [weak self] in
+            guard let self else { return }
+            draftingModel = ModeDraftPaneModel(
+                endpoint: loopbackOllamaEndpoint,
+                installedSpeechModels: installedSpeechModels.map(\.string),
+                installedOllamaModels: ollamaModels.map(\.name),
+                existingModeKeys: modes.map(\.key))
+        }
+    }
+
+    func closeDraftingModeWithHelp() {
+        draftingModel = nil
+    }
+
+    /// "Use this draft": closes the sheet and opens the ordinary editor on the candidate mode,
+    /// exactly the way `create(from:)` opens it on a preset -- no new save path, and the same
+    /// review, description and Save gating as a hand-made mode.
+    ///
+    /// **Stops a mode-hotkey recording first**, same as `closeEditor()` -- by the time this sheet
+    /// is open any recording was already stopped (`beginDraftingModeWithHelp`'s own
+    /// `requestingDiscardIfNeeded` call does that unconditionally), but this is about to replace
+    /// `draft` wholesale, exactly the situation `closeEditor()` exists to leave clean, and calling
+    /// it a second time here costs nothing: `stopRecordingModeHotkey()` is idempotent.
+    func useDraftedMode(_ mode: Mode) {
+        stopRecordingModeHotkey()
+        draftingModel = nil
+        writeProblem = nil
+        screen = .basic
+        draft = ModeDraft(creating: mode)
+    }
+
+    /// The endpoint the drafting sheet talks to -- the first enabled mode's own endpoint when it is
+    /// loopback (the same resolution `refreshOllamaListing()` already does for the picker), else
+    /// the standard local root. Never a remote one: `OllamaEndpoint.isLoopback` gates every other
+    /// automatic read in this pane for the same reason (`refreshOllamaListing`'s own note).
+    ///
+    /// The rule itself lives in `MurmureCore` (`OllamaEndpoint.loopbackRoot(preferring:)`), tested
+    /// there -- this pane has no test bundle of its own to prove the non-loopback fallback in.
+    private var loopbackOllamaEndpoint: URL {
+        OllamaEndpoint.loopbackRoot(preferring: modes.first(where: \.llm.enabled)?.llm.endpoint)
     }
 
     /// Writes the draft. The three refusals -- an invalid field, a file edited underneath, a key

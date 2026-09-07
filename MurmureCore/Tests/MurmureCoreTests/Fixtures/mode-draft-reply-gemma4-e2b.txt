@@ -1,0 +1,30 @@
+I understand you want a mode for dictating short Slack messages in French, using a familiar tone (tutoiement) and without emojis.
+
+To create this mode, I need to know which speech model you want to use for transcription. Do you have a specific model in mind, or should I use the default one available on the system?
+
+```json
+{
+  "autoActivate" : [],
+  "context" : {
+    "appContext" : false,
+    "clipboard" : false,
+    "selectedText" : false
+  },
+  "hotkey" : null,
+  "instructions" : "Clean up filler words and ensure the tone is informal (tutoiement). Remove all emojis.",
+  "key" : "slack_fr",
+  "llm" : {
+    "api" : "chat",
+    "enabled" : true,
+    "endpoint" : "http://localhost:11434",
+    "model" : "gemma4:12b-it-qat"
+  },
+  "name" : "Slack Français",
+  "simulateKeypresses" : false,
+  "stt" : {
+    "language" : "fr",
+    "model" : "argmaxinc/whisperkit-coreml/openai_whisper-large-v3-v20240930_turbo"
+  },
+  "symbol" : "text.bubble"
+}
+```

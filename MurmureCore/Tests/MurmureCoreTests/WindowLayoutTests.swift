@@ -58,4 +58,12 @@ final class WindowLayoutTests: XCTestCase {
         XCTAssertGreaterThan(WindowLayout.vocabularyHeaderSpacing, 0)
         XCTAssertLessThan(WindowLayout.vocabularyHeaderSpacing, WindowLayout.vocabularyGroupSpacing)
     }
+
+    /// The drafting sheet is wider and taller than the Inspect sheet -- a conversation needs more
+    /// room than a candidate list -- and its own height is a real range.
+    func testTheDraftSheetIsWiderAndTallerThanTheInspectSheet() {
+        XCTAssertGreaterThan(WindowLayout.draftSheetWidth, WindowLayout.inspectSheetWidth)
+        XCTAssertLessThan(WindowLayout.draftSheetHeight.minimum, WindowLayout.draftSheetHeight.maximum)
+        XCTAssertGreaterThan(WindowLayout.draftSheetHeight.maximum, WindowLayout.inspectSheetHeight.maximum)
+    }
 }

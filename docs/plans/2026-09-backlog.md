@@ -1,4 +1,4 @@
-# What is left, 2026-09-02 (updated 2026-09-04)
+# What is left, 2026-09-02 (updated 2026-09-05)
 
 Everything below is already argued somewhere — in a plan, a doc comment, or a spec section. This
 file exists because it was **argued in prose and never listed**, so the honest answer to "what is
@@ -6,6 +6,15 @@ left?" took a grep. One page, ordered, each item pointing at where it is actuall
 
 The loop works today: ⌥Space (or whatever you have rebound it to), record, transcribe, refine,
 paste, Escape to abandon a recording, plus History and the retention purge.
+
+**Landed since the last full pass, not yet each its own line below:** a Dock-tile click reopens the
+window even though Murmure has no Dock icon by default (`AppDelegate.applicationShouldHandleReopen`,
+routed to `WindowController`); a hotkey may be a single modifier tapped alone (Right ⌥, say) and not
+only a combination requiring ⌃⌥⇧⌘ (`HotkeyRecordingSession`, `KeyCombo.leftHandModifierWarning` for
+the one left-hand key that warrants a warning) -- both folded into §6/§7's own prose already, named
+here only so a header-level grep finds them. Vocabulary UI, the Hugging Face namespace fields and add/delete of any model, the editor's
+transparency blocks, and the per-mode shortcut are each already their own CLOSED section below
+(§1; §5 and its own "Open" addendum; §4's 2026-09-05 addendum; §7).
 
 ---
 
@@ -145,6 +154,91 @@ the recorder would refuse (Escape, a bare key) is refused rather than registered
 the menu the same way a conflict is. A per-mode registration that fails outright -- typically a
 modifier-only combo attempted without Accessibility granted -- is reported there too, instead of
 only logged.
+
+---
+
+## 8. Drafting a mode with help — CLOSED 2026-09-05
+
+**What.** A "Draft with help" button beside "+ New mode" opens a sheet: a model picker, a
+user/assistant conversation, and a "Use this draft" button. Talking to a local Ollama model turns a
+description ("a mode for short Slack messages, French, tutoiement, no emoji") into a fenced JSON
+mode; "Use this draft" closes the sheet and opens the SAME editor a hand-made mode goes through,
+prefilled (`ModeDraft(creating:)`) -- the person still reviews every field, the preview, and Save
+gating exactly as before. No new save path exists: `ModeStore.save` is the only writer there has
+ever been.
+
+**Model gating.** The picker only ever offers chat-capable Ollama models (`ChatModelFilter`,
+`MurmureCore`, tested against the five models installed while this was built): the s1-mini model is
+excluded because it is driven through `/api/generate` with a hand-written conversation and never
+reads a system turn at all, and the two embedding models are excluded because they answer with a
+vector, never with text. Defaults to `gemma4:12b-it-qat` when installed, else the first chat-capable
+model. The endpoint is always the loopback Ollama root (`OllamaEndpoint.isLoopback`); the sheet
+probes nothing of its own on appear -- it reuses whatever `ModesPaneModel` already loaded for its
+own pickers.
+
+**Nothing saved by the AI.** The model's reply is read by `ModeDraftExtraction.extract(from:...)`
+(`MurmureCore`, tested, four mutations proved red across the two review rounds -- see the session's
+own report), which finds the LAST fenced ```json block, decodes it with a schema that mirrors
+`Mode`'s own but tolerates a missing `"key"` (derived from `"name"` via
+`Mode.availableKey(basedOn:avoiding:)`, the same call the editor's own presets use, when the model
+takes the system prompt's own word that omitting it is fine), refuses a stray key -- top-level OR
+nested inside `stt`/`llm`/`context` -- rather than silently dropping it, always discards any
+`"hotkey"` the reply names rather than merely warning about it (the prompt says never invent one; a
+saved, invented combo registers a real global shortcut), runs `Mode.validate()`, and checks whether
+the two model references it names are actually installed -- surfaced as a sentence under the reply
+itself now, in the editor's own "(not installed)" wording, not only carried on the candidate and
+read by nothing. A key colliding with an existing mode is refused by name. A decoding failure names
+the field it failed on (`"missing field \"instructions\""`) for that sentence, rather than a raw
+`Swift.DecodingError` dump -- the dump itself is not discarded, only kept out of the caption: it
+reaches Murmure's unified log instead. Every refusal is a sentence shown under the reply -- never a
+save, ever.
+
+**Offline.** The system prompt (`ModeDraftSystemPrompt`) is built from `Mode`'s own `Codable`
+shape via `ModeStore.encoder` and from the app's own constants (`ModeSymbol.library`, the shipped
+`Mode.voice`/`Mode.prompt`), never a hand-typed second description that could drift. The
+conversation's character budget (`ModeDraftingConversation.characterBudget`) reuses
+`RefinementRequest.characterCap`'s own derivation from `OllamaChat.numContext`/`numPredict` rather
+than inventing a number, and now also SUBTRACTS the built system prompt's own length from that
+ceiling -- caught at review: with every installed model listed by name that prompt runs to several
+thousand characters, and left unaccounted for, a long conversation could fill the WHOLE derived
+budget with history and overshoot `num_ctx` once the system prompt was added back in, which Ollama
+resolves by silently dropping context from the front -- the system prompt itself, not the most
+recent turn. The oldest turns are still dropped first when the (now correctly sized) budget is
+exceeded, with a notice. Streaming is a new, minimal wire type (`ModeDraftChat`, `MurmureCore` +
+`ModeDraftChatClient`, `Murmure`) rather than a reuse of the refiner's own
+`OllamaChat`/`OllamaClient`: that pair hardcodes `stream: false` and exactly one system + one user
+turn, the shape a REFINEMENT needs and not an open-ended, streamed conversation. Ollama's own final
+streamed line can carry a reply's last fragment of text AND `"done": true` together; `ModeDraftChat`
+reads both off that one line now, rather than the `done` half alone with the text silently dropped.
+The loopback-or-fallback endpoint rule the sheet's own network call resolves against
+(`OllamaEndpoint.loopbackRoot(preferring:)`) was moved into `MurmureCore` and tested there for the
+non-loopback fallback -- it used to live as a private computed property on `ModesPaneModel`, which
+has no test bundle to prove that fallback in.
+
+**Verified twice, for real** (`benchmark/modedraftconvo`, gated `MURMURE_NETWORK_TESTS=1`): the
+assembled system prompt plus "Un mode pour dicter des messages Slack courts, en français,
+tutoiement, sans emoji", sent non-streaming to `gemma4:e2b-it-qat` (the small, 4.3 GB model, not the
+12b one). Both runs answered on the FIRST turn with a fenced JSON block that extracted and validated
+cleanly -- no prompt iteration was needed either time. Both runs also did the same thing worth
+naming precisely because it was not asked for: the system prompt tells the model to ask ONE
+clarifying question and stop there when unsure, OR answer with a block -- as an either/or across
+turns. What it actually did, both times, was ask the clarifying question (which speech model to
+use) AND emit the block, together, in the SAME turn. That is an observed model behaviour, not the
+instructed one; the extractor does not care (a fenced block is a fenced block regardless of what
+prose sits beside it), so it costs nothing here, but it is not what the prompt's closing paragraph
+describes.
+
+The first run surfaced a real bug: the model copied `"com.apple.Terminal"` into `autoActivate`
+straight out of the system prompt's own schema EXAMPLE, and because `useDraftedMode` lands on the
+Basic screen -- where Auto-activate is not shown -- an unreviewed save of that candidate would have
+silently made this mode take over dictation the instant Terminal was frontmost. Fixed by encoding
+the schema example with `autoActivate: []` instead of a populated one. The second run, on the same
+prompt otherwise, came back with `autoActivate: []` -- the copy stopped. The reply is saved verbatim
+as `MurmureCore/Tests/MurmureCoreTests/Fixtures/mode-draft-reply-gemma4-e2b.txt` (replacing the
+first run's capture) with offline tests over it, including one pinning the empty `autoActivate`
+specifically so this regression cannot come back unnoticed.
+
+---
 
 ## Measured, and deliberately NOT shipped
 
