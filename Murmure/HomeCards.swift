@@ -207,8 +207,11 @@ struct HeatmapCard: View {
     private func overlay(proxy: ChartProxy) -> some View {
         GeometryReader { geo in
             let plotFrame: CGRect = proxy.plotFrame.map { geo[$0] } ?? .zero
-            hoverLayer(proxy: proxy, plotFrame: plotFrame)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            // `Color.clear` and not the hover layer itself: that layer is empty until something is
+            // hovered, and an empty view has no surface for `onContinuousHover` to receive the
+            // pointer -- the hover could only start once it had already started.
+            Color.clear
+                .overlay(alignment: .topLeading) { hoverLayer(proxy: proxy, plotFrame: plotFrame) }
                 .contentShape(Rectangle())
                 .onContinuousHover { phase in handleHover(phase, proxy: proxy, plotFrame: plotFrame) }
         }
@@ -307,8 +310,9 @@ struct HourProfileCard: View {
     private func overlay(proxy: ChartProxy) -> some View {
         GeometryReader { geo in
             let plotFrame: CGRect = proxy.plotFrame.map { geo[$0] } ?? .zero
-            hoverLayer(plotFrame: plotFrame)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            // Same reason as `HeatmapCard.overlay`: the hover layer is empty until hovered.
+            Color.clear
+                .overlay(alignment: .topLeading) { hoverLayer(plotFrame: plotFrame) }
                 .contentShape(Rectangle())
                 .onContinuousHover { phase in handleHover(phase, proxy: proxy, plotFrame: plotFrame) }
         }
