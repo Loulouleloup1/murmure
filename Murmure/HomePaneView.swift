@@ -30,6 +30,9 @@ struct HomePaneView: View {
             } else if model.statistics != nil {
                 ContentUnavailableView("No dictation yet", systemImage: "waveform",
                                        description: Text("Press your shortcut and speak. Your statistics will appear here."))
+            } else if let problem = model.problem {
+                ContentUnavailableView("Statistics unavailable", systemImage: "exclamationmark.triangle",
+                                       description: Text(problem))
             } else {
                 Color.clear
             }
@@ -64,12 +67,15 @@ struct HomePaneView: View {
         }
     }
 
+    private static let wordsSinceFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .none; return f
+    }()
+
     private func wordsFootnote(_ stats: DictationStatistics) -> String? {
         guard let since = stats.wordCountsSince else { return nil }
         let start = stats.period.start(now: Date(), calendar: .autoupdatingCurrent)
-        guard start == nil || start! < since else { return nil }
-        let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .none
-        return "counted since \(f.string(from: since))"
+        if let start, start >= since { return nil }
+        return "counted since \(Self.wordsSinceFormatter.string(from: since))"
     }
 
     private var typingGear: some View {

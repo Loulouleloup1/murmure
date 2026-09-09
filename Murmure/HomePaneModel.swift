@@ -7,6 +7,9 @@ import os
 @MainActor
 final class HomePaneModel: ObservableObject {
     @Published private(set) var statistics: DictationStatistics?
+    /// The last error's description, when `statisticsRows()` threw; cleared on the next successful
+    /// load. Lets the view distinguish "nothing recorded yet" from "the archive could not be read".
+    @Published private(set) var problem: String?
     @Published var period: StatisticsPeriod {
         didSet { if oldValue != period { settings.homeStatisticsPeriod = period; reload() } }
     }
@@ -18,6 +21,7 @@ final class HomePaneModel: ObservableObject {
     private let settings: AppSettings
     private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "home")
     private var generation = 0
+    private var loadTask: Task<Void, Never>?
 
     init(store: HistoryStore?, settings: AppSettings) {
         self.store = store
@@ -27,13 +31,15 @@ final class HomePaneModel: ObservableObject {
     }
 
     func reload() {
-        guard let store else { statistics = nil; return }
+        loadTask?.cancel()
+        guard let store else { statistics = nil; problem = nil; return }
         generation += 1
         let expected = generation
         let period = period
         let typing = typingWordsPerMinute
-        Task.detached(priority: .userInitiated) { [log] in
+        loadTask = Task.detached(priority: .userInitiated) { [log] in
             let result: DictationStatistics?
+            var failure: String?
             do {
                 let rows = try store.statisticsRows()
                 result = DictationStatistics.compute(rows: rows, period: period, now: Date(),
@@ -42,10 +48,12 @@ final class HomePaneModel: ObservableObject {
             } catch {
                 log.error("statistics not computed: \(error.localizedDescription, privacy: .public)")
                 result = nil
+                failure = error.localizedDescription
             }
             await MainActor.run { [weak self] in
                 guard let self, self.generation == expected else { return }
                 self.statistics = result
+                self.problem = failure
             }
         }
     }

@@ -75,16 +75,20 @@ struct HeatmapCard: View {
     let days: [DictationStatistics.HeatmapDay]
     let dictations: Int
 
+    private static let monthFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM"; return f }()
+
     private var monthLabels: [(column: Int, text: String)] {
         // Label a column when its first day is the first Monday that falls within a month's first week.
+        // Keyed by year+month (not month alone): over a 364-day span the current month and the
+        // month-a-year-ago share the same `.month` component, and a bare month key would let the
+        // older one claim the label, silently dropping the current month's.
         var seen = Set<Int>()
         var labels: [(Int, String)] = []
-        let formatter = DateFormatter(); formatter.dateFormat = "MMM"
         for day in days where day.row == 0 {
-            let month = Calendar.autoupdatingCurrent.component(.month, from: day.day)
-            let dayOfMonth = Calendar.autoupdatingCurrent.component(.day, from: day.day)
-            if dayOfMonth <= 7, !seen.contains(month) {
-                seen.insert(month); labels.append((day.column, formatter.string(from: day.day)))
+            let components = Calendar.autoupdatingCurrent.dateComponents([.year, .month, .day], from: day.day)
+            let key = (components.year ?? 0) * 100 + (components.month ?? 0)
+            if (components.day ?? 0) <= 7, !seen.contains(key) {
+                seen.insert(key); labels.append((day.column, Self.monthFormatter.string(from: day.day)))
             }
         }
         return labels
@@ -100,8 +104,9 @@ struct HeatmapCard: View {
                 .cornerRadius(2)
             }
             .chartXAxis {
-                AxisMarks(values: monthLabels.map(\.column)) { value in
-                    if let column = value.as(Int.self), let label = monthLabels.first(where: { $0.column == column }) {
+                AxisMarks(values: monthLabels.map { Double($0.column) }) { value in
+                    if let column = value.as(Double.self),
+                       let label = monthLabels.first(where: { Double($0.column) == column }) {
                         AxisValueLabel { Text(label.text).font(.system(size: 10)) }
                     }
                 }
@@ -114,10 +119,12 @@ struct HeatmapCard: View {
                     }
                 }
             }
-            .chartXScale(domain: 0...52)
-            .chartYScale(domain: 0...7)
+            .chartXScale(domain: 0.0...52.0)
+            .chartYScale(domain: 0.0...7.0)
             .chartLegend(.hidden)
-            .frame(height: 7 * (HomeLayout.heatmapCellSize + HomeLayout.heatmapCellGap) + 24)
+            .frame(width: 52 * (HomeLayout.heatmapCellSize + HomeLayout.heatmapCellGap),
+                   height: 7 * (HomeLayout.heatmapCellSize + HomeLayout.heatmapCellGap) + 24)
+            .frame(maxWidth: .infinity, alignment: .center)
             .chartPlotStyle { $0.padding(.zero) }
         }
     }
@@ -178,10 +185,12 @@ struct RecordsCard: View {
             Text(label).foregroundStyle(Color(role: .secondaryText))
             Spacer()
             Text(value ?? StatisticsFormatting.dash).monospacedDigit().foregroundStyle(Color(role: .primaryText))
-            if let day {
-                Text(Self.dayFormatter.string(from: day)).font(.system(size: 11)).foregroundStyle(Color(role: .secondaryText))
-                    .frame(width: 96, alignment: .trailing)
-            }
+            // Always lay out the date column, even when there is no day: an empty label with the
+            // same frame keeps dash rows and dated rows aligned rather than shifting the value
+            // column when a record is missing.
+            Text(day.map { Self.dayFormatter.string(from: $0) } ?? "")
+                .font(.system(size: 11)).foregroundStyle(Color(role: .secondaryText))
+                .frame(width: 96, alignment: .trailing)
         }
         .font(.system(size: 12))
     }
