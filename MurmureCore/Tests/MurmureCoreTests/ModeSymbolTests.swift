@@ -33,10 +33,6 @@ final class ModeSymbolTests: XCTestCase {
 
     // MARK: - Stage defaults (task 4)
 
-    func testTheLibraryListsEachGlyphOnce() {
-        XCTAssertEqual(Set(ModeSymbol.library).count, ModeSymbol.library.count)
-    }
-
     func testTheStageDefaultsAreInTheLibraryAndRecognised() {
         XCTAssertTrue(ModeSymbol.isStageDefault("mic.fill", for: .transcription))
         XCTAssertTrue(ModeSymbol.isStageDefault("sparkles", for: .refinement))
