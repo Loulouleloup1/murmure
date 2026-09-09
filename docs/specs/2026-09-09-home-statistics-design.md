@@ -93,8 +93,10 @@ and streaks and records are always computed over all time; the screen says so ne
   durationSeconds / 60`, in minutes. May be negative and is shown negative if so. Rows without a
   final count are excluded (counting their duration alone would drag the figure down for every row
   purged of text before the migration).
-- Heatmap: for each of the last 364 days ending today, the number of dictations and the sum of
-  final words. Cells are bucketed into five intensity levels by words relative to the period maximum.
+- Heatmap: for each day from the Monday of the week 51 weeks ago through today (358 to 364 days,
+  52 week columns), the number of dictations and the sum of final words. Cells are bucketed into five
+  intensity levels: 0 without dictation, 1 with dictations but no counted words, else quartiles of
+  words relative to the busiest day in the heatmap window.
 - Hour profile: dictations per local hour of day, 0…23, over the selected period.
 - Current streak: number of consecutive local days with at least one dictation, ending today or
   yesterday (a streak survives a day that has not had a dictation yet). Longest streak: over all time.
