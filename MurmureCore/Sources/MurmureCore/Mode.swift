@@ -151,6 +151,11 @@ public enum ModeValidationError: Error, Equatable, CustomStringConvertible {
     case emptyLLMModel
     case emptyInstructions
     case instructionsAreNotControlFields(String)
+    /// The editor refused a change to `Voice`'s `name` or `symbol` -- see ``Mode/isProtected``.
+    case protectedField(String)
+    /// The editor refused a mode other than `Voice` whose refiner is off -- see
+    /// ``Mode/editorValidationError(original:)``.
+    case refinerRequired
 
     public var description: String {
         switch self {
@@ -176,6 +181,10 @@ public enum ModeValidationError: Error, Equatable, CustomStringConvertible {
             — the model does not follow written instructions, it copies them into the text it \
             gives back.
             """
+        case .protectedField(let field):
+            "\"\(field)\" cannot be changed on the built-in Voice mode"
+        case .refinerRequired:
+            "a mode other than Voice needs a refiner; without one it is Voice"
         }
     }
 }
@@ -268,6 +277,30 @@ extension Mode {
     /// does not validate is a mode that never reaches the disk.
     public func validate() throws {
         if let error = validationError { throw error }
+    }
+}
+
+extension Mode {
+    /// Voice is the built-in dictation mode: its identity (name, glyph) is fixed and it cannot be
+    /// deleted, so that "press the shortcut and speak" always exists. Everything else about it
+    /// (language, shortcut, speech model) stays the user's.
+    public var isProtected: Bool { key == Mode.voice.key }
+
+    /// The rules the editor enforces on top of `validationError`, which stays the on-disk contract:
+    /// a file that breaks these still loads, a Save that breaks them is refused.
+    public func editorValidationError(original: Mode?) -> ModeValidationError? {
+        if let error = validationError { return error }
+        // Protection is decided on the ORIGINAL, not on the edited copy: `key` is one of the
+        // fields Voice must keep, so checking `isProtected` on `self` would let a rename away
+        // from "voice" launder Voice out of every rule that follows it -- key included.
+        if original?.isProtected == true {
+            if let original, key != original.key { return .protectedField("key") }
+            if let original, name != original.name { return .protectedField("name") }
+            if let original, symbol != original.symbol { return .protectedField("symbol") }
+            return nil
+        }
+        if !llm.enabled { return .refinerRequired }
+        return nil
     }
 }
 
@@ -390,5 +423,5 @@ extension Mode {
     /// built-in may name it: `Message` and `Email` did, and refined nothing on every machine set
     /// up the documented way. `ModeTests` pins it, against the script rather than against a
     /// constant.
-    private static let rewriteModel = "gemma4:12b-it-qat"
+    static let rewriteModel = "gemma4:12b-it-qat"
 }

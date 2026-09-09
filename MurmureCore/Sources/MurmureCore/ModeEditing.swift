@@ -65,6 +65,13 @@ extension ModeValidationError {
         case .invalidLLMEndpoint, .llmEndpointIsNotARoot: .llmEndpoint
         case .emptyLLMModel: .llmModel
         case .emptyInstructions, .instructionsAreNotControlFields: .instructions
+        // These two are `editorValidationError`'s, not `Mode.validationError`'s -- `ModeDraft`
+        // still reads the latter here, so neither is reachable through this property today. The
+        // mapping exists only to keep this switch exhaustive per its own rule above; the field
+        // the editor actually shows them under is later lot-2 work (the symbol picker has no
+        // `ModeField` of its own yet, and neither does a refiner on/off toggle).
+        case .protectedField: .name
+        case .refinerRequired: .instructions
         }
     }
 }
@@ -277,11 +284,15 @@ extension Mode {
 
 /// What the `+` button offers: a mode to start from.
 ///
-/// **The built-ins plus Custom, and no Meeting.** The plan's own line says "Murmure's four
-/// built-ins plus Custom" — there are two, since `Message` and `Email` were removed for pointing
-/// at a model `scripts/bootstrap.sh` does not pull (`Mode.builtIns`). This list is derived from
-/// `Mode.builtIns` rather than typed out, so it cannot drift from what actually ships: a third
-/// built-in appears in the picker the day it appears in the app.
+/// **The non-protected built-ins plus Custom, and no Meeting.** The plan's own line says
+/// "Murmure's four built-ins plus Custom" — there are two built-ins, since `Message` and `Email`
+/// were removed for pointing at a model `scripts/bootstrap.sh` does not pull (`Mode.builtIns`),
+/// and of those two only `Prompt` offers a preset: a copy of `Voice` is a mode with the refiner
+/// off, which `docs/specs/2026-09-09-modes-editor-v2-design.md` §3 forbids for anything that is
+/// not `Voice` itself -- and `Voice` exists exactly once, protected, never as a duplicate. Derived
+/// from `Mode.builtIns` (filtered to the non-protected ones) rather than typed out, so this cannot
+/// drift from what actually ships: a third, non-protected built-in appears in the picker the day
+/// it appears in the app.
 public struct ModePreset: Equatable, Identifiable {
     public var id: String { name }
     /// The name the new mode starts with, and what the key is derived from.
@@ -298,19 +309,27 @@ public struct ModePreset: Equatable, Identifiable {
     }
 
     /// The picker's entries, in order.
-    public static let all: [ModePreset] = Mode.builtIns.map(preset(for:)) + [.custom]
+    public static let all: [ModePreset] =
+        Mode.builtIns.filter { !$0.isProtected }.map(preset(for:)) + [.custom]
 
     /// An empty mode to fill in.
     ///
-    /// Built on `Voice` — transcription with the refiner **off** — and not on `Prompt`. A blank
-    /// mode that arrived with a refiner already pointing at a model is a mode that silently does
-    /// nothing on a machine where that model was never pulled, which is the exact failure that
-    /// cost `Message` and `Email` their place in `builtIns`. Turning the refiner on is one toggle
-    /// in the editor, and it is a toggle whose consequence is then visible in the same screen.
+    /// Ships with the refiner **on** — `docs/specs/2026-09-09-modes-editor-v2-design.md` §3 makes
+    /// a refiner mandatory outside Voice ("a mode without a refiner IS Voice"), which supersedes
+    /// this preset's earlier rationale (built on `Voice` with the refiner off, so a blank mode
+    /// that arrived pointing at an unpulled model would not silently refine nothing — the failure
+    /// that cost `Message` and `Email` their place in `builtIns`). Still built on `Voice` for
+    /// everything else (language, context, `autoActivate`); only `llm` and `instructions` differ.
     public static let custom = ModePreset(
         name: "New mode",
-        summary: "Transcription only, for you to point wherever you need.",
-        template: Mode.voice)
+        summary: "Transcribes, then cleans the text up with \(Mode.rewriteModel.modelTag).",
+        template: {
+            var mode = Mode.voice
+            mode.llm = .init(
+                enabled: true, endpoint: mode.llm.endpoint, model: Mode.rewriteModel, api: .chat)
+            mode.instructions = Mode.prompt.instructions
+            return mode
+        }())
 
     /// The one-liner for a built-in, keyed off what the mode does rather than off its name, so a
     /// built-in renamed keeps its description.

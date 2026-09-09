@@ -318,6 +318,37 @@ final class ModeTests: XCTestCase {
             XCTAssertEqual(mode.stt.language, "fr", mode.key)
         }
     }
+
+    // MARK: - Protected Voice and mandatory refiner
+
+    func testVoiceIsTheOnlyProtectedMode() {
+        XCTAssertTrue(Mode.voice.isProtected)
+        XCTAssertFalse(Mode.prompt.isProtected)
+        var custom = Mode.prompt; custom.key = "meeting"
+        XCTAssertFalse(custom.isProtected)
+    }
+
+    func testEditingAProtectedModesNameOrSymbolIsRefused() {
+        var renamed = Mode.voice; renamed.name = "Dictée"
+        XCTAssertEqual(renamed.editorValidationError(original: .voice), .protectedField("name"))
+        var reglyphed = Mode.voice; reglyphed.symbol = "brain"
+        XCTAssertEqual(reglyphed.editorValidationError(original: .voice), .protectedField("symbol"))
+    }
+
+    func testAProtectedModeStillAcceptsLanguageShortcutAndSpeechModel() {
+        var edited = Mode.voice
+        edited.stt.language = "en"
+        edited.stt.model = "openai_whisper-small"
+        edited.hotkey = KeyCombo(keyCode: 49, carbonModifiers: 2560) // option + shift
+        XCTAssertNil(edited.editorValidationError(original: .voice))
+    }
+
+    func testANonProtectedModeNeedsARefinerInTheEditor() {
+        var off = Mode.prompt; off.llm.enabled = false
+        XCTAssertEqual(off.editorValidationError(original: .prompt), .refinerRequired)
+        XCTAssertNil(off.validationError, "files with the refiner off must still load")
+        XCTAssertNil(Mode.voice.editorValidationError(original: .voice), "Voice is the exception")
+    }
 }
 
 extension Mode {

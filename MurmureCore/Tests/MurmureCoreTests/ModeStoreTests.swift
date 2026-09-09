@@ -368,4 +368,29 @@ final class ModeStoreTests: XCTestCase {
         XCTAssertEqual(try readSTTModel("broken"), "large-v3-turbo", "the file must not have been rewritten")
         XCTAssertEqual(problems, [.invalidField(name: "broken.json", error: .emptyLLMModel)])
     }
+
+    // MARK: - Protected Voice
+
+    func testDeletingVoiceIsRefused() throws {
+        try store.createBuiltInsIfMissing()
+        let draft = ModeDraft(editing: .voice, modifiedAt: store.modificationDate(forKey: "voice"))
+
+        XCTAssertThrowsError(try store.delete(draft)) { error in
+            XCTAssertEqual(error as? ModeWriteProblem, .protectedMode(key: "voice"))
+        }
+        XCTAssertTrue(store.loadAll().contains { $0.key == "voice" })
+    }
+
+    func testSavingVoiceWithANewNameIsRefusedButANewLanguageIsKept() throws {
+        try store.createBuiltInsIfMissing()
+
+        var bad = ModeDraft(editing: .voice, modifiedAt: store.modificationDate(forKey: "voice"))
+        bad.mode.name = "Dictée"
+        XCTAssertThrowsError(try store.save(bad))
+
+        var good = ModeDraft(editing: .voice, modifiedAt: store.modificationDate(forKey: "voice"))
+        good.mode.stt.language = "en"
+        XCTAssertNoThrow(try store.save(good))
+        XCTAssertEqual(store.loadAll().first { $0.key == "voice" }?.stt.language, "en")
+    }
 }

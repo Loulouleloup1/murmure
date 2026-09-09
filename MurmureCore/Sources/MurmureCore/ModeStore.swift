@@ -43,6 +43,8 @@ public enum ModeLoadProblem: Equatable, CustomStringConvertible {
 public enum ModeWriteProblem: Error, Equatable, CustomStringConvertible {
     case fileChangedOnDisk(key: String)
     case keyAlreadyInUse(key: String)
+    /// A built-in mode's file was asked to be deleted -- see `Mode.isProtected`.
+    case protectedMode(key: String)
 
     public var description: String {
         switch self {
@@ -53,6 +55,8 @@ public enum ModeWriteProblem: Error, Equatable, CustomStringConvertible {
             """
         case .keyAlreadyInUse(let key):
             "another mode already uses the file name \(key).json. Pick a different key."
+        case .protectedMode(let key):
+            "\"\(key)\" is built in and cannot be deleted"
         }
     }
 }
@@ -130,7 +134,7 @@ public struct ModeStore {
     /// a failure between the two leaves two files, which `loadAll()` shows as two modes and which
     /// is repairable; the other order loses the mode outright.
     public func save(_ draft: ModeDraft) throws {
-        try draft.mode.validate()
+        if let error = draft.mode.editorValidationError(original: draft.original) { throw error }
 
         // A file that is *gone* is not a conflict. The guard is here to keep an edit made in a
         // text editor from being overwritten, and a deleted file has no edit to lose -- while
@@ -176,6 +180,7 @@ public struct ModeStore {
     /// left to do. What that leaves is `removeItem` throwing only for a real refusal, which is
     /// then shown.
     public func delete(_ draft: ModeDraft) throws {
+        if draft.mode.isProtected { throw ModeWriteProblem.protectedMode(key: draft.mode.key) }
         guard let key = draft.previousKey else { return }
 
         let url = fileURL(for: key)

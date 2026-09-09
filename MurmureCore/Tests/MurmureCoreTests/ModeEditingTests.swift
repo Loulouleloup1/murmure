@@ -166,18 +166,20 @@ final class ModeEditingTests: XCTestCase {
 
     // MARK: - The name, the key, and the file
 
-    /// The name is a field like any other. `voice.json` is a path Louis refers to, and renaming
-    /// the mode in the window may not move it.
+    /// The name is a field like any other. `prompt.json` is a path Louis refers to, and renaming
+    /// the mode in the window may not move it. Not `Voice`: renaming *its* name is refused
+    /// outright (``testEditingAProtectedModesNameOrSymbolIsRefused``... see `ModeStoreTests`),
+    /// so this needs a non-protected mode to test the file staying put.
     func testRenamingTheNameLeavesTheFileWhereItWas() throws {
-        try store.save(Mode.voice)
-        var draft = open(.voice)
-        draft.mode.name = "Dictée"
+        try store.save(Mode.prompt)
+        var draft = open(.prompt)
+        draft.mode.name = "Reformulation"
 
         XCTAssertFalse(draft.movesItsFile)
         try store.save(draft)
 
-        XCTAssertEqual(try fileNames(), ["voice.json"])
-        XCTAssertEqual(store.loadAll().first?.name, "Dictée")
+        XCTAssertEqual(try fileNames(), ["prompt.json"])
+        XCTAssertEqual(store.loadAll().first { $0.key == "prompt" }?.name, "Reformulation")
     }
 
     /// The key is the file name, so renaming it is a move -- and the old file may not survive it:
@@ -195,16 +197,20 @@ final class ModeEditingTests: XCTestCase {
         XCTAssertEqual(store.loadAll().map(\.key), ["claude", "voice"])
     }
 
-    /// `loadAll()` stands `Voice` in when its file is absent, which is why the list above ends in
-    /// `voice` -- and why a renamed `voice` leaves the built-in behind rather than nothing.
-    func testRenamingVoiceLeavesTheBuiltInStandingIn() throws {
+    /// The key is one of the fields `Voice` must keep, exactly like its name and symbol: a rename
+    /// that moved `voice.json` to `dictation.json` would let `Voice` slip every rule that follows
+    /// from `isProtected` -- including the mandatory-refiner one, since the renamed mode would no
+    /// longer read as protected at all.
+    func testRenamingVoicesKeyIsRefused() throws {
         try store.save(Mode.voice)
         var draft = open(.voice)
         draft.mode.key = "dictation"
-        try store.save(draft)
 
-        XCTAssertEqual(try fileNames(), ["dictation.json"])
-        XCTAssertEqual(store.loadAll().map(\.key), ["dictation", "voice"])
+        XCTAssertThrowsError(try store.save(draft)) { error in
+            XCTAssertEqual(error as? ModeValidationError, .protectedField("key"))
+        }
+        XCTAssertEqual(try fileNames(), ["voice.json"])
+        XCTAssertEqual(store.loadAll().map(\.key), ["voice"])
     }
 
     func testRenamingAKeyOntoAnotherModesFileIsRefusedRatherThanOverwritingIt() throws {
@@ -417,12 +423,12 @@ final class ModeEditingTests: XCTestCase {
 
     // MARK: - Creating from a preset
 
-    /// The picker offers what ships, which is two modes and Custom. The plan's own line says
-    /// "Murmure's four built-ins plus Custom" and is out of date: `Message` and `Email` were
-    /// removed for pointing at a model `scripts/bootstrap.sh` does not pull. Derived from
-    /// `builtIns` rather than listed, so the picker cannot offer a mode the app does not have.
-    func testThePickerOffersEveryBuiltInPlusCustom() {
-        XCTAssertEqual(ModePreset.all.map(\.name), Mode.builtIns.map(\.name) + ["New mode"])
+    /// The picker offers Prompt and Custom, not Voice: a copy of `Voice` is a mode with the
+    /// refiner off, which spec §3 forbids for anything that is not `Voice` itself, and `Voice`
+    /// exists exactly once, protected. Derived from `builtIns` (filtered to the non-protected
+    /// ones) rather than listed, so the picker cannot offer a mode the app does not have.
+    func testThePickerOffersEveryNonProtectedBuiltInPlusCustom() {
+        XCTAssertEqual(ModePreset.all.map(\.name), ["Prompt", "New mode"])
     }
 
     func testEveryPresetProducesAModeThatCanBeSaved() throws {
@@ -431,31 +437,41 @@ final class ModeEditingTests: XCTestCase {
             XCTAssertNoThrow(try mode.validate(), preset.name)
             XCTAssertNoThrow(try store.save(ModeDraft(creating: mode)), preset.name)
         }
-        XCTAssertEqual(try fileNames(), ["new-mode.json", "prompt.json", "voice.json"])
+        XCTAssertEqual(try fileNames(), ["new-mode.json", "prompt.json"])
     }
 
-    /// The failure that cost `Message` and `Email` their place in `builtIns`: a mode arriving with
-    /// a refiner pointed at a 7.2 GB model nobody pulled refines nothing and says nothing about
-    /// it. A blank mode transcribes.
-    func testTheCustomPresetArrivesWithTheRefinerOff() {
-        XCTAssertFalse(ModePreset.custom.mode(avoiding: []).llm.enabled)
+    /// Spec §3 (`docs/specs/2026-09-09-modes-editor-v2-design.md`): a mode without a refiner IS
+    /// Voice, so no non-Voice preset may arrive with one off -- superseding the earlier rationale
+    /// (a blank mode pointed at an unpulled model refines nothing and says nothing about it, the
+    /// failure that cost `Message` and `Email` their place in `builtIns`).
+    func testTheCustomPresetArrivesWithTheRefinerOn() {
+        let mode = ModePreset.custom.mode(avoiding: [])
+        XCTAssertTrue(mode.llm.enabled)
+        XCTAssertEqual(mode.llm.api, .chat)
+        XCTAssertEqual(mode.llm.model, Mode.rewriteModel)
+        XCTAssertEqual(mode.instructions, Mode.prompt.instructions)
     }
 
-    /// Picking `Voice` a second time may not overwrite the first: the key is the file name, and
-    /// the picker is the one place a duplicate is created deliberately.
+    /// Picking `Prompt` a second time may not overwrite the first: the key is the file name, and
+    /// the picker is the one place a duplicate is created deliberately. Not `Voice`: ruling 3
+    /// removed it from `ModePreset.all` entirely, so `Prompt` is the preset this now exercises.
     func testAPresetPickedTwiceGetsItsOwnFile() throws {
-        try store.save(Mode.voice)
-        let preset = try XCTUnwrap(ModePreset.all.first { $0.name == "Voice" })
+        try store.save(Mode.prompt)
+        let preset = try XCTUnwrap(ModePreset.all.first { $0.name == "Prompt" })
 
+        // `store.loadAll()` here also stands `Voice` in (its file was never written by this
+        // test), so `avoiding` already carries "voice" as well as "prompt" -- `availableKey`'s
+        // own rule (`Mode.availableKey(basedOn:avoiding:)`) is what actually decides "prompt-2".
         let second = preset.mode(avoiding: store.loadAll().map(\.key))
         try store.save(ModeDraft(creating: second))
 
-        XCTAssertEqual(second.key, "voice-2")
-        XCTAssertEqual(try fileNames(), ["voice-2.json", "voice.json"])
-        // `loadAll()` orders by *file name*, so `voice-2.json` precedes `voice.json`: `-` sorts
-        // before `.`. Written out rather than assumed, because it is the order the pane lists the
-        // modes in and it is not the order the keys would give.
-        XCTAssertEqual(store.loadAll().map(\.key), ["voice-2", "voice"])
+        XCTAssertEqual(second.key, "prompt-2")
+        // `-` sorts before `.`, so `prompt-2.json` precedes `prompt.json` in a plain directory
+        // listing.
+        XCTAssertEqual(try fileNames(), ["prompt-2.json", "prompt.json"])
+        // Voice's file still does not exist, so `loadAll()` stands it in and re-sorts everything
+        // by *key* rather than by file name -- "prompt" < "prompt-2" < "voice".
+        XCTAssertEqual(store.loadAll().map(\.key), ["prompt", "prompt-2", "voice"])
     }
 
     /// The key is a file name, so a name that is not one has to become one -- and the result has
