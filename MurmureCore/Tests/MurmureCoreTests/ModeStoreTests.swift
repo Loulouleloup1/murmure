@@ -381,6 +381,22 @@ final class ModeStoreTests: XCTestCase {
         XCTAssertTrue(store.loadAll().contains { $0.key == "voice" })
     }
 
+    /// The protection has to be read off the ORIGINAL, not the edited copy: editing `key` away
+    /// from `"voice"` would otherwise un-flag `isProtected` on `draft.mode` and let
+    /// `draft.previousKey` delete `voice.json` anyway.
+    func testDeletingVoiceIsRefusedEvenWhenTheKeyWasEditedAway() throws {
+        try store.createBuiltInsIfMissing()
+        var draft = ModeDraft(editing: .voice, modifiedAt: store.modificationDate(forKey: "voice"))
+        draft.mode.key = "dictation"
+
+        XCTAssertThrowsError(try store.delete(draft)) { error in
+            XCTAssertEqual(error as? ModeWriteProblem, .protectedMode(key: "voice"))
+        }
+        // The FILE, not `loadAll()`: the built-in stands in for a missing `voice.json`, so a
+        // successful deletion would still show a "voice" entry there.
+        XCTAssertNotNil(store.modificationDate(forKey: "voice"))
+    }
+
     func testSavingVoiceWithANewNameIsRefusedButANewLanguageIsKept() throws {
         try store.createBuiltInsIfMissing()
 

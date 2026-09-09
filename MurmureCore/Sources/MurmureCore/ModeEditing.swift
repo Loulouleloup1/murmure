@@ -67,9 +67,10 @@ extension ModeValidationError {
         case .emptyInstructions, .instructionsAreNotControlFields: .instructions
         // These two are `editorValidationError`'s, not `Mode.validationError`'s -- `ModeDraft`
         // still reads the latter here, so neither is reachable through this property today. The
-        // mapping exists only to keep this switch exhaustive per its own rule above; the field
-        // the editor actually shows them under is later lot-2 work (the symbol picker has no
-        // `ModeField` of its own yet, and neither does a refiner on/off toggle).
+        // mapping exists only to keep this switch exhaustive per its own rule above. Tasks 5-6 of
+        // this lot route `.protectedField` and `.refinerRequired` to their own places in the
+        // editor -- the Identity card and the Refiner card respectively -- rather than under a
+        // `ModeField`; the mapping here is a placeholder until then, not the real destination.
         case .protectedField: .name
         case .refinerRequired: .instructions
         }

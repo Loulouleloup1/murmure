@@ -126,7 +126,7 @@ public struct ModeStore {
     ///
     /// Three refusals, in the order they can be told apart:
     ///
-    /// 1. the mode is invalid — `Mode.validate()`, naming the field;
+    /// 1. the mode is invalid — `Mode.editorValidationError(original:)`, naming the field;
     /// 2. the file changed under the editor since it was opened;
     /// 3. the destination file belongs to another mode.
     ///
@@ -180,7 +180,13 @@ public struct ModeStore {
     /// left to do. What that leaves is `removeItem` throwing only for a real refusal, which is
     /// then shown.
     public func delete(_ draft: ModeDraft) throws {
-        if draft.mode.isProtected { throw ModeWriteProblem.protectedMode(key: draft.mode.key) }
+        // The ORIGINAL, not the edited copy: `key` is one of the fields Voice must keep, so
+        // editing it away and then deleting would un-flag `isProtected` on `draft.mode` while
+        // `draft.previousKey` still points at `voice.json` -- the same laundering
+        // `editorValidationError` refuses on save, but for the file this removes.
+        if draft.original.isProtected {
+            throw ModeWriteProblem.protectedMode(key: draft.original.key)
+        }
         guard let key = draft.previousKey else { return }
 
         let url = fileURL(for: key)
