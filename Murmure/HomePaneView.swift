@@ -73,7 +73,11 @@ struct HomePaneView: View {
 
     private func wordsFootnote(_ stats: DictationStatistics) -> String? {
         guard let since = stats.wordCountsSince else { return nil }
-        let start = stats.period.start(now: Date(), calendar: .autoupdatingCurrent)
+        // Derived from the moment `statistics` was actually computed, not a fresh `Date()`: a
+        // midnight crossing between load and render must not flip this caption for numbers that
+        // did not change.
+        guard let computedAt = model.computedAt else { return nil }
+        let start = stats.period.start(now: computedAt, calendar: model.calendar)
         if let start, start >= since { return nil }
         return "counted since \(Self.wordsSinceFormatter.string(from: since))"
     }
