@@ -126,6 +126,12 @@ final class ModesPaneModel: ObservableObject {
     /// check (``modeHotkeyProblem``) resolves this mode's draft hotkey against.
     private let settings: AppSettings
 
+    /// This Mac's own memory and chip, read once when the pane is built -- not on every editor
+    /// open, which is why it is a stored `let` and not a computed property calling
+    /// `HardwareProfile.current()` afresh. Injectable so a test can hand a fixed profile instead
+    /// of reading the machine it happens to run on.
+    let hardware: HardwareProfile
+
     /// `DictationController.releaseToggleHotkey()` / `.restoreToggleHotkey()` -- the exact same
     /// closures `GeneralPaneModel` is handed in `MurmureApp.init`, for the identical reason
     /// (`GeneralPaneModel`'s own note on them): recording a mode's own shortcut needs every live
@@ -174,7 +180,8 @@ final class ModesPaneModel: ObservableObject {
         settings: AppSettings,
         releaseToggleHotkey: @escaping () -> Void,
         restoreToggleHotkey: @escaping () -> Void,
-        didChangeModes: @escaping (_ renamedKey: (from: String, to: String)?) -> Void = { _ in }
+        didChangeModes: @escaping (_ renamedKey: (from: String, to: String)?) -> Void = { _ in },
+        hardware: HardwareProfile = .current()
     ) {
         self.supportFolder = supportFolder
         self.modelsStore = modelsStore
@@ -182,6 +189,7 @@ final class ModesPaneModel: ObservableObject {
         self.releaseToggleHotkey = releaseToggleHotkey
         self.restoreToggleHotkey = restoreToggleHotkey
         self.didChangeModes = didChangeModes
+        self.hardware = hardware
     }
 
     deinit {
@@ -269,10 +277,49 @@ final class ModesPaneModel: ObservableObject {
         }
     }
 
+    // MARK: - Refiner models: hardware fit and per-kind choices
+
+    /// How `name` sits against this Mac's memory, or nil when `name` is not one of
+    /// `ollamaModels` -- a model the editor is showing only because it is what a mode's `llm
+    /// .model` already says, not one Ollama actually lists, has no size to classify.
+    func fit(forRefiner name: String) -> ModelFit? {
+        guard let listed = ollamaModels.first(where: { $0.name == name }) else { return nil }
+        return ModelFit.classify(modelBytes: listed.bytes, memoryBytes: hardware.physicalMemoryBytes)
+    }
+
+    /// The Refiner model picker's options for one kind -- every installed Ollama model `api`
+    /// can drive (`Mode.LLM.API.accepts(modelName:)`), alphabetised the way `installedSpeechModels`
+    /// already lists the Speech picker's.
+    func refinerChoices(for api: Mode.LLM.API) -> [OllamaProbe.Listed] {
+        ollamaModels.filter { api.accepts(modelName: $0.name) }.sorted { $0.name < $1.name }
+    }
+
+    /// The model a kind switch lands the draft on: the largest installed choice that still fits
+    /// comfortably on this Mac (`ModelFit.recommended`), or `api.defaultModel` when nothing
+    /// installed qualifies -- the same fallback `Mode.LLM.API.defaultModel` already is for a
+    /// fresh mode.
+    func recommendedRefiner(for api: Mode.LLM.API) -> String {
+        let recommended = refinerChoices(for: api).filter {
+            ModelFit.classify(modelBytes: $0.bytes, memoryBytes: hardware.physicalMemoryBytes)
+                == .recommended
+        }
+        guard let largest = recommended.max(by: { $0.bytes < $1.bytes }) else { return api.defaultModel }
+        return largest.name
+    }
+
     // MARK: - The editor
 
     func isEditing(_ mode: Mode) -> Bool {
         draft?.previousKey == mode.key
+    }
+
+    /// Whether the open draft may be deleted -- false while nothing is open, and false for Voice
+    /// (`Mode.isProtected`): the built-in dictation mode that must always exist to press the
+    /// toggle and speak. `ModeStore.delete` itself refuses a protected mode
+    /// (`ModeWriteProblem.protectedMode`); this is the same rule read ahead of time, to keep the
+    /// Delete control from ever being pressed on Voice at all.
+    var canDeleteDraft: Bool {
+        !(draft?.mode.isProtected ?? true)
     }
 
     /// Opens a row's editor, or closes it if it was the one open.
@@ -597,6 +644,59 @@ final class ModesPaneModel: ObservableObject {
     /// there -- this pane has no test bundle of its own to prove the non-loopback fallback in.
     private var loopbackOllamaEndpoint: URL {
         OllamaEndpoint.loopbackRoot(preferring: modes.first(where: \.llm.enabled)?.llm.endpoint)
+    }
+
+    // MARK: - Switching a mode's refiner kind
+
+    /// The dialog for a kind switch that would overwrite instructions someone edited, or nil.
+    /// Raised only when the loss would be implicit -- the same standard `discardPrompt` holds
+    /// itself to.
+    @Published private(set) var kindSwitchPrompt: ConfirmationPrompt?
+
+    /// The kind `kindSwitchPrompt`, once confirmed, switches the draft to.
+    private var pendingKindSwitch: Mode.LLM.API?
+
+    /// Switches the open draft to `api`: `llm.api`, `llm.model` and `instructions` reset to that
+    /// kind's own defaults (`Mode.switching(to:)`), then `llm.model` is refined further to the
+    /// best installed choice for THIS Mac (`recommendedRefiner(for:)`) -- `switching(to:)` alone
+    /// only knows the kind's generic default, not what Ollama actually has pulled here.
+    ///
+    /// Asks first when the instructions on screen are not what the mode was opened with: a
+    /// switch always overwrites `instructions`, and overwriting an edit nobody asked to lose is
+    /// the same implicit-loss family `requestingDiscardIfNeeded(_:)` guards elsewhere. Nothing to
+    /// lose -- the instructions are still the ones the draft was opened with -- and the switch
+    /// just happens.
+    func switchKind(_ api: Mode.LLM.API) {
+        guard let draft else { return }
+        guard draft.mode.instructions != draft.original.instructions else {
+            return applyKindSwitch(api)
+        }
+        pendingKindSwitch = api
+        kindSwitchPrompt = ConfirmationPrompt(
+            title: "Switch to \(api.title)?",
+            message: "The instructions written here will be replaced with \(api.title)'s own "
+                + "starting prompt.",
+            confirmTitle: "Switch",
+            cancelTitle: "Keep Editing")
+    }
+
+    func confirmKindSwitch() {
+        kindSwitchPrompt = nil
+        guard let api = pendingKindSwitch else { return }
+        pendingKindSwitch = nil
+        applyKindSwitch(api)
+    }
+
+    func cancelKindSwitch() {
+        kindSwitchPrompt = nil
+        pendingKindSwitch = nil
+    }
+
+    private func applyKindSwitch(_ api: Mode.LLM.API) {
+        guard var mode = draft?.mode else { return }
+        mode = mode.switching(to: api)
+        mode.llm.model = recommendedRefiner(for: api)
+        draft?.mode = mode
     }
 
     /// Writes the draft. The three refusals -- an invalid field, a file edited underneath, a key
