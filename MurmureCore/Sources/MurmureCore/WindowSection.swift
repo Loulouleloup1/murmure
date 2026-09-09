@@ -4,17 +4,18 @@ import Foundation
 ///
 /// Design notes §2 calls it "a genuinely useful, cheap device for Murmure, whose settings surface
 /// will be smaller": **no divider rules, no headings, one extra gap, and an icon-colour split
-/// where coloured = the user's own material and neutral = the app's machinery.** Six items, one
+/// where coloured = the user's own material and neutral = the app's machinery.** Seven items, one
 /// break. This enum is the split; `WindowPalette` is the colour it is drawn in.
 public enum WindowSectionGroup: String, CaseIterable, Sendable {
-    /// History, Modes, Vocabulary. What Louis put there — his dictations, his modes, his words.
+    /// Home, History, Modes, Vocabulary. What Louis put there — his overview, his dictations, his
+    /// modes, his words.
     case material
     /// Models, General, Advanced. What the app needs to run — a downloaded model, a hotkey, a
     /// paste behaviour. None of it is his content, and none of it is coloured.
     case machinery
 }
 
-/// The six sections of the application window's sidebar, in the order they are drawn.
+/// The seven sections of the application window's sidebar, in the order they are drawn.
 ///
 /// **Declaration order IS the sidebar order** (plan §2.2), which is why `allCases` is used
 /// directly by the view rather than a hand-kept list beside it: a section inserted in the wrong
@@ -36,8 +37,10 @@ public enum WindowSectionGroup: String, CaseIterable, Sendable {
 /// A rename forgets which section the window was left on; unlike a mode key, that costs one click,
 /// which is why the codec resolves an unknown name to History rather than refusing to open.
 public enum WindowSection: String, CaseIterable, Sendable {
-    /// First, and the reason the window exists (plan D3). The other five are opened when
-    /// something changes; this one is opened when a dictation has to be found again.
+    /// First, and the section the window opens on when nothing usable is stored.
+    case home
+    /// The reason the window exists (plan D3). The other five are opened when something changes;
+    /// this one is opened when a dictation has to be found again.
     case history
     case modes
     case vocabulary
@@ -48,9 +51,9 @@ public enum WindowSection: String, CaseIterable, Sendable {
     /// The section the window opens on when nothing usable is stored, and the section an
     /// unrecognised stored name resolves to.
     ///
-    /// Not `.general`, which is what a settings window would default to: five of the six sections
-    /// are settings and the sixth is the reason the window gets opened at all.
-    public static let fallback: WindowSection = .history
+    /// Not `.general`, which is what a settings window would default to: six of the seven sections
+    /// are settings and Home is the overview.
+    public static let fallback: WindowSection = .home
 
     /// The word in the sidebar.
     ///
@@ -61,6 +64,7 @@ public enum WindowSection: String, CaseIterable, Sendable {
     /// a test that walks all of them.
     public var title: String {
         switch self {
+        case .home: "Home"
         case .history: "History"
         case .modes: "Modes"
         case .vocabulary: "Vocabulary"
@@ -72,15 +76,16 @@ public enum WindowSection: String, CaseIterable, Sendable {
 
     /// The SF Symbol on the row's tile.
     ///
-    /// All six are chosen from the set macOS 14 ships, and all six differ: the glyph is what the
-    /// row is found by once the window is a habit, and two sections wearing one symbol would make
-    /// the tile decoration rather than an address.
+    /// All seven are chosen from the set macOS 14 ships, and all seven differ: the glyph is what
+    /// the row is found by once the window is a habit, and two sections wearing one symbol would
+    /// make the tile decoration rather than an address.
     ///
     /// `modes` gets the wand rather than `sparkles`: `sparkles` is the notch's `refining` glyph
     /// (`NotchCard.symbolName(for:)`), and a settings section wearing the phase's own symbol would
     /// make the two mean each other.
     public var symbolName: String {
         switch self {
+        case .home: "chart.bar.xaxis"
         case .history: "clock.arrow.circlepath"
         case .modes: "wand.and.stars"
         case .vocabulary: "character.book.closed"
@@ -93,7 +98,7 @@ public enum WindowSection: String, CaseIterable, Sendable {
     /// Whether the row is drawn as the user's own material or as the app's machinery.
     public var group: WindowSectionGroup {
         switch self {
-        case .history, .modes, .vocabulary: .material
+        case .home, .history, .modes, .vocabulary: .material
         case .models, .general, .advanced: .machinery
         }
     }

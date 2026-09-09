@@ -16,20 +16,21 @@ final class WindowSectionTests: XCTestCase {
     func testTheSidebarOrderIsTheOneTheWindowDraws() {
         XCTAssertEqual(
             WindowSection.allCases,
-            [.history, .modes, .vocabulary, .models, .general, .advanced])
+            [.home, .history, .modes, .vocabulary, .models, .general, .advanced])
     }
 
-    /// D3 on its own, because it is the decision the order exists to carry: History is the only
-    /// section with a daily reason to be opened, and the other five are opened when something
-    /// changes.
+    /// D3 on its own, because it is the decision the order exists to carry: History is the
+    /// section with a daily reason to be opened, right after the Home overview, and the other
+    /// five are opened when something changes.
     func testHistoryIsFirst() {
-        XCTAssertEqual(WindowSection.allCases.first, .history)
+        XCTAssertEqual(WindowSection.allCases.dropFirst().first, .history)
     }
 
     // MARK: - The split that replaces the dividers
 
     func testTheColouredHalfIsTheUsersOwnMaterial() {
-        XCTAssertEqual(WindowSection.sections(in: .material), [.history, .modes, .vocabulary])
+        XCTAssertEqual(
+            WindowSection.sections(in: .material), [.home, .history, .modes, .vocabulary])
     }
 
     func testTheNeutralHalfIsTheAppsMachinery() {
@@ -103,9 +104,19 @@ final class WindowSectionTests: XCTestCase {
         XCTAssertEqual(WindowSection.advanced.rawValue, "advanced")
     }
 
-    /// Not `.general`, which is what a settings window would fall back to. Five of the six are
-    /// settings and the sixth is the reason the window gets opened at all.
+    /// Not `.general`, which is what a settings window would fall back to. Six of the seven are
+    /// settings and Home is the overview.
     func testTheFallbackSectionIsHistory() {
-        XCTAssertEqual(WindowSection.fallback, .history)
+        XCTAssertEqual(WindowSection.fallback, .home)
+    }
+
+    // MARK: - Home
+
+    func testHomeIsAMaterialSectionWithItsOwnSymbol() {
+        XCTAssertEqual(WindowSection.home.title, "Home")
+        XCTAssertEqual(WindowSection.home.symbolName, "chart.bar.xaxis")
+        XCTAssertEqual(WindowSection.home.group, .material)
+        XCTAssertEqual(WindowSection.sections(in: .material).first, .home)
+        XCTAssertEqual(WindowSection.fallback, .home)
     }
 }

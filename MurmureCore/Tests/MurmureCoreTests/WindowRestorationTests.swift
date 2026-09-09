@@ -26,7 +26,7 @@ final class WindowRestorationTests: XCTestCase {
 
     /// The very first launch, and every launch after a section was removed in a later lot.
     func testNothingStoredOpensOnHistory() {
-        XCTAssertEqual(restoration.section, .history)
+        XCTAssertEqual(restoration.section, .home)
     }
 
     /// What "remembered across launches" is testable as in one process, the same way
@@ -47,17 +47,17 @@ final class WindowRestorationTests: XCTestCase {
     func testASectionNameThatNoLongerExistsOpensOnHistory() {
         defaults.set("statistics", forKey: "windowSection")
 
-        XCTAssertEqual(restoration.section, .history)
+        XCTAssertEqual(restoration.section, .home)
     }
 
     /// A value of the right type but the wrong shape, and a value of the wrong type entirely.
     /// Both are reachable through a hand-run `defaults write`.
     func testAnEmptyOrNonsenseSectionEntryOpensOnHistory() {
         defaults.set("", forKey: "windowSection")
-        XCTAssertEqual(restoration.section, .history)
+        XCTAssertEqual(restoration.section, .home)
 
         defaults.set(42, forKey: "windowSection")
-        XCTAssertEqual(restoration.section, .history)
+        XCTAssertEqual(restoration.section, .home)
     }
 
     /// The literal name, written out with a real value: this is what the section is filed under,
