@@ -230,7 +230,7 @@ struct VocabularyPaneView: View {
         } label: {
             Label("Add", systemImage: "plus")
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color(role: .materialGlyph))
                 .frame(maxWidth: .infinity)
                 .frame(height: WindowLayout.vocabularyFieldHeight)
         }
