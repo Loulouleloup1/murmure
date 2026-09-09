@@ -373,6 +373,22 @@ final class ModeTests: XCTestCase {
         XCTAssertNil(off.validationError, "files with the refiner off must still load")
         XCTAssertNil(Mode.voice.editorValidationError(original: .voice), "Voice is the exception")
     }
+
+    /// S1's dialect accepts only its control line -- `Mode.validate()` refuses prose on `.s1` --
+    /// so its default has to be one, or a freshly-switched S1 mode would refuse to save.
+    func testTheS1DefaultInstructionsAreControlFieldsOnly() {
+        XCTAssertTrue(Mode.containsOnlyControlFields(Mode.LLM.API.s1.defaultInstructions))
+    }
+
+    /// A general model reads its instructions as a system prompt, not a control line: the default
+    /// has to be actual prose to edit from, distinct from S1's, or switching to `.chat` would
+    /// leave `[Context: general]` sitting in the prompt editor as if it were literal text.
+    func testTheChatDefaultInstructionsAreProse() {
+        let chatDefault = Mode.LLM.API.chat.defaultInstructions
+        XCTAssertFalse(chatDefault.isEmpty)
+        XCTAssertFalse(Mode.containsOnlyControlFields(chatDefault))
+        XCTAssertNotEqual(chatDefault, Mode.LLM.API.s1.defaultInstructions)
+    }
 }
 
 extension Mode {

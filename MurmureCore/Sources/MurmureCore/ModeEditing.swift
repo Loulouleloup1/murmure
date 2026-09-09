@@ -328,7 +328,7 @@ public struct ModePreset: Equatable, Identifiable {
             var mode = Mode.voice
             mode.llm = .init(
                 enabled: true, endpoint: mode.llm.endpoint, model: Mode.rewriteModel, api: .chat)
-            mode.instructions = Mode.prompt.instructions
+            mode.instructions = Mode.LLM.API.chat.defaultInstructions
             return mode
         }())
 

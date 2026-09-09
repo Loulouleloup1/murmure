@@ -262,7 +262,7 @@ extension Mode {
     /// Empty text is vacuously true, as the name says — "only control fields" and "no fields at
     /// all" are the same claim here. The caller has already refused an empty `instructions` with
     /// its own error, which is the one a reader needs to see.
-    private static func containsOnlyControlFields(_ text: String) -> Bool {
+    static func containsOnlyControlFields(_ text: String) -> Bool {
         var rest = Substring(text.trimmingCharacters(in: .whitespacesAndNewlines))
         while !rest.isEmpty {
             guard rest.first == "[", let close = rest.firstIndex(of: "]") else { return false }
@@ -298,9 +298,19 @@ extension Mode.LLM.API {
         }
     }
 
-    /// Both kinds start from Prompt's instructions: for S1 they are already control fields only,
-    /// for a general model they are a sensible cleanup prompt to edit from.
-    public var defaultInstructions: String { Mode.prompt.instructions }
+    /// S1 and a general model do not speak the same instructions dialect (see ``Mode/LLM/API``),
+    /// so they do not start from the same default: S1 keeps `Mode.prompt.instructions`, the
+    /// control-only line its wire protocol requires, while a general model gets a prose prompt
+    /// to edit from -- prose in an S1 mode is refused by `Mode.validate()`.
+    public var defaultInstructions: String {
+        switch self {
+        case .s1: Mode.prompt.instructions
+        case .chat:
+            "Clean up this dictation. Fix punctuation, capitalisation and obvious "
+                + "speech-recognition errors, remove filler words and false starts, and keep the "
+                + "speaker's wording, meaning and language. Return only the corrected text."
+        }
+    }
 
     /// Which installed Ollama names this kind can drive. S1 is one model family with its own
     /// request shape; a general model is anything that can hold a chat and is not an embedder.

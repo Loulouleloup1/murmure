@@ -156,7 +156,7 @@ public enum OllamaProbe {
     /// The tag is looked for **after the last slash**, not in the whole string, for the reason
     /// ``ModelDisplayName`` splits there: a registry with a port (`localhost:11434/team/model`)
     /// carries a colon that is not a tag.
-    static func tagged(_ identifier: String) -> String {
+    public static func tagged(_ identifier: String) -> String {
         let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
         let lastComponent = trimmed.split(separator: "/").last.map(String.init) ?? trimmed
         return lastComponent.contains(":") ? trimmed : trimmed + ":latest"

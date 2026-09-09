@@ -43,7 +43,7 @@ grounded on the code (`Mode.swift`, `ModeStore.swift`, `ModesPaneView.swift`, `M
 | Kind | Label | Model picker | Instructions |
 |---|---|---|---|
 | `.s1` | "Superwhisper S1 (fixed-format cleanup)" | only models whose name matches the S1 family (`ModelClassifier.isS1` = name contains `superwhisper/s1`), default `Mode.cleanupModel` | bracketed control fields only (existing rule), pre-filled with the current default |
-| `.chat` | "General model (Gemma, Llama, …)" | every installed Ollama model that is not S1, default `Mode.rewriteModel`; "recommended for this Mac" badge (§6) | free prompt, pre-filled with the default Prompt template |
+| `.chat` | "General model (Gemma, Llama, …)" | every installed Ollama model that is not S1, default `Mode.rewriteModel`; "recommended for this Mac" badge (§6) | free prompt, pre-filled with a prose cleanup prompt (`Mode.LLM.API.chat.defaultInstructions`); the Custom preset ships the same text |
 
 Switching kind resets model and instructions to that kind's defaults (after a confirmation only if
 the instructions were edited). Choosing S1 therefore locks the model list to S1; choosing General

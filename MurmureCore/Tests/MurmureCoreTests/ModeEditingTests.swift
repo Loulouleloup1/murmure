@@ -449,7 +449,7 @@ final class ModeEditingTests: XCTestCase {
         XCTAssertTrue(mode.llm.enabled)
         XCTAssertEqual(mode.llm.api, .chat)
         XCTAssertEqual(mode.llm.model, Mode.rewriteModel)
-        XCTAssertEqual(mode.instructions, Mode.prompt.instructions)
+        XCTAssertEqual(mode.instructions, Mode.LLM.API.chat.defaultInstructions)
     }
 
     /// Picking `Prompt` a second time may not overwrite the first: the key is the file name, and

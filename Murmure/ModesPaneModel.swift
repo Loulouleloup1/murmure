@@ -283,7 +283,7 @@ final class ModesPaneModel: ObservableObject {
     /// `ollamaModels` -- a model the editor is showing only because it is what a mode's `llm
     /// .model` already says, not one Ollama actually lists, has no size to classify.
     func fit(forRefiner name: String) -> ModelFit? {
-        guard let listed = ollamaModels.first(where: { $0.name == name }) else { return nil }
+        guard let listed = ollamaModels.first(where: { OllamaProbe.tagged($0.name) == OllamaProbe.tagged(name) }) else { return nil }
         return ModelFit.classify(modelBytes: listed.bytes, memoryBytes: hardware.physicalMemoryBytes)
     }
 
@@ -299,10 +299,7 @@ final class ModesPaneModel: ObservableObject {
     /// installed qualifies -- the same fallback `Mode.LLM.API.defaultModel` already is for a
     /// fresh mode.
     func recommendedRefiner(for api: Mode.LLM.API) -> String {
-        let recommended = refinerChoices(for: api).filter {
-            ModelFit.classify(modelBytes: $0.bytes, memoryBytes: hardware.physicalMemoryBytes)
-                == .recommended
-        }
+        let recommended = refinerChoices(for: api).filter { fit(forRefiner: $0.name) == .recommended }
         guard let largest = recommended.max(by: { $0.bytes < $1.bytes }) else { return api.defaultModel }
         return largest.name
     }
@@ -403,6 +400,8 @@ final class ModesPaneModel: ObservableObject {
         draft = nil
         screen = .basic
         writeProblem = nil
+        kindSwitchPrompt = nil
+        pendingKindSwitch = nil
     }
 
     func showAdvanced() {
