@@ -28,7 +28,8 @@ Migration `v3-wordCounts` on table `dictation`, two nullable integer columns:
 - `finalWordCount`: words in the text that actually went to the target application, i.e.
   `refinedText` if present, else `correctedText`, else `rawTranscript`.
 
-Plain `ALTER TABLE ADD COLUMN`; no FTS rebuild (the counts are not searchable text). `HistoryRecord`
+Plain `ALTER TABLE ADD COLUMN`; no explicit FTS rebuild (the counts are not searchable text; the
+existing sync triggers reindex the rows the backfill touches). `HistoryRecord`
 gains the two `Int?` properties; the round-trip tests in `HistoryStoreTests` cover them.
 
 Rows are written with both counts at archive time (`DictationSession.archive`). A one-off
@@ -61,7 +62,7 @@ deliberately simple and language-agnostic; it is not a linguistic tokenizer.
 kilobytes and takes milliseconds; SQL aggregation was rejected because day boundaries depend on the
 local calendar and time zone, which SQLite's `date()` does not know.
 
-`DictationStatistics.compute(rows:, period:, calendar:, now:, typingWordsPerMinute:)` is a pure
+`DictationStatistics.compute(rows:, period:, now:, calendar:, typingWordsPerMinute:)` is a pure
 function in MurmureCore returning a `DictationStatistics` value. All tests use a fixed `now` and an
 explicit calendar and time zone.
 
@@ -81,8 +82,8 @@ and streaks and records are always computed over all time; the screen says so ne
 - Dictations: count of counting rows in the period.
 - Total words: sum of `finalWordCount` (null counts contribute zero). Word counts exist only for
   rows archived after the migration and for rows whose text was still present at backfill time, so
-  all-time words undercount older dictations; the caption on the Words card says "since <date of
-  the migration>" when the period reaches before it.
+  all-time words undercount older dictations; the caption on the Words card says "counted since
+  <date of the earliest counted dictation>" when the period reaches before it.
 - Spoken time: sum of `durationSeconds`.
 - Average WPM: total `rawWordCount` divided by total spoken minutes, over rows that have a raw count
   (weighted average, never a mean of per-row speeds). Undefined when spoken time is zero: shown as
@@ -131,8 +132,8 @@ minus time spent speaking". Time is formatted as `Xh Ymin` or `Y min`, negative 
 leading minus.
 
 Row 2, heatmap card, full width: 52 columns × 7 rows of `RectangleMark` in Swift Charts, Monday at
-the top, month initials along the bottom axis, five levels of the accent hue from `NotchAppearance`
-(lightest for zero). Caption: "Last 52 weeks · N dictations". No hover tooltip in V1.
+the top, month initials along the bottom axis, the hairline colour for level 0 and four levels of
+the accent hue from `NotchAppearance` for levels 1 to 4. Caption: "Last 52 weeks · N dictations". No hover tooltip in V1.
 
 Row 3, two cards side by side: Hour profile (24 `BarMark`s, local hours, caption "When you
 dictate"), and Streak (current streak with `flame` SF Symbol, longest streak underneath, caption
