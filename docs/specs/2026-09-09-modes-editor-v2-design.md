@@ -74,8 +74,8 @@ is removed. `ModeSymbolTests` pins that the library contains each glyph once.
 `HardwareProfile` in MurmureCore: `physicalMemoryBytes` (`ProcessInfo.processInfo.physicalMemory`),
 `chipName` (`sysctlbyname("machdep.cpu.brand_string")`), injected in tests. `ModelFit.classify(modelBytes:
 memoryBytes:)` returns `.recommended` (≤ 45 % of memory), `.tight` (≤ 70 %), `.tooLarge` (> 70 %),
-pinned by tests with concrete byte values. Sizes come from Ollama `/api/tags` (`size`) for refiner
-models and from the speech model inventory for Whisper models. Pickers show a badge per row
+pinned by tests with concrete byte values. Sizes come from Ollama `/api/tags` (`size`); the speech
+listing does not know sizes yet, so in this lot only refiner models get a badge. Pickers show a badge per row
 ("Recommended for this Mac" / "Tight on this Mac" / "Too large for this Mac"); the default choice
 of a new mode is the largest `.recommended` model among the installed ones, else the kind's default.
 No download, no benchmark, no network beyond the local Ollama call already made.
