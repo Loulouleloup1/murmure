@@ -147,4 +147,114 @@ final class DictationStatisticsTests: XCTestCase {
         ])
         XCTAssertEqual(stats.topApplications.map(\.name), ["New Name"])
     }
+
+    // MARK: Heatmap
+
+    func testHeatmapRunsFromTheMondayFiftyOneWeeksAgoToToday() {
+        let stats = compute([row("2026-09-09T10:00:00+02:00", raw: 5, final: 5)])
+        // now is Wednesday 2026-09-09; this week's Monday is 09-07; 51 weeks earlier: 2025-09-15.
+        XCTAssertEqual(stats.heatmap.first?.day, t("2025-09-15T00:00:00+02:00"))
+        XCTAssertEqual(stats.heatmap.last?.day, t("2026-09-09T00:00:00+02:00"))
+        XCTAssertEqual(stats.heatmap.count, 51 * 7 + 3)          // 51 full weeks + Mon, Tue, Wed
+        XCTAssertEqual(stats.heatmap.first?.column, 0)
+        XCTAssertEqual(stats.heatmap.first?.row, 0)
+        XCTAssertEqual(stats.heatmap.last?.column, 51)
+        XCTAssertEqual(stats.heatmap.last?.row, 2)
+    }
+
+    func testHeatmapLevelsAreQuartilesOfTheBusiestDayWithActivityWithoutWordsAtLevelOne() {
+        let stats = compute([
+            row("2026-09-01T10:00:00+02:00", raw: 100, final: 100),   // max → 4
+            row("2026-09-02T10:00:00+02:00", raw: 30, final: 30),     // 0.30 → 2
+            row("2026-09-03T10:00:00+02:00", raw: 25, final: 25),     // 0.25 → 1
+            row("2026-09-04T10:00:00+02:00", raw: 76, final: 76),     // 0.76 → 4
+            row("2026-09-05T10:00:00+02:00"),                         // dictated, no count → 1
+        ], period: .last7Days)                                         // period must not matter
+        func level(_ iso: String) -> Int? { stats.heatmap.first { $0.day == t(iso) }?.level }
+        XCTAssertEqual(level("2026-09-01T00:00:00+02:00"), 4)
+        XCTAssertEqual(level("2026-09-02T00:00:00+02:00"), 2)
+        XCTAssertEqual(level("2026-09-03T00:00:00+02:00"), 1)
+        XCTAssertEqual(level("2026-09-04T00:00:00+02:00"), 4)
+        XCTAssertEqual(level("2026-09-05T00:00:00+02:00"), 1)
+        XCTAssertEqual(level("2026-09-06T00:00:00+02:00"), 0)
+    }
+
+    func testHeatmapIgnoresTheSelectedPeriodButNotTheOutcome() {
+        let stats = compute([
+            row("2026-06-01T10:00:00+02:00", raw: 1, final: 1),
+            row("2026-06-02T10:00:00+02:00", outcome: .failed, raw: 1, final: 1),
+        ], period: .last7Days)
+        XCTAssertEqual(stats.heatmap.first { $0.day == t("2026-06-01T00:00:00+02:00") }?.dictations, 1)
+        XCTAssertEqual(stats.heatmap.first { $0.day == t("2026-06-02T00:00:00+02:00") }?.dictations, 0)
+    }
+
+    // MARK: Hour profile
+
+    func testHourProfileUsesLocalHoursOverTheSelectedPeriod() {
+        let stats = compute([
+            row("2026-09-09T08:15:00+02:00"),
+            row("2026-09-09T08:45:00+02:00"),
+            row("2026-09-09T23:59:00+02:00"),
+            row("2026-01-01T08:00:00+01:00"),          // outside 7 days
+        ], period: .last7Days)
+        XCTAssertEqual(stats.hourProfile.count, 24)
+        XCTAssertEqual(stats.hourProfile[8], 2)
+        XCTAssertEqual(stats.hourProfile[23], 1)
+        XCTAssertEqual(stats.hourProfile.reduce(0, +), 3)
+    }
+
+    // MARK: Streak
+
+    func testCurrentStreakCountsBackFromTodayWhenTodayHasADictation() {
+        let stats = compute(["09-07", "09-08", "09-09"].map { row("2026-\($0)T10:00:00+02:00") })
+        XCTAssertEqual(stats.streak.current, 3)
+    }
+
+    func testCurrentStreakSurvivesADayWithoutADictationYet() {
+        let stats = compute(["09-06", "09-07", "09-08"].map { row("2026-\($0)T10:00:00+02:00") })
+        XCTAssertEqual(stats.streak.current, 3)
+    }
+
+    func testCurrentStreakIsZeroWhenNeitherTodayNorYesterdayHasADictation() {
+        let stats = compute(["09-05", "09-06", "09-07"].map { row("2026-\($0)T10:00:00+02:00") })
+        XCTAssertEqual(stats.streak.current, 0)
+        XCTAssertEqual(stats.streak.longest, 3)
+    }
+
+    func testLongestStreakSpansAGapAndIgnoresDuplicateDays() {
+        let stats = compute(["03-01", "03-02", "03-03", "03-03", "03-04", "03-10", "03-11"]
+            .map { row("2026-\($0)T10:00:00+01:00") })
+        XCTAssertEqual(stats.streak.longest, 4)
+    }
+
+    func testStreakDaysAreLocalDaysAcrossMidnight() {
+        // 23:30 Paris on the 8th and 00:30 Paris on the 9th are two consecutive days
+        let stats = compute([row("2026-09-08T23:30:00+02:00"), row("2026-09-09T00:30:00+02:00")])
+        XCTAssertEqual(stats.streak.current, 2)
+    }
+
+    // MARK: Records
+
+    func testRecordsPickTheLongestTheBiggestDayAndTheFastestWithGuards() {
+        let stats = compute([
+            row("2026-09-01T10:00:00+02:00", seconds: 300, raw: 400, final: 400),   // 80 wpm
+            row("2026-09-02T10:00:00+02:00", seconds: 60, raw: 150, final: 150),    // 150 wpm ← fastest
+            row("2026-09-02T11:00:00+02:00", seconds: 60, raw: 100, final: 100),    // day total 250 ← biggest day
+            row("2026-09-03T10:00:00+02:00", seconds: 5, raw: 30, final: 30),       // 360 wpm but < 10 s: ignored
+            row("2026-09-04T10:00:00+02:00", seconds: 20, raw: 10, final: 10),      // 30 wpm but < 20 words: ignored
+        ], period: .last7Days)                                                       // records are all time
+        XCTAssertEqual(stats.records.longestDictationSeconds?.value, 300)
+        XCTAssertEqual(stats.records.longestDictationSeconds?.day, t("2026-09-01T00:00:00+02:00"))
+        XCTAssertEqual(stats.records.mostWordsInADay?.value, 400)
+        XCTAssertEqual(stats.records.mostWordsInADay?.day, t("2026-09-01T00:00:00+02:00"))
+        XCTAssertEqual(stats.records.fastestWordsPerMinute!.value, 150, accuracy: 0.0001)
+        XCTAssertEqual(stats.records.fastestWordsPerMinute?.day, t("2026-09-02T00:00:00+02:00"))
+    }
+
+    func testRecordsAreNilWithoutEligibleRows() {
+        let stats = compute([row("2026-09-09T10:00:00+02:00", seconds: 3)])
+        XCTAssertEqual(stats.records.longestDictationSeconds?.value, 3)
+        XCTAssertNil(stats.records.mostWordsInADay)
+        XCTAssertNil(stats.records.fastestWordsPerMinute)
+    }
 }

@@ -101,6 +101,10 @@ public struct DictationStatistics: Equatable, Sendable {
         self.records = records
     }
 
+    /// Computes the Home pane figures for `rows` over `period`.
+    ///
+    /// `typingWordsPerMinute` must be greater than zero; it is expected to come from
+    /// `AppSettings.typingWordsPerMinuteRange`.
     public static func compute(rows: [DictationStatisticsRow], period: StatisticsPeriod,
                                now: Date, calendar: Calendar, typingWordsPerMinute: Int) -> DictationStatistics {
         let counting = rows.filter { $0.outcome == .inserted || $0.outcome == .copiedToClipboard }
@@ -135,19 +139,93 @@ public struct DictationStatistics: Equatable, Sendable {
                 byApp[bundleID] = (name, 1, row.startedAt)
             }
         }
+        func isOrderedBefore(_ lhs: Application, _ rhs: Application) -> Bool {
+            if lhs.dictations != rhs.dictations { return lhs.dictations > rhs.dictations }
+            if lhs.name != rhs.name { return lhs.name < rhs.name }
+            return lhs.bundleID < rhs.bundleID
+        }
         let top = byApp.map { Application(bundleID: $0.key, name: $0.value.name, dictations: $0.value.count) }
-            .sorted { $0.dictations != $1.dictations ? $0.dictations > $1.dictations : $0.name < $1.name }
+            .sorted(by: isOrderedBefore)
             .prefix(5)
 
         let since = counting.filter { $0.finalWordCount != nil }.map(\.startedAt).min()
+
+        // Local day keys
+        func day(_ date: Date) -> Date { calendar.startOfDay(for: date) }
+        var perDay: [Date: (dictations: Int, words: Int)] = [:]
+        for row in counting {
+            let key = day(row.startedAt)
+            let entry = perDay[key] ?? (0, 0)
+            perDay[key] = (entry.dictations + 1, entry.words + (row.finalWordCount ?? 0))
+        }
+
+        // Heatmap: Monday of the current week, minus 51 weeks, through today.
+        let today = day(now)
+        let weekday = calendar.component(.weekday, from: today)        // 1 = Sunday … 7 = Saturday
+        let mondayOffset = (weekday + 5) % 7                            // Monday 0 … Sunday 6
+        let thisMonday = calendar.date(byAdding: .day, value: -mondayOffset, to: today)!
+        let firstDay = calendar.date(byAdding: .day, value: -51 * 7, to: thisMonday)!
+        var heatmapDays: [Date] = []
+        var cursor = firstDay
+        while cursor <= today {
+            heatmapDays.append(cursor)
+            cursor = calendar.date(byAdding: .day, value: 1, to: cursor)!
+        }
+        let maxWords = heatmapDays.map { perDay[$0]?.words ?? 0 }.max() ?? 0
+        let heatmap = heatmapDays.enumerated().map { index, date -> HeatmapDay in
+            let entry = perDay[date] ?? (0, 0)
+            let level: Int
+            if entry.dictations == 0 { level = 0 }
+            else if entry.words == 0 || maxWords == 0 { level = 1 }
+            else {
+                let ratio = Double(entry.words) / Double(maxWords)
+                level = ratio <= 0.25 ? 1 : ratio <= 0.5 ? 2 : ratio <= 0.75 ? 3 : 4
+            }
+            return HeatmapDay(day: date, dictations: entry.dictations, words: entry.words,
+                              level: level, column: index / 7, row: index % 7)
+        }
+
+        // Hour profile over the period
+        var hours = Array(repeating: 0, count: 24)
+        for row in inPeriod { hours[calendar.component(.hour, from: row.startedAt)] += 1 }
+
+        // Streaks over all time
+        let days = Set(perDay.keys)
+        var current = 0
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: today) {
+            var probe: Date? = days.contains(today) ? today : (days.contains(yesterday) ? yesterday : nil)
+            while let p = probe, days.contains(p) {
+                current += 1
+                probe = calendar.date(byAdding: .day, value: -1, to: p)
+            }
+        }
+        var longest = 0, run = 0
+        var previous: Date?
+        for d in days.sorted() {
+            if let previous, calendar.date(byAdding: .day, value: 1, to: previous) == d { run += 1 } else { run = 1 }
+            longest = max(longest, run)
+            previous = d
+        }
+
+        // Records over all time
+        func wpm(_ r: DictationStatisticsRow) -> Double { Double(r.rawWordCount ?? 0) * 60 / r.durationSeconds }
+        let longestRow = counting.max { $0.durationSeconds < $1.durationSeconds }
+        let biggestDay = perDay.filter { $0.value.words > 0 }
+            .max { $0.value.words != $1.value.words ? $0.value.words < $1.value.words : $0.key > $1.key }
+        let fastestRow = counting
+            .filter { $0.durationSeconds >= 10 && ($0.rawWordCount ?? 0) >= 20 }
+            .max { wpm($0) < wpm($1) }
 
         return DictationStatistics(
             period: period, hasAnyDictation: !counting.isEmpty,
             dictations: inPeriod.count, words: words, spokenSeconds: spoken,
             averageWordsPerMinute: averageWPM, applicationCount: byApp.count,
             topApplications: Array(top), timeSavedMinutes: timeSaved, wordCountsSince: since,
-            heatmap: [], hourProfile: Array(repeating: 0, count: 24),
-            streak: Streak(current: 0, longest: 0),
-            records: Records(longestDictationSeconds: nil, mostWordsInADay: nil, fastestWordsPerMinute: nil))
+            heatmap: heatmap, hourProfile: hours,
+            streak: Streak(current: current, longest: longest),
+            records: Records(
+                longestDictationSeconds: longestRow.map { Record(value: $0.durationSeconds, day: day($0.startedAt)) },
+                mostWordsInADay: biggestDay.map { Record(value: $0.value.words, day: $0.key) },
+                fastestWordsPerMinute: fastestRow.map { Record(value: wpm($0), day: day($0.startedAt)) }))
     }
 }
