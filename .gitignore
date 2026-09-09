@@ -68,3 +68,5 @@ benchmark/run_v3*.log
 # rewrites -- so the version is fixed in the manifest, where it is readable, and only the exact
 # commit behind an unchanged tag is unguarded.
 MurmureCore/Package.resolved
+benchmark/longform/.build/
+benchmark/longform/Package.resolved

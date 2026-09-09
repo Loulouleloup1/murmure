@@ -21,7 +21,7 @@ resolved WhisperKit checkout.
 | Word count per dictation | absent | only `insertedCharacters` |
 | Dashboard / Home pane, Swift Charts | absent | six panes: History, Modes, Vocabulary, Models, General, Advanced |
 | Sandbox | disabled | `ENABLE_APP_SANDBOX: NO`; running a subprocess is possible |
-| WhisperKit version resolved | **verified** 1.7.0 | `.build/xcode/.../Package.resolved` (project.yml says `from: 1.1.0`) |
+| WhisperKit version resolved | **verified** 1.1.0 | `Murmure.xcodeproj/.../swiftpm/Package.resolved` and `git describe` on the checkout. An earlier draft of this note said 1.7.0: a grep had read the first `Package.resolved` found under `.build`, which belonged to another package. Corrected 2026-09-09 after the S2 spike. |
 
 ## 2. URL acquisition (YouTube, X)
 
@@ -45,7 +45,7 @@ resolved WhisperKit checkout.
 
 ## 3. Long-form local transcription
 
-- **verified** in WhisperKit 1.7.0: `DecodingOptions.chunkingStrategy: .vad`, `concurrentWorkerCount`,
+- **verified** in WhisperKit 1.1.0 (the checkout that was grepped): `DecodingOptions.chunkingStrategy: .vad`, `concurrentWorkerCount`,
   `wordTimestamps`, `clipTimestamps`, `compressionRatioThreshold` / `logProbThreshold` /
   `noSpeechThreshold`, and an `EnergyVAD` (no Silero VAD in the package).
 - Reported throughput: large-v3-turbo on the ANE around 20× real time on an M3 class chip, so one
@@ -98,10 +98,32 @@ states. No third-party dependency needed.
 4. Home pane replacing History as the first screen, or a Statistics pane in the sidebar?
 5. Which "fun" widgets make the first cut.
 
-## 6. Proposed spikes before any lot
+## 6. Spikes (run 2026-09-09, reports alongside)
 
 - S1: run the official `yt-dlp_macos` from a temp directory on one public YouTube URL and one X URL,
   measure whether Deno is demanded, time, format obtained, Gatekeeper behaviour. Throwaway.
-- S2: transcribe a 30 to 60 minute French audio file with WhisperKit 1.7.0, `.vad` chunking, turbo
+- S2: transcribe a 30 to 60 minute French audio file with WhisperKit 1.1.0, `.vad` chunking, turbo
   model, on this machine: real-time factor, peak memory, repetition incidents. Throwaway harness in
   `benchmark/`.
+
+## 7. Spike results (measured on this Mac, M4 Pro 24 GB, macOS 26.6.2)
+
+S1 (`2026-09-09-spike-ytdlp-report.md`): the official `yt-dlp_macos` 2026.08.19 runs first try with a
+restricted PATH, no quarantine attribute after a `curl` fetch, already ad-hoc signed; YouTube `-F`
+and the `m4a` audio download succeed with only a "no JS runtime" warning; X public video works
+without login through native HLS; `afconvert` (Core Audio, same decoders as AVFoundation) decodes
+the `m4a` and refuses WebM/Opus; `-U` works. Fixed cost about 10 s per invocation (PyInstaller unpack).
+Progress lines need sentinel handling (`Unknown`, `NA`, padded percentages).
+
+S2 (`2026-09-09-spike-longform-report.md`), harness kept in `benchmark/longform/`:
+
+| Run | Audio | Chunking | Load | Transcribe | Real-time factor | Peak RSS | Segments | Repetitions |
+|---|---|---|---|---|---|---|---|---|
+| A | 2447 s (40.8 min) | vad | 1.96 s | 123.2 s | 19.9x | 585 MB | 245 | 0 |
+| B | 600 s | none | 151 s (cold ANE compile in a fresh process) | 38.3 s | 15.7x | 462 MB | 123 | 0 |
+
+French quality good; first segment of each run lower-case without punctuation, later ones punctuated
+(known Whisper prefill behaviour). Special tokens leak into segment text unless `skipSpecialTokens`
+is set. The progress callback fires per decoded token (about 12,000 times for 41 min) and its
+`inputAudioSeconds` resets per window: a progress bar must derive from `windowId` or from a
+real-time-factor estimate, and must be throttled. Peak memory footprint under VAD about 1 GB.
