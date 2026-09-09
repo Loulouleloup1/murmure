@@ -585,7 +585,14 @@ final class ModesPaneModel: ObservableObject {
             guard let self else { return }
             writeProblem = nil
             screen = .basic
-            draft = ModeDraft(creating: preset.mode(avoiding: takenKeys))
+            var mode = preset.mode(avoiding: takenKeys)
+            // §6: a new mode lands on the largest recommended installed model, not the preset's
+            // hard-coded one. `recommendedRefiner` already falls back to `api.defaultModel` --
+            // which is the preset's own model -- when nothing installed is recommended.
+            if mode.llm.enabled {
+                mode.llm.model = recommendedRefiner(for: mode.llm.api)
+            }
+            draft = ModeDraft(creating: mode)
         }
     }
 
@@ -695,6 +702,11 @@ final class ModesPaneModel: ObservableObject {
         guard var mode = draft?.mode else { return }
         mode = mode.switching(to: api)
         mode.llm.model = recommendedRefiner(for: api)
+        // "Turn the refiner on" (`refinerOffNotice`) reaches this path to both switch kind and
+        // turn the refiner on in one motion. Setting it here, not in the button, means cancelling
+        // the confirmation this can raise leaves the legacy mode untouched instead of stranded
+        // with the refiner on and the old instructions/model still in place (fix round, F3).
+        mode.llm.enabled = true
         draft?.mode = mode
     }
 

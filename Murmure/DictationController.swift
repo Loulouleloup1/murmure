@@ -208,9 +208,10 @@ final class DictationController {
         }
         self.modesDirectory = modesDirectory
         if let modesDirectory {
-            // Every launch, not only the first: a built-in deleted by hand comes back, which is
-            // how `voice.json` repairs itself. It writes only files that are ABSENT, so a mode
-            // Louis has edited is never overwritten.
+            // Every launch, not only the first: Voice deleted by hand comes back, which is how
+            // `voice.json` repairs itself. Prompt is seeded once and, once on disk, is an
+            // ordinary mode -- deleting it does not bring it back. It writes only files that are
+            // ABSENT, so a mode Louis has edited is never overwritten.
             //
             // This `report` cannot fire on this path, and that is not an oversight to read as a
             // covered failure: `createBuiltInsIfMissing()` only ever calls `save()`, which THROWS

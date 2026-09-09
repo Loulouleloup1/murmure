@@ -240,17 +240,22 @@ public enum ModeRemoval: Equatable, Sendable {
 }
 
 extension Mode {
-    /// Whether this mode is one of the two Murmure writes at launch.
+    /// Whether this mode is one of `Mode.builtIns` -- Voice, repaired at every launch, or Prompt,
+    /// seeded once and never recreated.
     ///
-    /// By key, because the key is the file name and the file is what gets written back. A mode
-    /// renamed to `voice` **is** the one that comes back, whatever it now contains, which is the
-    /// behaviour rather than an approximation of it.
+    /// By key, because the key is the file name and the file is what gets written back for
+    /// Voice. A mode renamed to `voice` **is** the one that comes back, whatever it now contains,
+    /// which is the behaviour rather than an approximation of it.
     public var isBuiltIn: Bool {
         Mode.builtIns.contains { $0.key == key }
     }
 
+    /// Reset is Voice's word, because Voice is the only mode `createBuiltInsIfMissing` still
+    /// writes back at every launch. Prompt is seeded once and is otherwise an ordinary mode --
+    /// permanently deletable like any other, so it takes `.deletion` even though it is one of
+    /// `Mode.builtIns`.
     public var removal: ModeRemoval {
-        isBuiltIn ? .reset : .deletion
+        isProtected ? .reset : .deletion
     }
 
     /// The dialog. A removal is irreversible, so it always asks — and the message is the whole
@@ -271,22 +276,12 @@ extension Mode {
             ConfirmationPrompt(
                 title: "Reset \u{201C}\(name)\u{201D} to what Murmure ships?",
                 message:
-                    "\(name) is one of the modes Murmure writes at launch, so modes/\(key).json "
-                    + "comes back \(returnsImmediately ? "straight away" : "at the next launch") "
-                    + "with its original settings. What is lost is every change made to it, and "
-                    + "nothing brings those back.",
+                    "\(name) is the mode Murmure repairs at every launch, so modes/\(key).json "
+                    + "comes back straight away with its original settings. What is lost is "
+                    + "every change made to it, and nothing brings those back.",
                 confirmTitle: "Reset Mode",
                 cancelTitle: "Cancel")
         }
-    }
-
-    /// Whether the mode is back the instant its file is gone, or only once the app is relaunched.
-    ///
-    /// The difference is visible and worth a word in the dialog: reset `Prompt` and it is missing
-    /// from the list until Murmure is started again, where `Voice` never leaves it. Derived from
-    /// `loadAll()`'s own stand-in rule rather than restated, so the sentence cannot outlive it.
-    private var returnsImmediately: Bool {
-        key == Mode.voice.key
     }
 }
 

@@ -374,7 +374,6 @@ struct ModesPaneView: View {
         VStack(alignment: .leading, spacing: ModesLayout.messageSpacing) {
             messageText("This mode has no refiner, so it behaves exactly like Voice.")
             Button("Turn the refiner on") {
-                model.draft?.mode.llm.enabled = true
                 model.switchKind(model.draft?.mode.llm.api ?? .chat)
             }
             .buttonStyle(.bordered)

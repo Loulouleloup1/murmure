@@ -276,13 +276,13 @@ final class ModeEditingTests: XCTestCase {
 
     // MARK: - Deleting a built-in is a reset
 
-    /// A built-in cannot be deleted: `createBuiltInsIfMissing()` runs at **every** launch, so both
-    /// files are written again whatever happens to them. The button says what actually happens
-    /// rather than a word the app then contradicts.
+    /// Only Voice cannot be deleted: `createBuiltInsIfMissing()` repairs `voice.json` at **every**
+    /// launch, whatever happens to it. Prompt is seeded once and, once seeded, is an ordinary
+    /// mode -- permanently deletable, even though it is one of `Mode.builtIns`. The button says
+    /// what actually happens rather than a word the app then contradicts.
     func testRemovingABuiltInIsAResetAndRemovingAnyOtherModeIsADeletion() {
-        for mode in Mode.builtIns {
-            XCTAssertEqual(mode.removal, .reset, mode.key)
-        }
+        XCTAssertEqual(Mode.voice.removal, .reset)
+        XCTAssertEqual(Mode.prompt.removal, .deletion)
         XCTAssertEqual(Mode.voice.with { $0.key = "dictation" }.removal, .deletion)
     }
 
@@ -292,17 +292,18 @@ final class ModeEditingTests: XCTestCase {
         XCTAssertFalse(Mode.voice.with { $0.key = "voice-2" }.isBuiltIn)
     }
 
-    /// The dialog exists for its message, so the message is what is checked: the file it removes,
-    /// and whether the mode is back at once or only after a relaunch -- which is visible, since a
-    /// reset `Prompt` is missing from the list until then and `Voice` never is.
+    /// The dialog exists for its message, so the message is what is checked: Voice's reset names
+    /// its file and says it comes back straight away, and Prompt -- no longer a reset since it is
+    /// permanently deletable -- gets the deletion wording instead, promising nothing comes back.
     func testTheResetDialogSaysTheModeComesBackAndTheEditsDoNot() {
         let voice = Mode.voice.removalConfirmation
         XCTAssertTrue(voice.message.contains("modes/voice.json"), voice.message)
         XCTAssertTrue(voice.message.contains("straight away"), voice.message)
+        XCTAssertTrue(voice.message.contains("every change made to it"), voice.message)
 
         let prompt = Mode.prompt.removalConfirmation
-        XCTAssertTrue(prompt.message.contains("at the next launch"), prompt.message)
-        XCTAssertTrue(prompt.message.contains("every change made to it"), prompt.message)
+        XCTAssertTrue(prompt.message.contains("modes/prompt.json"), prompt.message)
+        XCTAssertTrue(prompt.message.contains("nothing brings it back"), prompt.message)
     }
 
     /// A deletion promises nothing comes back, and says the archive is untouched -- the one thing

@@ -13,9 +13,9 @@ final class AppState: ObservableObject {
     /// deleted by hand stops being offered.
     ///
     /// Seeded with the built-ins rather than left empty: `ModeStore.createBuiltInsIfMissing()`
-    /// rewrites exactly these at every launch, so this is what the folder contains until
-    /// `DictationController` reads it a few lines later. An empty menu would be a lie for that
-    /// instant, and a worse one if the read ever failed.
+    /// repairs Voice at every launch and seeds Prompt once, so this is what the folder contains
+    /// until `DictationController` reads it a few lines later. An empty menu would be a lie for
+    /// that instant, and a worse one if the read ever failed.
     @Published var availableModes: [Mode] = Mode.builtIns
 
     /// The mode chosen by hand in the menu, or nil for "automatic" -- rule 1 of spec §5, which

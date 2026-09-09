@@ -610,7 +610,10 @@ shows a notice row -- "This mode has no refiner, so it behaves exactly like Voic
 **Refiner kinds.** The API picker is relabelled as a *kind* segmented control: "Superwhisper S1
 (fixed-format cleanup)" and "General model (Gemma, Llama, …)". Switching kind resets the model and
 the instructions to that kind's own defaults, asking for confirmation first only when the
-instructions had been edited away from theirs. The Custom preset now ships with the refiner already
+instructions had been edited away from theirs. Re-selecting the kind already chosen is a no-op,
+guarded in the view's own binding rather than in the model. If the mode's stored model is not among
+the newly selected kind's choices, the model picker still lists it with a "(not usable with this
+kind)" caption rather than silently dropping it. The Custom preset now ships with the refiner already
 on, `.chat`, its instructions the same prose cleanup prompt a `.chat` kind switch lands on.
 
 **One icon list, not a list plus a separate Default tile.** The grid draws `ModeSymbol.library`'s

@@ -50,11 +50,13 @@ public enum ModesLayout {
     /// strip goes away rather than shrinking further.
     public static let backBarHeight: CGFloat = 34
 
-    /// The Icon field's grid (task 4): tiles per row. Six puts the grid's twelve tiles -- the
-    /// "Default" tile plus `ModeSymbol.library`'s eleven entries -- in two full rows -- a picker
-    /// whose last row trails off short reads as unfinished layout rather than as "these are all of
-    /// them", which is why `ModeSymbolTests` pins `library.count + 1` against this constant rather
-    /// than the two being free to drift apart.
+    /// The Icon field's grid (task 4): tiles per row. There is no separate "Default" tile -- the
+    /// grid draws `ModeSymbol.library`'s eleven entries once, in order, and the tile matching the
+    /// current mode's stage default carries the caption instead of standing apart from the list.
+    /// Six puts those eleven in two rows, the second one short by one -- a picker whose last row
+    /// trails off short reads as unfinished layout rather than as "these are all of them", which
+    /// is why `ModeSymbolTests.testTheLibraryFitsInTwoGridRows` pins the library's count against
+    /// this constant rather than the two being free to drift apart.
     public static let iconGridColumns = 6
 
     /// Between two icon tiles, in both directions. Tiles are `WindowLayout.sidebarTileSize`, the

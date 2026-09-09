@@ -308,8 +308,11 @@ protected-Voice lock row, the no-refiner notice, Context as `.help()` tooltips, 
 **Refiner kinds.** The API picker reads as a *kind* segmented control: "Superwhisper S1
 (fixed-format cleanup)" / "General model (Gemma, Llama, …)". Switching kind resets model and
 instructions to that kind's defaults, confirming first only when the instructions had been edited.
-`.chat`'s default instructions are a prose cleanup prompt, distinct from S1's control-fields-only
-line; the Custom preset ships the same prose text.
+Re-selecting the already-selected kind is a no-op -- guarded in `ModesPaneView`'s own binding, not
+in `ModesPaneModel.switchKind` itself, which does not defend against a same-value call. A stored
+model no longer accepted by the newly selected kind still shows in the picker, captioned "(not
+usable with this kind)" rather than disappearing. `.chat`'s default instructions are a prose cleanup
+prompt, distinct from S1's control-fields-only line; the Custom preset ships the same prose text.
 
 **Hardware-aware badges, refiner models only.** `HardwareProfile` (physical memory, chip name) and
 `ModelFit.classify(modelBytes:memoryBytes:)` (`.recommended` ≤ 45 % of memory, `.tight` ≤ 70 %,
@@ -331,6 +334,9 @@ the running app, not a test:
   called final.
 - The speech-model picker's missing badge is a deliberate gap, not an oversight, but it stays open
   until the speech listing carries sizes and a follow-up gives it one too.
+- A modes folder whose every `.json` was deleted by hand before this version first runs has no
+  `.seeded` marker either, so it is indistinguishable from a fresh install: Prompt gets reseeded.
+  Right by construction, not a bug, but worth this one line so it is not rediscovered as a surprise.
 
 ## Measured, and deliberately NOT shipped
 
