@@ -569,9 +569,10 @@ it does not have for them.
 
 **The heatmap rule.** 52 columns by 7 rows, Monday at the top rather than Sunday, month initials
 along the bottom axis. Each cell is one of five accent levels: level 0 (no dictation that day) is
-the lightest fill; level 1 is a dictation with no counted words (a row whose text was purged before
-the word-count migration, or genuinely zero words); levels 2 to 4 are quartiles of words relative
-to the busiest day inside the 52-week window. No hover tooltip in this version.
+the lightest fill; levels 1 to 4 are the four quartiles of words relative to the busiest day inside
+the 52-week window, and a day with dictations but no counted words (a row whose text was purged
+before the word-count migration, or genuinely zero words) also sits at level 1. No hover tooltip in
+this version.
 
 **The typing-baseline popover.** The gear on the Time saved card opens a popover: a sentence naming
 what it configures ("Typing speed used for the comparison"), a stepper and slider bound to the same
