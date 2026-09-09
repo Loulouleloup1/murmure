@@ -144,8 +144,8 @@ date, caption "All time"), and Top applications (up to five rows: app icon from
 name, count, a thin proportional bar).
 
 Empty state: when no counting row exists in the whole table, the pane shows a single
-`ContentUnavailableView` ("No dictation yet", "Press your shortcut and speak; your statistics will
-appear here"). When the period has no rows but all time does, the four figures show zero or a
+`ContentUnavailableView` ("No dictation yet", "Press your shortcut and speak. Your statistics will
+appear here."). When the period has no rows but all time does, the four figures show zero or a
 dash and the other cards keep their all-time content.
 
 ### 4.3 Refresh
