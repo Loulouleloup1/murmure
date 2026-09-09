@@ -255,6 +255,12 @@ struct ModesPaneView: View {
     /// it hears — then **Refiner** — the technical half, hidden entirely for `Voice`, which has
     /// none. Splitting the one long field list this way is what makes the editor legible to
     /// someone who has never opened it: the first card alone is a complete, usable mode.
+    ///
+    /// **`advancedButton` is drawn here, for every mode, not inside `refinerCard` (fix round 1,
+    /// MAJOR-1).** The advanced screen is not refiner-only -- it also holds Key, Endpoint and
+    /// Auto-activate (`advanced`) -- so a mode with no Refiner card, `Voice`, still needs its own
+    /// door to it, and `draft.messageElsewhere(from: .basic)` still needs somewhere on the basic
+    /// screen to say a Key or Endpoint problem is over there.
     @ViewBuilder
     private var editor: some View {
         if let draft = model.draft {
@@ -264,6 +270,7 @@ struct ModesPaneView: View {
                 if !draft.mode.isProtected {
                     refinerCard(draft)
                 }
+                advancedButton(draft)
                 actions(draft)
             }
             .padding(.horizontal, ModesLayout.rowPadding.horizontal)
@@ -313,10 +320,14 @@ struct ModesPaneView: View {
         }
     }
 
-    /// The technical half: the refiner's own kind and model, its instructions, what those two
-    /// plus Context actually send, and the door to the advanced screen. Hidden entirely for
-    /// `Voice` (there is no refiner to configure) -- the call site (`editor`) is what decides
-    /// that, so this function can assume `draft.mode.isProtected == false` throughout.
+    /// The technical half: the refiner's own kind and model, its instructions, and what those two
+    /// plus Context actually send. Hidden entirely for `Voice` (there is no refiner to configure)
+    /// -- the call site (`editor`) is what decides that, so this function can assume
+    /// `draft.mode.isProtected == false` throughout.
+    ///
+    /// **Does not draw `advancedButton` any more (fix round 1, MAJOR-1).** That button is not
+    /// refiner-only -- see `editor`'s own note -- so it moved back up to be drawn for every mode,
+    /// `Voice` included, rather than only for the modes that have a Refiner card at all.
     private func refinerCard(_ draft: ModeDraft) -> some View {
         HomeCard(title: "Refiner") {
             VStack(alignment: .leading, spacing: ModesLayout.fieldSpacing) {
@@ -344,7 +355,6 @@ struct ModesPaneView: View {
                 } else {
                     refinerOffNotice()
                 }
-                advancedButton(draft)
             }
         }
     }
@@ -486,9 +496,16 @@ struct ModesPaneView: View {
             .buttonStyle(.plain)
             .help(isDefault ? "Default" : symbol)
             if isDefault {
+                // `.fixedSize()` (fix round 1, MINOR): the grid column is
+                // `WindowLayout.sidebarTileSize` (22 pt) wide, narrower than "Default" at
+                // `.caption2` -- without it the caption would be proposed that 22 pt width and
+                // wrap to two lines, changing the row height of only this one column.
+                // `.fixedSize()` measures the text at its own natural width instead, so it stays
+                // one line even where that overflows the column.
                 Text("Default")
                     .font(.caption2)
                     .foregroundStyle(Color(role: .secondaryText))
+                    .fixedSize()
             }
         }
     }
@@ -752,13 +769,27 @@ struct ModesPaneView: View {
     /// mismatch `Mode.validationError` exists to catch at Save. `switchKind` is also what raises
     /// `model.kindSwitchPrompt` when instructions were actually edited, so going around it here
     /// would silently drop that confirmation.
+    ///
+    /// **The setter guards against a same-value set; `switchKind` itself does not (fix round 1,
+    /// MAJOR-2).** `switching(to:)` overwrites `llm.model` and `instructions` unconditionally, so
+    /// a Picker re-sending its already-selected segment -- possible on macOS's
+    /// `NSSegmentedControl`-backed control -- would silently replace a hand-written prompt with
+    /// nothing having actually changed. The guard belongs here rather than in `switchKind` because
+    /// "Turn the refiner on" (`refinerOffNotice`) relies on `switchKind` resetting unconditionally
+    /// even when `api` has not changed value.
+    ///
+    /// **The getter reads `model.draft` live, not the captured `draft` (fix round 1, NIT).** Every
+    /// sibling binding in this file (`text(_:)`, `flag(_:)`) reads the model's own published value
+    /// rather than the parameter passed in when the enclosing view was built, so this one now
+    /// matches them rather than being the one exception that could go stale.
     private func kindPicker(_ draft: ModeDraft) -> some View {
-        labelled("Refiner API", note: draft.mode.llm.api == .s1
-            ? "s1 takes a control line such as [Context: general], never written instructions."
-            : "chat takes written instructions as the system turn.") {
+        labelled("Refiner kind", note: nil) {
             Picker("", selection: Binding(
-                get: { draft.mode.llm.api },
-                set: { model.switchKind($0) })
+                get: { model.draft?.mode.llm.api ?? draft.mode.llm.api },
+                set: { newValue in
+                    guard newValue != model.draft?.mode.llm.api else { return }
+                    model.switchKind(newValue)
+                })
             ) {
                 Text(Mode.LLM.API.s1.title).tag(Mode.LLM.API.s1)
                 Text(Mode.LLM.API.chat.title).tag(Mode.LLM.API.chat)
@@ -804,6 +835,14 @@ struct ModesPaneView: View {
     /// every installed model regardless of kind would let this picker pick a name `Mode
     /// .validationError` never checks against `api` at all, so a mismatched pair would only ever
     /// surface as a bad refinement at dictation time.
+    ///
+    /// **"(not installed)" only when it is true (fix round 1, MINOR).** A model that Ollama does
+    /// list but that `api` cannot drive -- a `.chat` mode still naming an S1 build, or the
+    /// reverse -- is not what "not installed" says: it sits in `~/.ollama` and is simply the wrong
+    /// dialect for the kind currently picked. `model.ollamaModels` (the whole listing, unfiltered
+    /// by kind) is what tells the two apart; `refinerChoices(for:)` alone cannot, since a name it
+    /// excludes for being the wrong kind and a name genuinely absent from Ollama both fail its
+    /// membership test identically.
     private func refinerModelOptions(for api: Mode.LLM.API, currentValue: String) -> [PickerOption] {
         var options = model.refinerChoices(for: api).map { PickerOption(value: $0.name, label: $0.name) }
         if !options.contains(where: { $0.value == currentValue }) {
@@ -812,6 +851,10 @@ struct ModesPaneView: View {
                 label = "(none)"
             } else if model.ollamaUnreachableNote != nil {
                 label = currentValue
+            } else if model.ollamaModels.contains(where: {
+                OllamaProbe.tagged($0.name) == OllamaProbe.tagged(currentValue)
+            }) {
+                label = "\(currentValue) (not usable with this kind)"
             } else {
                 label = "\(currentValue) (not installed)"
             }
