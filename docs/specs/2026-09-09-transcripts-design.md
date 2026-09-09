@@ -258,4 +258,4 @@ consent sheet, progress, detail view, export and the suspension message.
 3. The model is the already-loaded dictation model (turbo) instead of `large-v3`: spike S2 showed
    turbo's French quality on long-form is good with zero repetition, a second model would double
    the download and compete for the Neural Engine, and the time-per-file matters more than the
-   2026-08-31 note assumed. To be confirmed by Louis at spec review.
+   2026-08-31 note assumed. Confirmed by Louis at spec review, 2026-09-09.
