@@ -9,6 +9,8 @@ public enum HomeLayout {
     public static let cardPadding: CGFloat = 16
     public static let gridSpacing: CGFloat = 12
     public static let figureFontSize: CGFloat = 30
+    /// Fixed height of the four top-row stat tiles, so the optional footnote never makes one taller.
+    public static let statCardHeight: CGFloat = 108
     public static let heatmapCellSize: CGFloat = 11
     public static let heatmapCellGap: CGFloat = 3
     /// Brightness of the accent hue for heatmap levels 1…4; level 0 uses the hairline role.

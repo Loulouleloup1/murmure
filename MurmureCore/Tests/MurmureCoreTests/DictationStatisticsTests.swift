@@ -133,6 +133,20 @@ final class DictationStatisticsTests: XCTestCase {
         XCTAssertEqual(stats.topApplications.first?.dictations, 2)
     }
 
+    func testApplicationsAccumulateWordsAndSpokenSeconds() {
+        let stats = compute([
+            row("2026-09-09T10:00:00+02:00", seconds: 30, final: 10, app: ("com.b", "Bravo")),
+            row("2026-09-09T10:01:00+02:00", seconds: 20, final: 5, app: ("com.b", "Bravo")),
+            row("2026-09-09T10:02:00+02:00", seconds: 60, final: 40, app: ("com.a", "Alpha")),
+        ])
+        let bravo = stats.topApplications.first { $0.bundleID == "com.b" }
+        XCTAssertEqual(bravo?.words, 15)
+        XCTAssertEqual(bravo?.spokenSeconds, 50)
+        let alpha = stats.topApplications.first { $0.bundleID == "com.a" }
+        XCTAssertEqual(alpha?.words, 40)
+        XCTAssertEqual(alpha?.spokenSeconds, 60)
+    }
+
     func testTopApplicationsIsCappedAtFive() {
         let rows = (0..<7).map { i in
             row("2026-09-09T10:0\(i):00+02:00", app: ("com.app\(i)", "App \(i)"))

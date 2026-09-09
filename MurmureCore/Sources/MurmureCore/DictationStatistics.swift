@@ -8,11 +8,15 @@ public struct DictationStatistics: Equatable, Sendable {
         public let bundleID: String
         public let name: String
         public let dictations: Int
+        public let words: Int
+        public let spokenSeconds: Double
 
-        public init(bundleID: String, name: String, dictations: Int) {
+        public init(bundleID: String, name: String, dictations: Int, words: Int, spokenSeconds: Double) {
             self.bundleID = bundleID
             self.name = name
             self.dictations = dictations
+            self.words = words
+            self.spokenSeconds = spokenSeconds
         }
     }
 
@@ -129,15 +133,18 @@ public struct DictationStatistics: Equatable, Sendable {
         }
 
         // Applications: distinct bundle ids, name taken from the most recent row, top 5 by count.
-        var byApp: [String: (name: String, count: Int, lastSeen: Date)] = [:]
+        var byApp: [String: (name: String, count: Int, words: Int, spokenSeconds: Double, lastSeen: Date)] = [:]
         for row in inPeriod {
             guard let bundleID = row.targetBundleID else { continue }
             let name = row.targetAppName ?? bundleID
+            let rowWords = row.finalWordCount ?? 0
             if let existing = byApp[bundleID] {
                 byApp[bundleID] = (row.startedAt > existing.lastSeen ? name : existing.name,
-                                   existing.count + 1, max(existing.lastSeen, row.startedAt))
+                                   existing.count + 1, existing.words + rowWords,
+                                   existing.spokenSeconds + row.durationSeconds,
+                                   max(existing.lastSeen, row.startedAt))
             } else {
-                byApp[bundleID] = (name, 1, row.startedAt)
+                byApp[bundleID] = (name, 1, rowWords, row.durationSeconds, row.startedAt)
             }
         }
         func isOrderedBefore(_ lhs: Application, _ rhs: Application) -> Bool {
@@ -145,7 +152,8 @@ public struct DictationStatistics: Equatable, Sendable {
             if lhs.name != rhs.name { return lhs.name < rhs.name }
             return lhs.bundleID < rhs.bundleID
         }
-        let top = byApp.map { Application(bundleID: $0.key, name: $0.value.name, dictations: $0.value.count) }
+        let top = byApp.map { Application(bundleID: $0.key, name: $0.value.name, dictations: $0.value.count,
+                                          words: $0.value.words, spokenSeconds: $0.value.spokenSeconds) }
             .sorted(by: isOrderedBefore)
             .prefix(5)
 

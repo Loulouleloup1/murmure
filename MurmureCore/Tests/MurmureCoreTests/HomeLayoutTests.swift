@@ -9,6 +9,7 @@ final class HomeLayoutTests: XCTestCase {
         XCTAssertEqual(HomeLayout.cardPadding, 16)
         XCTAssertEqual(HomeLayout.gridSpacing, 12)
         XCTAssertEqual(HomeLayout.figureFontSize, 30)
+        XCTAssertEqual(HomeLayout.statCardHeight, 108)
         XCTAssertEqual(HomeLayout.heatmapCellSize, 11)
         XCTAssertEqual(HomeLayout.heatmapCellGap, 3)
         XCTAssertEqual(HomeLayout.heatBrightness, [0.35, 0.55, 0.75, 1.0])

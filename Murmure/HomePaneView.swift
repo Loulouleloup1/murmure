@@ -15,13 +15,15 @@ struct HomePaneView: View {
                         figures(stats)
                         HeatmapCard(days: stats.heatmap, dictations: stats.heatmap.reduce(0) { $0 + $1.dictations })
                         HStack(alignment: .top, spacing: HomeLayout.gridSpacing) {
-                            HourProfileCard(hours: stats.hourProfile)
-                            StreakCard(streak: stats.streak)
+                            HourProfileCard(hours: stats.hourProfile).frame(maxHeight: .infinity)
+                            StreakCard(streak: stats.streak).frame(maxHeight: .infinity)
                         }
+                        .fixedSize(horizontal: false, vertical: true)
                         HStack(alignment: .top, spacing: HomeLayout.gridSpacing) {
-                            RecordsCard(records: stats.records)
-                            TopApplicationsCard(applications: stats.topApplications)
+                            RecordsCard(records: stats.records).frame(maxHeight: .infinity)
+                            TopApplicationsCard(applications: stats.topApplications).frame(maxHeight: .infinity)
                         }
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                     .frame(maxWidth: HomeLayout.contentMaxWidth)
                     .padding(HomeLayout.panePadding)
@@ -38,6 +40,7 @@ struct HomePaneView: View {
             }
         }
         .background(Color(role: .paneBackground))
+        .animation(.easeInOut(duration: 0.2), value: model.statistics?.period)
         .onAppear { model.reload() }
         .onChange(of: appState.historyRevision) { _, _ in model.reload() }
     }
