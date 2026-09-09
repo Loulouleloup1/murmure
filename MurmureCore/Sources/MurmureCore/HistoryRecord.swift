@@ -118,6 +118,11 @@ public struct HistoryRecord: Codable, Equatable, Sendable {
     /// input unchanged, which is the documented failure mode of a too-small model.
     public var refinedText: String?
     public var insertedCharacters: Int
+    /// Words in `rawTranscript`, counted by `WordCount` at archive time; nil for rows archived
+    /// before the counts existed whose text had already been purged.
+    public var rawWordCount: Int?
+    /// Words in the text that reached the target application (refined, else corrected, else raw).
+    public var finalWordCount: Int?
     public var targetBundleID: String?
     public var targetAppName: String?
     /// Relative to `recordings/`, never absolute (D7). `nil` once the audio has been purged --
@@ -146,6 +151,8 @@ public struct HistoryRecord: Codable, Equatable, Sendable {
         insertedCharacters: Int = 0,
         targetBundleID: String? = nil,
         targetAppName: String? = nil,
+        rawWordCount: Int? = nil,
+        finalWordCount: Int? = nil,
         audioFilename: String? = nil,
         transcriptionSeconds: Double? = nil,
         refinementSeconds: Double? = nil,
@@ -163,6 +170,8 @@ public struct HistoryRecord: Codable, Equatable, Sendable {
         self.correctedText = correctedText
         self.refinedText = refinedText
         self.insertedCharacters = insertedCharacters
+        self.rawWordCount = rawWordCount
+        self.finalWordCount = finalWordCount
         self.targetBundleID = targetBundleID
         self.targetAppName = targetAppName
         self.audioFilename = audioFilename

@@ -1198,4 +1198,86 @@ final class HistoryStoreTests: XCTestCase {
                 .contains("/tmp/murmure.sqlite")
         )
     }
+
+    // MARK: - Word counts
+
+    func testWordCountsSurviveTheRoundTripAndDefaultToNil() throws {
+        let store = try makeStore()
+        let counted = HistoryRecord(
+            startedAt: at("2026-09-02T09:00:00.000Z"), durationSeconds: 12, outcome: .inserted,
+            modeKey: "voice", modeName: "Voice", sttModel: "turbo",
+            rawTranscript: "un deux trois", refinedText: "Un, deux, trois.",
+            insertedCharacters: 16, rawWordCount: 3, finalWordCount: 3)
+        let uncounted = HistoryRecord(
+            startedAt: at("2026-09-02T09:01:00.000Z"), durationSeconds: 5, outcome: .inserted,
+            modeKey: "voice", modeName: "Voice", sttModel: "turbo")
+
+        let a = try store.insert(counted)
+        let b = try store.insert(uncounted)
+
+        XCTAssertEqual(try store.record(id: XCTUnwrap(a.id))?.rawWordCount, 3)
+        XCTAssertEqual(try store.record(id: XCTUnwrap(a.id))?.finalWordCount, 3)
+        XCTAssertNil(try store.record(id: XCTUnwrap(b.id))?.rawWordCount)
+        XCTAssertNil(try store.record(id: XCTUnwrap(b.id))?.finalWordCount)
+    }
+
+    func testMigratingAV2DatabaseBackfillsCountsOnlyWhereTextIsStillPresent() throws {
+        // Given -- a database migrated only up to v2 (the migrator is internal, hence @testable),
+        // with three rows written without the new columns
+        let queue = try DatabaseQueue(path: databaseURL.path)
+        try HistoryStore.migrator.migrate(queue, upTo: "v2-correctedText")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO dictation (startedAt, durationSeconds, outcome, modeKey, modeName, sttModel,
+                    rawTranscript, correctedText, refinedText, insertedCharacters)
+                VALUES ('2026-08-01T10:00:00.000Z', 20, 'inserted', 'voice', 'Voice', 'turbo',
+                    'un deux trois quatre', NULL, 'Un deux trois.', 14),
+                       ('2026-08-02T10:00:00.000Z', 20, 'inserted', 'voice', 'Voice', 'turbo',
+                    'cinq six', 'cinq six sept', NULL, 13),
+                       ('2026-07-01T10:00:00.000Z', 20, 'inserted', 'voice', 'Voice', 'turbo',
+                    NULL, NULL, NULL, 0)
+                """)
+        }
+
+        // When -- the store opens and runs v3
+        _ = try makeStore()
+
+        // Then
+        let counts = try inspect { db in
+            try Row.fetchAll(db, sql: "SELECT rawWordCount, finalWordCount FROM dictation ORDER BY startedAt")
+                .map { ($0["rawWordCount"] as Int?, $0["finalWordCount"] as Int?) }
+        }
+        XCTAssertEqual(counts.count, 3)
+        XCTAssertEqual(counts[0].0, nil); XCTAssertEqual(counts[0].1, nil)   // purged row stays nil
+        XCTAssertEqual(counts[1].0, 4); XCTAssertEqual(counts[1].1, 3)       // refined wins
+        XCTAssertEqual(counts[2].0, 2); XCTAssertEqual(counts[2].1, 3)       // corrected when no refined
+    }
+
+    func testStatisticsRowsCarryNoTextAndMatchTheRecords() throws {
+        let store = try makeStore()
+        let written = HistoryRecord(
+            startedAt: at("2026-09-03T14:42:03.123Z"), durationSeconds: 38.25, outcome: .copiedToClipboard,
+            modeKey: "prompt", modeName: "Prompt", sttModel: "turbo",
+            rawTranscript: "sept mots dans cette phrase de test", refinedText: "Sept.",
+            insertedCharacters: 5, targetBundleID: "com.example.editor", targetAppName: "Editor",
+            rawWordCount: 7, finalWordCount: 1)
+        _ = try store.insert(written)
+
+        let rows = try store.statisticsRows()
+
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].startedAt, written.startedAt)
+        XCTAssertEqual(rows[0].durationSeconds, 38.25)
+        XCTAssertEqual(rows[0].outcome, .copiedToClipboard)
+        XCTAssertEqual(rows[0].rawWordCount, 7)
+        XCTAssertEqual(rows[0].finalWordCount, 1)
+        XCTAssertEqual(rows[0].targetBundleID, "com.example.editor")
+        XCTAssertEqual(rows[0].targetAppName, "Editor")
+        XCTAssertEqual(rows[0].modeName, "Prompt")
+        // The projection type has no text field at all: this is a compile-time guarantee,
+        // asserted here by listing every stored property of the row.
+        let mirror = Mirror(reflecting: rows[0]).children.compactMap(\.label)
+        XCTAssertEqual(Set(mirror), ["startedAt", "durationSeconds", "outcome", "rawWordCount",
+                                     "finalWordCount", "targetBundleID", "targetAppName", "modeName"])
+    }
 }

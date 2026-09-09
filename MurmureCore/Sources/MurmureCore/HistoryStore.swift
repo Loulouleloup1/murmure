@@ -144,6 +144,29 @@ public struct HistoryStore: Sendable {
             try db.execute(sql: "INSERT INTO dictation_fts(dictation_fts) VALUES('rebuild')")
         }
 
+        // Additive again, same rule as v2: never edit `v1-dictation` or `v2-correctedText`.
+        migrator.registerMigration("v3-wordCounts") { db in
+            try db.alter(table: "dictation") { t in
+                t.add(column: "rawWordCount", .integer)
+                t.add(column: "finalWordCount", .integer)
+            }
+            // Backfill once, here, for rows whose text still exists. Rows already purged of text
+            // keep NULL counts and simply contribute no words. Uses the app's single counting rule.
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT id, rawTranscript, correctedText, refinedText FROM dictation
+                WHERE rawTranscript IS NOT NULL OR correctedText IS NOT NULL OR refinedText IS NOT NULL
+                """)
+            for row in rows {
+                let raw: String? = row["rawTranscript"]
+                let corrected: String? = row["correctedText"]
+                let refined: String? = row["refinedText"]
+                let final = refined ?? corrected ?? raw
+                try db.execute(
+                    sql: "UPDATE dictation SET rawWordCount = ?, finalWordCount = ? WHERE id = ?",
+                    arguments: [WordCount.count(raw), WordCount.count(final), row["id"] as Int64])
+            }
+        }
+
         return migrator
     }
 
@@ -300,6 +323,19 @@ public struct HistoryStore: Sendable {
                        OR refinedText IS NOT NULL
                     """
             ) ?? 0
+        }
+    }
+
+    /// Every row, without any text column, oldest first. Small (a few hundred kilobytes for
+    /// thousands of rows) and deliberately unfiltered: period and outcome filtering happen in
+    /// `DictationStatistics.compute`, where the local calendar is known.
+    public func statisticsRows() throws -> [DictationStatisticsRow] {
+        try dbQueue.read { db in
+            try DictationStatisticsRow.fetchAll(db, sql: """
+                SELECT startedAt, durationSeconds, outcome, rawWordCount, finalWordCount,
+                       targetBundleID, targetAppName, modeName
+                FROM dictation ORDER BY startedAt ASC
+                """)
         }
     }
 
