@@ -15,6 +15,9 @@ import SwiftUI
 /// below.
 struct MainWindowView: View {
     @ObservedObject var controller: WindowController
+    /// Home's own state, built once in `MurmureApp` for the same reason History is: it reads the
+    /// archive the controller opened and the `AppSettings` a dictation actually reads.
+    @ObservedObject var home: HomePaneModel
     /// History's own state, built once in `MurmureApp` because it owns a database connection and
     /// a search query that must survive the window being closed and reopened.
     @ObservedObject var history: HistoryPaneModel
@@ -204,6 +207,7 @@ struct MainWindowView: View {
     @ViewBuilder
     private var pane: some View {
         switch controller.section {
+        case .home: HomePaneView(model: home)
         case .history: HistoryPaneView(model: history)
         case .modes: ModesPaneView(model: modes)
         case .vocabulary: VocabularyPaneView(model: vocabulary)

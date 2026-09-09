@@ -48,6 +48,11 @@ struct MurmureApp: App {
     /// struct is re-created, and a plain stored object would be a new controller each time.
     @StateObject private var windowController: WindowController
 
+    /// Home's state: the computed statistics and the chosen period. A `StateObject` for the same
+    /// reason the others are — an `App` struct is re-created, and a plain stored object would
+    /// throw away the chosen period every time SwiftUI rebuilt the scene.
+    @StateObject private var homeModel: HomePaneModel
+
     /// History's state: the query, the rows, the selection. A `StateObject` for the same reason
     /// the window controller is one — an `App` struct is re-created, and a plain stored object
     /// would throw away Louis's search every time SwiftUI rebuilt the scene.
@@ -120,6 +125,8 @@ struct MurmureApp: App {
         // The archive is opened once, by the controller, and READ here (§5.4 rule 3): one
         // connection, one place that knows the real path. A second `HistoryStore` on the same
         // file would be a second migration runner against Louis's own archive.
+        _homeModel = StateObject(
+            wrappedValue: HomePaneModel(store: controller.history, settings: settings))
         _historyModel = StateObject(
             wrappedValue: HistoryPaneModel(
                 store: controller.history,
@@ -311,7 +318,7 @@ struct MurmureApp: App {
         // settings and the sixth -- History -- is the reason it gets opened (D3).
         Window("Murmure", id: WindowController.windowID) {
             MainWindowView(
-                controller: windowController, history: historyModel, modes: modesModel,
+                controller: windowController, home: homeModel, history: historyModel, modes: modesModel,
                 models: modelsModel, general: generalModel, advanced: advancedModel)
                 .environmentObject(appState)
         }
