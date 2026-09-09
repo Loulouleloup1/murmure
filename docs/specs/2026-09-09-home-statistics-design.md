@@ -31,11 +31,13 @@ Migration `v3-wordCounts` on table `dictation`, two nullable integer columns:
 Plain `ALTER TABLE ADD COLUMN`; no FTS rebuild (the counts are not searchable text). `HistoryRecord`
 gains the two `Int?` properties; the round-trip tests in `HistoryStoreTests` cover them.
 
-Rows are written with both counts at archive time (`DictationController.record`). A one-off
-backfill runs at launch after migration: every row whose counts are null and whose text is still
-present gets its counts computed and stored; rows already purged of text keep null counts and
-simply do not contribute words (they still contribute duration and dictation count). The backfill
-is idempotent and runs off the main actor.
+Rows are written with both counts at archive time (`DictationSession.archive`). A one-off
+backfill runs inside the `v3-wordCounts` migration itself, in the same transaction as the
+`ALTER TABLE`: every row whose text is still present gets its counts computed and stored; rows
+already purged of text keep null counts and simply do not contribute words (they still contribute
+duration and dictation count). A migration runs exactly once, so the backfill is idempotent by
+construction. Only rows of the last 30 days still carry text, so the one-off cost at first launch
+is a fraction of a second.
 
 ### 2.2 `WordCount`
 
