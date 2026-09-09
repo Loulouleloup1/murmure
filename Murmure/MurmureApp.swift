@@ -222,7 +222,7 @@ struct MurmureApp: App {
         // not conform. Wrapping it as a discarded `let` is the standard way to smuggle a side effect
         // past a result builder -- the same trick as `let _ = Self._printChanges()`.
         let _ = (appDelegate.windowController = windowController)
-        MenuBarExtra("Murmure", systemImage: appState.menuBarSymbol) {
+        MenuBarExtra {
             // Which mode the dictation in progress is running under -- readable while it runs,
             // because that is what decides whether what he is saying goes to the LLM. The
             // checkmarks below cannot answer it: with "Automatique" ticked, the app picks.
@@ -302,6 +302,12 @@ struct MurmureApp: App {
             Divider()
             Button(MenuText.quit) { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
+        } label: {
+            // The label, not the menu content, is what captures `openWindow`: it is the only view
+            // guaranteed to exist for the app's whole life, including while no window does --
+            // which is exactly when a Dock click needs the action `WindowController.reopen()` uses.
+            Label("Murmure", systemImage: appState.menuBarSymbol)
+                .background(OpenWindowCapture(controller: windowController))
         }
         .environmentObject(appState)
 
@@ -340,5 +346,20 @@ private struct OpenWindowMenuItem: View {
     var body: some View {
         Button(MenuText.openWindow) { controller.show(using: openWindow) }
             .keyboardShortcut(",")
+    }
+}
+
+/// Hands `WindowController` the `OpenWindowAction` it cannot read for itself -- it is not a view --
+/// so that a Dock-tile click can present the `Window` scene the same way this menu's item does.
+/// Attached to the menu bar label rather than any menu content: the label is on screen for the
+/// app's whole life, unlike the menu items, which SwiftUI builds only while the menu is open.
+/// Renders nothing; `Color.clear` is just a view for `.onAppear` to hang off.
+private struct OpenWindowCapture: View {
+    let controller: WindowController
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear
+            .onAppear { controller.register(openWindow: openWindow) }
     }
 }

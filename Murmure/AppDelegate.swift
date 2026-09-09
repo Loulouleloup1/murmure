@@ -17,24 +17,17 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var windowController: WindowController?
 
-    /// - If a window already exists (Louis closed it earlier this launch, then clicked the Dock
-    ///   icon again): front it directly and return `false` -- AppKit does not need to do anything
-    ///   else.
-    /// - If none exists yet: mark one as expected and return `true`, so AppKit's default reopen
-    ///   handling presents the `Window` scene itself; `WindowController.adopt(_:)` then fronts it
-    ///   because D17's guard now sees `wasAskedFor == true`.
+    /// Delegates entirely to `WindowController.reopen()`, which now handles both the "window
+    /// exists, even dormant" case and the "no window yet, but an `OpenWindowAction` was captured
+    /// from the menu bar label" case by presenting the scene itself -- so this no longer relies on
+    /// SwiftUI's default reopen behaviour for anything but the last-resort fallback inside
+    /// `reopen()` itself, for the case where no `OpenWindowAction` has been captured yet.
     ///
-    /// **This second path is unverified by any automated test.** There is no test bundle for
-    /// `Murmure/`, and nothing here is something an agent may click through without launching the
-    /// app on Louis's own desktop. It relies on SwiftUI's default reopen behaviour actually
-    /// presenting the `Window` scene when this method returns `true`, and is verified by the user's
-    /// own eye-gate: quit Murmure, launch it, click the Dock tile.
+    /// `reopen()` returning `true` means it handled everything; AppKit must not also do its default
+    /// reopen, hence the negation. Returning `false` means the fallback ran and AppKit's own
+    /// handling is still wanted.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard let windowController else { return true }
-        if windowController.frontIfOpen() {
-            return false
-        }
-        windowController.expectWindow()
-        return true
+        return !windowController.reopen()
     }
 }

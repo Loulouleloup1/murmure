@@ -35,6 +35,12 @@ final class WindowController: ObservableObject {
     private weak var window: NSWindow?
     private var observers: [NSObjectProtocol] = []
 
+    /// Captured once, at launch, from the menu bar label's environment -- see `OpenWindowCapture`
+    /// in `MurmureApp`. This is what lets `reopen()` present the `Window` scene itself instead of
+    /// relying on AppKit's default reopen handling, which does not re-present a `Window` scene
+    /// whose `NSWindow` already exists hidden.
+    private var openWindowAction: OpenWindowAction?
+
     /// Whether Louis has actually asked for the window during this launch.
     ///
     /// D17 — "the window does not open at launch, ever" — is not something SwiftUI offers a switch
@@ -82,6 +88,7 @@ final class WindowController: ObservableObject {
     /// on screen with no keyboard focus, and the first thing Louis types goes to the app he was
     /// in. macOS 14's `activate()` — not the deprecated `activate(ignoringOtherApps:)`.
     func show(using openWindow: OpenWindowAction) {
+        register(openWindow: openWindow)
         wasAskedFor = true
         setActivationPolicy(windowIsUp: true)
         openWindow(id: Self.windowID)
@@ -95,18 +102,39 @@ final class WindowController: ObservableObject {
         }
     }
 
-    /// Fronts the window the same way `show(using:)` does, but without an `OpenWindowAction` --
-    /// for `AppDelegate.applicationShouldHandleReopen`, which is not a view and cannot read one.
-    /// Returns whether there was a window to front: a Dock click while none exists yet (nothing
-    /// built this launch, or SwiftUI tore the last one down on close) has nothing here to do, and
-    /// the delegate falls back to `expectWindow()` instead.
-    func frontIfOpen() -> Bool {
-        guard let window else { return false }
-        wasAskedFor = true
-        setActivationPolicy(windowIsUp: true)
-        NSApp.activate()
-        window.makeKeyAndOrderFront(nil)
-        return true
+    /// Remembers the `OpenWindowAction` handed over from the menu bar label or the menu item, so
+    /// that `reopen()` can present the `Window` scene without needing a view of its own. Idempotent
+    /// -- called again on every relayout of the capturing view, and every menu item click.
+    func register(openWindow: OpenWindowAction) {
+        openWindowAction = openWindow
+    }
+
+    /// Handles a Dock-tile click (`AppDelegate.applicationShouldHandleReopen`), which is not a view
+    /// and cannot read `OpenWindowAction` from the environment. Returns whether the click was
+    /// handled here: `true` means AppKit's default reopen handling must not also run.
+    ///
+    /// Three cases, in order:
+    /// - A window already exists -- up, or dormant from `adopt(_:)`'s D17 guard having kept it
+    ///   rather than forgotten it -- so front it directly, the same way `show(using:)` does.
+    /// - No window, but the label's `onAppear` already captured an `OpenWindowAction` -- call
+    ///   `show(using:)` with it, which does everything `openWindow` in a view would have done.
+    /// - Neither -- the action has not been captured yet, which should not happen after launch but
+    ///   is not asserted against. Falls back to `expectWindow()` and returns `false`, the original
+    ///   behaviour that relies on SwiftUI's default reopen presenting the scene.
+    func reopen() -> Bool {
+        if let window {
+            wasAskedFor = true
+            setActivationPolicy(windowIsUp: true)
+            NSApp.activate()
+            window.makeKeyAndOrderFront(nil)
+            return true
+        }
+        if let openWindowAction {
+            show(using: openWindowAction)
+            return true
+        }
+        expectWindow()
+        return false
     }
 
     /// Marks a window as expected without opening one -- for the Dock-click case where none
@@ -126,15 +154,6 @@ final class WindowController: ObservableObject {
     func adopt(_ window: NSWindow) {
         guard window !== self.window else { return }
 
-        // D17. Nothing asked for this window, so it is AppKit or SwiftUI having decided to restore
-        // one. Ordered out rather than closed: `close()` runs a lifecycle SwiftUI may not expect
-        // this early, and `orderOut` leaves the scene able to present itself normally later.
-        guard wasAskedFor else {
-            log.debug("a window appeared unasked-for at launch -- ordered out (D17)")
-            window.orderOut(nil)
-            return
-        }
-
         releaseObservers()
         self.window = window
         window.minSize = NSSize(
@@ -149,6 +168,18 @@ final class WindowController: ObservableObject {
         }
 
         observe(window)
+
+        // D17. Nothing asked for this window, so it is AppKit or SwiftUI having decided to restore
+        // one. Kept dormant rather than forgotten -- it is `self.window` from here on, so a later
+        // Dock click or menu item fronts this same instance instead of asking SwiftUI to build a
+        // second one. Ordered out rather than closed: `close()` runs a lifecycle SwiftUI may not
+        // expect this early, and `orderOut` leaves the scene able to present itself normally later.
+        guard wasAskedFor else {
+            log.debug("a window appeared unasked-for at launch -- kept dormant, ordered out (D17)")
+            window.orderOut(nil)
+            return
+        }
+
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
     }
