@@ -178,4 +178,28 @@ final class AppSettingsTests: XCTestCase {
         // Then
         XCTAssertEqual(AppSettings(defaults: defaults).toggleHotkey, .defaultToggle)
     }
+
+    // MARK: - Typing speed and Home period
+
+    func testTypingSpeedDefaultsToFortyAndIsClampedBothWays() {
+        let settings = AppSettings(defaults: defaults)
+        XCTAssertEqual(settings.typingWordsPerMinute, 40)
+        settings.typingWordsPerMinute = 300
+        XCTAssertEqual(settings.typingWordsPerMinute, 120)
+        settings.typingWordsPerMinute = 5
+        XCTAssertEqual(settings.typingWordsPerMinute, 20)
+        settings.typingWordsPerMinute = 55
+        XCTAssertEqual(settings.typingWordsPerMinute, 55)
+        defaults.set(999, forKey: "typingWordsPerMinute")      // a hand-edited plist
+        XCTAssertEqual(settings.typingWordsPerMinute, 120)
+    }
+
+    func testHomePeriodDefaultsToAllTimeAndSurvivesAnUnknownValue() {
+        let settings = AppSettings(defaults: defaults)
+        XCTAssertEqual(settings.homeStatisticsPeriod, .allTime)
+        settings.homeStatisticsPeriod = .last7Days
+        XCTAssertEqual(settings.homeStatisticsPeriod, .last7Days)
+        defaults.set("fortnight", forKey: "homeStatisticsPeriod")
+        XCTAssertEqual(settings.homeStatisticsPeriod, .allTime)
+    }
 }

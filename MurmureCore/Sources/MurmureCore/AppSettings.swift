@@ -49,6 +49,8 @@ public struct AppSettings {
         static let pasteBehaviour = "pasteBehaviour"
         static let restoreClipboardAfterPaste = "restoreClipboardAfterPaste"
         static let toggleHotkey = "toggleHotkey"
+        static let typingWordsPerMinute = "typingWordsPerMinute"
+        static let homeStatisticsPeriod = "homeStatisticsPeriod"
     }
 
     private let defaults: UserDefaults
@@ -185,6 +187,38 @@ public struct AppSettings {
     // that does not exist is worse than a missing control, because it reports success. The JSON
     // field stays where it is, so no mode file on disk is invalidated, and an accessor here would
     // be the same dead control one layer down.
+
+    // MARK: - Home statistics
+
+    /// Typing speed the Home pane compares dictation against for "time saved". 40 wpm is the
+    /// common default of dictation apps; the user adjusts it from the pane. Clamped so a stray
+    /// value in the plist can never produce absurd figures.
+    public static let typingWordsPerMinuteRange = 20...120
+
+    public var typingWordsPerMinute: Int {
+        get {
+            guard defaults.object(forKey: Key.typingWordsPerMinute) != nil else { return 40 }
+            return min(max(defaults.integer(forKey: Key.typingWordsPerMinute),
+                           Self.typingWordsPerMinuteRange.lowerBound),
+                       Self.typingWordsPerMinuteRange.upperBound)
+        }
+        nonmutating set {
+            defaults.set(min(max(newValue, Self.typingWordsPerMinuteRange.lowerBound),
+                             Self.typingWordsPerMinuteRange.upperBound),
+                         forKey: Key.typingWordsPerMinute)
+        }
+    }
+
+    /// The window the Home pane shows by default. An unrecognised stored value reads as the
+    /// default, following ``pasteBehaviour``'s own rule.
+    public var homeStatisticsPeriod: StatisticsPeriod {
+        get {
+            guard let stored = defaults.string(forKey: Key.homeStatisticsPeriod),
+                  let period = StatisticsPeriod(rawValue: stored) else { return .allTime }
+            return period
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.homeStatisticsPeriod) }
+    }
 
     // MARK: - Derived
 
