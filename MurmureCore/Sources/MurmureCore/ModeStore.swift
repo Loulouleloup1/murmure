@@ -78,12 +78,19 @@ public struct ModeStore {
         self.report = report
     }
 
-    /// Writes the built-in modes that are not on disk yet. Run at every launch, not only the
-    /// first: a built-in deleted by hand comes back, which is how `voice.json` repairs itself.
+    /// Voice is repaired at every launch. Prompt is an example: seeded once, into a directory that
+    /// has never held any mode, and never again -- deleting it must stick. The marker records that
+    /// seeding happened; a directory that already has modes but no marker is an install from
+    /// before this rule and is marked without seeding.
     public func createBuiltInsIfMissing() throws {
-        for mode in Mode.builtIns
-        where !FileManager.default.fileExists(atPath: fileURL(for: mode.key).path) {
-            try save(mode)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let hadModes = !fileNames().filter { $0.hasSuffix(".json") }.isEmpty
+        if !FileManager.default.fileExists(atPath: seededMarkerURL.path) {
+            if !hadModes { try save(Mode.prompt) }
+            try Data().write(to: seededMarkerURL, options: .atomic)
+        }
+        if !FileManager.default.fileExists(atPath: fileURL(for: Mode.voice.key).path) {
+            try save(Mode.voice)
         }
     }
 
@@ -199,6 +206,12 @@ public struct ModeStore {
 
     private func fileURL(for key: String) -> URL {
         directory.appendingPathComponent("\(key).json")
+    }
+
+    /// Records that `createBuiltInsIfMissing` has already decided whether to seed Prompt -- so a
+    /// second launch never reseeds it after it was deleted on purpose.
+    private var seededMarkerURL: URL {
+        directory.appendingPathComponent(".seeded")
     }
 
     private func fileNames() -> [String] {

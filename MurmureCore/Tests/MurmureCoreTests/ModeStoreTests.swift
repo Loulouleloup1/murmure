@@ -44,7 +44,7 @@ final class ModeStoreTests: XCTestCase {
     func testFirstLaunchWritesTheTwoBuiltInsAndReadsThemBack() throws {
         try store.createBuiltInsIfMissing()
 
-        XCTAssertEqual(try fileNames(), ["prompt.json", "voice.json"])
+        XCTAssertEqual(try fileNames(), [".seeded", "prompt.json", "voice.json"])
         XCTAssertEqual(store.loadAll().sorted { $0.key < $1.key },
                        Mode.builtIns.sorted { $0.key < $1.key })
         XCTAssertEqual(problems, [])
@@ -57,10 +57,41 @@ final class ModeStoreTests: XCTestCase {
     func testFirstLaunchWritesNoFileForAModeThatNoLongerShips() throws {
         try store.createBuiltInsIfMissing()
 
-        XCTAssertEqual(try fileNames(), Mode.builtIns.map { "\($0.key).json" }.sorted())
+        XCTAssertEqual(try fileNames(), (Mode.builtIns.map { "\($0.key).json" } + [".seeded"]).sorted())
         for gone in ["message.json", "email.json"] {
             XCTAssertFalse(try fileNames().contains(gone), "\(gone) was recreated")
         }
+    }
+
+    /// Prompt is seeded once, into a directory that never held any mode, and never again --
+    /// deleting it must stick across launches.
+    func testPromptIsSeededOnceAndStaysDeleted() throws {
+        try store.createBuiltInsIfMissing()
+        XCTAssertTrue(store.loadAll().contains { $0.key == "prompt" })
+        let prompt = try XCTUnwrap(store.loadAll().first { $0.key == "prompt" })
+        try store.delete(ModeDraft(editing: prompt, modifiedAt: store.modificationDate(forKey: "prompt")))
+        try store.createBuiltInsIfMissing()   // next launch
+        XCTAssertFalse(store.loadAll().contains { $0.key == "prompt" })
+    }
+
+    /// Voice is repaired at every launch even though Prompt is no longer recreated after seeding.
+    func testVoiceIsStillRepairedAfterSeeding() throws {
+        try store.createBuiltInsIfMissing()
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("voice.json"))
+        try store.createBuiltInsIfMissing()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("voice.json").path))
+    }
+
+    /// A directory that already has a user mode but no marker: the marker is written, Prompt is
+    /// NOT added (it was deleted on purpose before this lot existed, or never wanted).
+    func testAnExistingInstallIsMarkedSeededWithoutReseedingPrompt() throws {
+        var custom = Mode.prompt
+        custom.key = "meeting"
+        custom.name = "Meeting"
+        try store.save(custom)
+        try store.createBuiltInsIfMissing()
+        XCTAssertFalse(store.loadAll().contains { $0.key == "prompt" })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent(".seeded").path))
     }
 
     func testASecondLaunchLeavesAHandEditedBuiltInAlone() throws {
