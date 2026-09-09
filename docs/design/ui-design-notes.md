@@ -588,6 +588,49 @@ error -- `HomePaneModel` keeps "nothing recorded yet" and "the archive could not
 separate published properties precisely so the pane can tell them apart rather than collapsing both
 into the same blank card grid.
 
+### Modes editor v2 -- shipped 2026-09-10
+
+Voice becomes protected rather than an ordinary file: its Identity card shows the glyph, a static
+name text and a `lock.fill`, captioned "Voice is the built-in dictation mode" -- no icon grid, no
+Refiner card at all (`ModesPaneView.identityCard`/`refinerCard`, the latter never drawn for Voice).
+Prompt stays an ordinary, deletable file, but it is now seeded once: a `.seeded` marker in
+`modes/` stops `ModeStore.createBuiltInsIfMissing` recreating it after a deliberate delete, while
+Voice keeps being repaired as before.
+
+**Two cards, not one long column.** The editor now reads `identityCard` (name, icon, language,
+shortcut, speech model) then, for every mode but Voice, `refinerCard` (kind, model, instructions or
+S1 controls, Context, a collapsed disclosure), then the actions row -- both `HomeCard` style, the
+same card language row 2 of the Home pane already established. The old "Refine the transcript"
+toggle is gone: every non-protected mode is required to carry a refiner
+(`ModeValidationError.refinerRequired`), so there is nothing left to toggle off. A mode saved
+before this rule shipped and found with the refiner off still loads; its Refiner card instead
+shows a notice row -- "This mode has no refiner, so it behaves exactly like Voice." -- with a
+"Turn the refiner on" button.
+
+**Refiner kinds.** The API picker is relabelled as a *kind* segmented control: "Superwhisper S1
+(fixed-format cleanup)" and "General model (Gemma, Llama, …)". Switching kind resets the model and
+the instructions to that kind's own defaults, asking for confirmation first only when the
+instructions had been edited away from theirs. The Custom preset now ships with the refiner already
+on, `.chat`, its instructions the same prose cleanup prompt a `.chat` kind switch lands on.
+
+**One icon list, not a list plus a separate Default tile.** The grid draws `ModeSymbol.library`'s
+eleven glyphs once; whichever tile matches the mode's own stage default carries a small "Default"
+caption, is treated as selected both when `symbol` is nil and when it already matches, and always
+stores `nil` on tap. Context's three descriptions moved off the row and into `.help()` tooltips,
+freeing the row to sit as one compact line of three toggles. The transcript preview is now inside a
+collapsed "What the refiner receives" disclosure rather than sitting open by default. Delete is
+absent for Voice, both from the row-lookup rule that already hid it for a mode being created and
+now from the mode's own protection.
+
+**Hardware-aware badges, refiner models only.** A `HardwareProfile` (physical memory, chip name)
+classifies each installed Ollama model against the current Mac via `ModelFit` -- "Recommended for
+this Mac" (≤ 45 % of memory), "Tight on this Mac" (≤ 70 %), or "Too large for this Mac" -- shown as
+a small caption under each row of the Refiner model picker. The speech-model picker carries no
+badge in this lot: the speech listing does not carry model sizes yet.
+
+Full design in `docs/specs/2026-09-09-modes-editor-v2-design.md`; what actually shipped vs the plan
+is in `docs/plans/2026-09-backlog.md` §10.
+
 ---
 
 ## 6. On-disk mode schema vs the Murmure spec

@@ -5,13 +5,13 @@ final class ModeSymbolTests: XCTestCase {
     /// Pinned against `ModesLayout.iconGridColumns`: the grid is meant to end on a full row, and
     /// a library whose count is not a multiple of the column count would leave a short last row.
     ///
-    /// **`+ 1`, not the bare count** (review, lot 3a leftovers, item 2): the grid itself
-    /// (`ModesPaneView.iconPicker`) draws one more tile than `library` has entries -- the "Default"
-    /// tile that clears `symbol` back to nil -- so it is `library.count + 1` that has to land on a
-    /// full row, not `library.count` alone. Eleven library entries plus that one tile is twelve,
-    /// exactly two rows of six.
-    func testTheLibraryFillsAWholeNumberOfGridRows() {
-        XCTAssertEqual((ModeSymbol.library.count + 1) % ModesLayout.iconGridColumns, 0)
+    /// The grid (`ModesPaneView.iconPicker`) draws exactly one tile per library entry since the
+    /// Modes editor v2 -- the stage-default glyph carries the "Default" caption instead of a
+    /// separate tile -- so eleven entries fill two rows of six with one empty cell at the end.
+    /// Pinned as "at most two rows": a twelfth glyph would still fit, a thirteenth starts a third.
+    func testTheLibraryFitsInTwoGridRows() {
+        XCTAssertLessThanOrEqual(ModeSymbol.library.count, 2 * ModesLayout.iconGridColumns)
+        XCTAssertGreaterThan(ModeSymbol.library.count, ModesLayout.iconGridColumns)
         XCTAssertEqual(ModeSymbol.library.count, 11)
     }
 

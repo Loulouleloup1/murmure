@@ -53,7 +53,8 @@ excludes S1. `RefinementPreview` keeps rendering "What the refiner receives", co
 
 Two cards in the inspector, both `HomeCard` style:
 
-1. **Identity** — name, icon, language, shortcut, speech model (with the badge of §6). For Voice, name
+1. **Identity** — name, icon, language, shortcut, speech model (no badge in this lot — §6 governs
+   refiner models only; the speech listing does not know sizes yet). For Voice, name
    and icon are shown read-only with a lock glyph and the caption "Voice is the built-in dictation
    mode".
 2. **Refiner** — kind (segmented), model, then either the S1 controls or the prompt editor, then

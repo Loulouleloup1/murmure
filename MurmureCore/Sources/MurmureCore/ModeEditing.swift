@@ -65,12 +65,19 @@ extension ModeValidationError {
         case .invalidLLMEndpoint, .llmEndpointIsNotARoot: .llmEndpoint
         case .emptyLLMModel: .llmModel
         case .emptyInstructions, .instructionsAreNotControlFields: .instructions
-        // These two are `editorValidationError`'s, not `Mode.validationError`'s -- `ModeDraft`
-        // still reads the latter here, so neither is reachable through this property today. The
-        // mapping exists only to keep this switch exhaustive per its own rule above. Tasks 5-6 of
-        // this lot route `.protectedField` and `.refinerRequired` to their own places in the
-        // editor -- the Identity card and the Refiner card respectively -- rather than under a
-        // `ModeField`; the mapping here is a placeholder until then, not the real destination.
+        // These two are `editorValidationError`'s, not `Mode.validationError`'s -- `message(for:)`
+        // below still reads the latter, so neither ever reaches a field through this property;
+        // the mapping below exists only to keep this switch exhaustive per its own rule above,
+        // not to route anything. Tasks 5-6 gave both errors their own place in the editor instead:
+        // `.protectedField` is guarded before it can fire -- the Identity card shows Voice's name
+        // and symbol read-only with a lock glyph, so there is nothing left to edit into the
+        // invalid state -- and when `ModeStore.save()` throws it anyway it surfaces as the
+        // generic save-failure banner (`writeProblem`), the same path any other write failure
+        // takes. `.refinerRequired` reaches the Refiner card the same way for a legacy
+        // refiner-off file, but the card's own notice row -- "This mode has no refiner, so it
+        // behaves exactly like Voice." with a "Turn the refiner on" button -- checks
+        // `mode.llm.enabled` directly rather than waiting for a save attempt, so in practice the
+        // notice is what a person sees.
         case .protectedField: .name
         case .refinerRequired: .instructions
         }

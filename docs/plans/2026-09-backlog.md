@@ -284,6 +284,54 @@ stored before purge -- it is not); "equivalent to N novels" lines; weekly recaps
 rollup table (unneeded while rows survive purge; revisit if row deletion is ever added); a hover
 tooltip on the heatmap in V1.
 
+## 10. Modes editor v2 — CLOSED 2026-09-10
+
+**What.** Voice becomes protected (`Mode.isProtected`, name and symbol locked, no refiner section,
+still configurable speech model/language/shortcut/Advanced); Prompt is seeded once and stays
+deletable (a `.seeded` marker in `modes/` stops it being recreated); a refiner is mandatory for
+every non-protected mode (`ModeValidationError.refinerRequired`), a legacy refiner-off file still
+loads and gets a notice instead; the Custom preset ships with the refiner already on. Full design
+in `docs/specs/2026-09-09-modes-editor-v2-design.md`.
+
+**Files.** `MurmureCore/Sources/MurmureCore/`: `Mode.swift` (`isProtected`,
+`editorValidationError(original:)`, `ModeValidationError.protectedField`/`.refinerRequired`,
+`Mode.LLM.API.title`/`.defaultModel`/`.defaultInstructions`/`.accepts(modelName:)`,
+`Mode.switching(to:)`), `HardwareProfile.swift`, `ModelFit.swift` (both new), `ModeSymbol.swift`
+(`isStageDefault(_:for:)`), `ModesLayout.swift` (`cardSpacing`), `ModeStore.swift` (once-only
+Prompt seeding, the protection guard on `delete`), `ModeEditing.swift` (`ModePreset.all` drops
+Voice). `Murmure/`: `ModesPaneModel.swift` (`hardware`, `fit(forRefiner:)`, `refinerChoices(for:)`,
+`recommendedRefiner(for:)`, `canDeleteDraft`, the kind-switch state machine), `ModesPaneView.swift`
+(two `HomeCard`s -- Identity, Refiner -- the single icon list, the hardware-fit badges, the
+protected-Voice lock row, the no-refiner notice, Context as `.help()` tooltips, the collapsed
+"What the refiner receives" disclosure).
+
+**Refiner kinds.** The API picker reads as a *kind* segmented control: "Superwhisper S1
+(fixed-format cleanup)" / "General model (Gemma, Llama, …)". Switching kind resets model and
+instructions to that kind's defaults, confirming first only when the instructions had been edited.
+`.chat`'s default instructions are a prose cleanup prompt, distinct from S1's control-fields-only
+line; the Custom preset ships the same prose text.
+
+**Hardware-aware badges, refiner models only.** `HardwareProfile` (physical memory, chip name) and
+`ModelFit.classify(modelBytes:memoryBytes:)` (`.recommended` ≤ 45 % of memory, `.tight` ≤ 70 %,
+else `.tooLarge`) drive a caption per row of the Refiner model picker -- "Recommended for this
+Mac" / "Tight on this Mac" / "Too large for this Mac". The speech-model picker carries none in
+this lot: the speech listing does not know sizes yet (spec §5/§6).
+
+**What is measured.** The MurmureCore package total after this lot: 1392 tests, 0 failures.
+
+**Open / eye-gate.** None of the following blocked closing the lot; all four need Louis's eye on
+the running app, not a test:
+- The kind segmented control's two long titles at the picker's minimum window width (720 pt) may
+  truncate rather than wrap.
+- The "Default" caption under the stage-default icon tile got `.fixedSize()` against a 22 pt grid
+  column in the review fix round; whether it still visually fits was not checked by launching the
+  app.
+- Moving Context's three descriptions from printed text to `.help()` tooltips is a design call
+  (discoverability vs a cleaner row) that reads right on paper but wants a look before it is
+  called final.
+- The speech-model picker's missing badge is a deliberate gap, not an oversight, but it stays open
+  until the speech listing carries sizes and a follow-up gives it one too.
+
 ## Measured, and deliberately NOT shipped
 
 **A logits bias on the vocabulary list** (`docs/benchmarks/2026-09-vocabulary-logits-bias.md`,
