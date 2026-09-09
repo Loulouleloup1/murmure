@@ -1,7 +1,8 @@
 import Foundation
 
-/// The figures behind the Home pane: counts, applications and time saved for a given period, plus
-/// placeholders for the heatmap/hour-profile/streak/records the next task fills in.
+/// The figures behind the Home pane: counts, applications and time saved for the selected period,
+/// the 52-week heatmap, the hour profile, and the streaks and records -- the last four always
+/// computed over all time regardless of the period the figures and applications use.
 public struct DictationStatistics: Equatable, Sendable {
     public struct Application: Equatable, Sendable {
         public let bundleID: String

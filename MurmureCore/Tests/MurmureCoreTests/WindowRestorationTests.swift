@@ -25,7 +25,7 @@ final class WindowRestorationTests: XCTestCase {
     // MARK: - The section
 
     /// The very first launch, and every launch after a section was removed in a later lot.
-    func testNothingStoredOpensOnHistory() {
+    func testNothingStoredOpensOnHome() {
         XCTAssertEqual(restoration.section, .home)
     }
 
@@ -41,10 +41,10 @@ final class WindowRestorationTests: XCTestCase {
     }
 
     /// **The one that matters.** A section renamed or removed in a later lot leaves every window
-    /// last closed on it holding a name that no longer exists. It has to resolve to History and
+    /// last closed on it holding a name that no longer exists. It has to resolve to Home and
     /// not to nothing: a window with no selection and an empty detail pane looks exactly like a
     /// bug, and the user's first move would be to quit and reopen, which changes nothing.
-    func testASectionNameThatNoLongerExistsOpensOnHistory() {
+    func testASectionNameThatNoLongerExistsOpensOnHome() {
         defaults.set("statistics", forKey: "windowSection")
 
         XCTAssertEqual(restoration.section, .home)
@@ -52,7 +52,7 @@ final class WindowRestorationTests: XCTestCase {
 
     /// A value of the right type but the wrong shape, and a value of the wrong type entirely.
     /// Both are reachable through a hand-run `defaults write`.
-    func testAnEmptyOrNonsenseSectionEntryOpensOnHistory() {
+    func testAnEmptyOrNonsenseSectionEntryOpensOnHome() {
         defaults.set("", forKey: "windowSection")
         XCTAssertEqual(restoration.section, .home)
 

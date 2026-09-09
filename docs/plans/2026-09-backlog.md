@@ -240,6 +240,50 @@ specifically so this regression cannot come back unnoticed.
 
 ---
 
+## 9. Home statistics pane — CLOSED 2026-09-09
+
+**What.** A Home pane, first in the sidebar and the fallback both a fresh install and an
+unrecognised stored section land on (`WindowSection.home`, `WindowSection.fallback`), showing what
+a person gets out of dictating: average WPM, total words, distinct applications and time saved
+against a typing baseline for a chosen period (7 days, 30 days, 12 months, all time), a 52-week
+activity heatmap, an hour-of-day profile, current and longest streaks, personal records, and the
+top five applications. Full design in `docs/specs/2026-09-09-home-statistics-design.md`.
+
+**Files.** `MurmureCore/Sources/MurmureCore/`: `DictationStatisticsRow.swift` (the text-free
+projection), `DictationStatistics.swift` (the one pure `compute` function -- figures, heatmap, hour
+profile, streaks, records), `StatisticsPeriod.swift`, `StatisticsFormatting.swift` (display
+strings, pinned rounding), `HomeLayout.swift` (layout constants, pinned by `HomeLayoutTests`),
+`WordCount.swift`. `Murmure/`: `HomePaneModel.swift` (thin -- loads on appear and on
+`historyRevision`, computes off the main actor, publishes), `HomePaneView.swift`,
+`HomeCards.swift`. `HistoryStore.swift` carries the migration and `statisticsRows()`.
+
+**The v3 migration.** `v3-wordCounts` adds two nullable integer columns to `dictation`
+(`rawWordCount`, `finalWordCount`) with a plain `ALTER TABLE ADD COLUMN` -- no FTS rebuild, the
+counts are not searchable text. A one-off backfill runs inside the same migration transaction:
+every row whose text is still present gets its counts computed and stored; a row already purged of
+text keeps null counts and simply contributes no words (it still contributes duration and
+dictation count). A migration runs exactly once, so the backfill is idempotent by construction, and
+because only the last 30 days of rows still carry text at all, the one-off cost at first launch is
+a fraction of a second.
+
+**Counting rules.** Only `inserted` and `copiedToClipboard` rows count; failures, cancels and
+"nothing heard" are excluded from every figure though still visible in History. Words: sum of
+`finalWordCount` (null counts contribute zero) -- `refinedText` if present, else `correctedText`,
+else `rawTranscript`. Average WPM is a weighted average (total raw words over total spoken
+minutes), never a mean of per-row speeds, and a dash when spoken time is zero. Time saved is
+`finalWordCount / typingWPM − durationSeconds / 60` summed over rows with a final count, may be
+negative, and rows without a final count are excluded rather than dragging the figure down with
+duration alone. The heatmap always covers the last 52 weeks ending today regardless of the period
+picker; streaks and records are always all-time; the four figures and top applications follow the
+picker. The screen says so next to each card.
+
+**What is measured.** The MurmureCore package total after this lot: 1366 tests, 0 failures.
+
+**What is deliberately not shipped.** The raw-versus-refined delta widget (would need the diff
+stored before purge -- it is not); "equivalent to N novels" lines; weekly recaps and badges; a
+rollup table (unneeded while rows survive purge; revisit if row deletion is ever added); a hover
+tooltip on the heatmap in V1.
+
 ## Measured, and deliberately NOT shipped
 
 **A logits bias on the vocabulary list** (`docs/benchmarks/2026-09-vocabulary-logits-bias.md`,
@@ -275,6 +319,8 @@ rather than a gradient: `mdi` 3 077 occurrences, median words ×2.54, decode tim
 
 ## Open
 
+- **The next chantier is Transcripts** (YouTube/X video transcription and local file transcription)
+  -- see `docs/specs/2026-09-09-transcripts-design.md`.
 - ~~**`Mode.stt.model` holds a display name from a different namespace than the engine's variant id.**~~
   Replaced by `SpeechModelReference` (`owner/name/variant`, the Hugging Face form): `ModeStore`
   migrates an old mode file on load, `WhisperKitEngine` and the Models pane both read the one

@@ -50,6 +50,7 @@ final class HomePaneModel: ObservableObject {
                 result = nil
                 failure = error.localizedDescription
             }
+            guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self, self.generation == expected else { return }
                 self.statistics = result

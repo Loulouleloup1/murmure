@@ -148,6 +148,14 @@ final class DictationStatisticsTests: XCTestCase {
         XCTAssertEqual(stats.topApplications.map(\.name), ["New Name"])
     }
 
+    func testTwoApplicationsTiedOnCountAndNameAreOrderedByBundleIDAscending() {
+        let stats = compute([
+            row("2026-09-09T10:00:00+02:00", app: ("com.z", "Same")),
+            row("2026-09-09T10:01:00+02:00", app: ("com.a", "Same")),
+        ])
+        XCTAssertEqual(stats.topApplications.map(\.bundleID), ["com.a", "com.z"])
+    }
+
     // MARK: Heatmap
 
     func testHeatmapRunsFromTheMondayFiftyOneWeeksAgoToToday() {

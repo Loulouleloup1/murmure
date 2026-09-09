@@ -12,6 +12,14 @@ final class StatisticsFormattingTests: XCTestCase {
         XCTAssertEqual(StatisticsFormatting.minutes(-75), "−1h 15min")
     }
 
+    /// A negative value that rounds to zero minutes is shown as a plain "0 min", not "−0 min" --
+    /// the negative zero is deliberately swallowed. One tick further, `-0.6` rounds away from zero
+    /// to a whole minute and does carry the sign, with U+2212 rather than a hyphen-minus.
+    func testMinutesSwallowsNegativeZeroButSignsARoundedWholeMinute() {
+        XCTAssertEqual(StatisticsFormatting.minutes(-0.4), "0 min")
+        XCTAssertEqual(StatisticsFormatting.minutes(-0.6), "−1 min")
+    }
+
     func testWordsPerMinuteIsAWholeNumberOrADash() {
         XCTAssertEqual(StatisticsFormatting.wordsPerMinute(nil), "—")
         XCTAssertEqual(StatisticsFormatting.wordsPerMinute(141.6), "142")

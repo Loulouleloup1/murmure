@@ -22,7 +22,7 @@ final class WindowSectionTests: XCTestCase {
     /// D3 on its own, because it is the decision the order exists to carry: History is the
     /// section with a daily reason to be opened, right after the Home overview, and the other
     /// five are opened when something changes.
-    func testHistoryIsFirst() {
+    func testHistoryIsSecond() {
         XCTAssertEqual(WindowSection.allCases.dropFirst().first, .history)
     }
 
@@ -96,6 +96,7 @@ final class WindowSectionTests: XCTestCase {
     /// the name the selected section is filed under, and a rename forgets which section the window
     /// was left on. A test that read the constant back off the enum would agree with any rename.
     func testTheStorageNamesAreTheOnesTheyAlreadyHave() {
+        XCTAssertEqual(WindowSection.home.rawValue, "home")
         XCTAssertEqual(WindowSection.history.rawValue, "history")
         XCTAssertEqual(WindowSection.modes.rawValue, "modes")
         XCTAssertEqual(WindowSection.vocabulary.rawValue, "vocabulary")
@@ -106,7 +107,7 @@ final class WindowSectionTests: XCTestCase {
 
     /// Not `.general`, which is what a settings window would fall back to. Six of the seven are
     /// settings and Home is the overview.
-    func testTheFallbackSectionIsHistory() {
+    func testTheFallbackSectionIsHome() {
         XCTAssertEqual(WindowSection.fallback, .home)
     }
 

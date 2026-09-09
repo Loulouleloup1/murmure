@@ -1998,6 +1998,28 @@ final class DictationSessionTests: XCTestCase {
         XCTAssertEqual(record.rawWordCount, 3)
         XCTAssertEqual(record.finalWordCount, 3)
     }
+
+    /// The vocabulary's find→replace pass runs before the refiner (spec §4.5) and can itself
+    /// change the word count between `rawTranscript` and `correctedText` -- exercised here in
+    /// Voice mode, which has no refiner, so `correctedText` is the only rung `finalWordCount` can
+    /// come from besides the raw transcript.
+    func testAVocabularyCorrectionChangesTheFinalWordCountInVoiceMode() async throws {
+        let recording = SpyRecording()
+        let vocabulary = FakeVocabulary(entries: [VocabularyEntry(term: "trois", replacement: "trois quatre")])
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("un deux trois")),
+            inserter: SpyInserter(), refiner: SpyRefiner(mode: .voice, answer: { $0 }),
+            recording: recording,
+            vocabulary: vocabulary,
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        let record = try XCTUnwrap(recording.records.last)
+        XCTAssertEqual(record.rawWordCount, 3)
+        XCTAssertEqual(record.finalWordCount, 4)
+    }
 }
 
 /// Records what it was asked to play. A copy of `CueFeedbackTests`'s own spy rather than a shared

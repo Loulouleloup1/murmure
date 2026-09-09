@@ -548,6 +548,45 @@ speech models it shows are the same snapshot `ModesPaneModel` already loaded for
 See `docs/plans/2026-09-backlog.md` §8 for the model-gating rule, the extraction contract, and the
 two real conversations this was verified against.
 
+### Home statistics pane -- shipped 2026-09-09
+
+Murmure's actual Home, replacing the onboarding-checklist/changelog idea sketched under §1 above
+with the stats-only reading of Superwhisper's reference: a vertical scroll of cards on
+`Color(role: .paneBackground)`, cards themselves on `Color(role: .cardBackground)` with the usual
+hairline. A period picker (segmented control -- 7 days, 30 days, 12 months, All time) sits opposite
+the pane title in the top row and persists across launches.
+
+**The card grid, in row order.** Row 1: four `StatCard`s side by side -- Average WPM, Words,
+Applications, Time saved -- each a big figure with a small label underneath; the Time saved card
+carries a small gear button. Row 2: the heatmap, full width, one card. Row 3: two cards side by
+side, Hour profile and Streak. Row 4: two cards side by side, Records and Top applications.
+
+**The period rule.** The four figures in row 1 and the Top applications card follow the period
+picker. Two cards never do: the heatmap always covers the last 52 weeks ending today regardless of
+the picker, and the Streak and Records cards are always computed over all time. Both cards say so
+in their own caption, next to the figures, rather than leaving the period picker to imply a scope
+it does not have for them.
+
+**The heatmap rule.** 52 columns by 7 rows, Monday at the top rather than Sunday, month initials
+along the bottom axis. Each cell is one of five accent levels: level 0 (no dictation that day) is
+the lightest fill; level 1 is a dictation with no counted words (a row whose text was purged before
+the word-count migration, or genuinely zero words); levels 2 to 4 are quartiles of words relative
+to the busiest day inside the 52-week window. No hover tooltip in this version.
+
+**The typing-baseline popover.** The gear on the Time saved card opens a popover: a sentence naming
+what it configures ("Typing speed used for the comparison"), a stepper and slider bound to the same
+value, and a closing sentence stating the formula in words -- time to type the words at that speed,
+minus time actually spent speaking. Changing the value recomputes Time saved immediately, in the
+same popover session.
+
+**The empty state and the error state.** When no counting dictation exists anywhere in the table,
+the whole pane collapses to a single centred `ContentUnavailableView` ("No dictation yet", one line
+of guidance) rather than a grid of cards showing zeroes. When the archive itself cannot be read,
+the pane shows a second, distinct `ContentUnavailableView` ("Statistics unavailable") naming the
+error -- `HomePaneModel` keeps "nothing recorded yet" and "the archive could not be read" as two
+separate published properties precisely so the pane can tell them apart rather than collapsing both
+into the same blank card grid.
+
 ---
 
 ## 6. On-disk mode schema vs the Murmure spec
