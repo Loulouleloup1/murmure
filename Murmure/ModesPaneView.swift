@@ -69,6 +69,22 @@ struct ModesPaneView: View {
         } message: { prompt in
             Text(prompt.message)
         }
+        // A third loss, the same shape as the one above: switching a mode's refiner kind resets
+        // `instructions` to the new kind's own default, and that is implicit exactly when what is
+        // on screen is not what the draft was opened with (`ModesPaneModel.switchKind(_:)`'s own
+        // guard). Same alert shape, same confirm/cancel pair.
+        .alert(
+            model.kindSwitchPrompt?.title ?? "",
+            isPresented: Binding(
+                get: { model.kindSwitchPrompt != nil },
+                set: { if !$0 { model.cancelKindSwitch() } }),
+            presenting: model.kindSwitchPrompt
+        ) { prompt in
+            Button(prompt.confirmTitle, role: .destructive) { model.confirmKindSwitch() }
+            Button(prompt.cancelTitle, role: .cancel) { model.cancelKindSwitch() }
+        } message: { prompt in
+            Text(prompt.message)
+        }
         // The drafting sheet's own model is held on `ModesPaneModel` (`draftingModel`) rather than
         // built inside this closure -- a closure rebuilding it on every state change would throw
         // away the conversation as it was typed. `isPresented` only mirrors whether that model
@@ -235,71 +251,124 @@ struct ModesPaneView: View {
 
     // MARK: - The editor, inline in the row
 
-    /// Every field visible, none hidden (task 3): name, icon, language, speech model, the refiner
-    /// as one block (enabled, API, model), instructions, what it actually sends, then context --
-    /// in that order, because that is the order a reader needs them to understand a mode: what it
-    /// is called, what it looks like, what it hears, what cleans it up, and only then the two
-    /// things that decide what the cleanup step is actually told (the words and the background).
-    ///
-    /// `shortcutRow`, between Language and Speech model, is the one addition backlog §7 left open:
-    /// `Mode.hotkey` was wired underneath with no editor field, and this is that field.
+    /// Two cards (task 6), beginner-facing first: **Identity** — what a mode is called and what
+    /// it hears — then **Refiner** — the technical half, hidden entirely for `Voice`, which has
+    /// none. Splitting the one long field list this way is what makes the editor legible to
+    /// someone who has never opened it: the first card alone is a complete, usable mode.
     @ViewBuilder
     private var editor: some View {
         if let draft = model.draft {
-            VStack(alignment: .leading, spacing: ModesLayout.fieldSpacing) {
+            VStack(alignment: .leading, spacing: ModesLayout.cardSpacing) {
                 hairline
-                field("Name", text: text(\.name), placeholder: "Voice")
-                iconPicker(draft)
+                identityCard(draft)
+                if !draft.mode.isProtected {
+                    refinerCard(draft)
+                }
+                actions(draft)
+            }
+            .padding(.horizontal, ModesLayout.rowPadding.horizontal)
+            .padding(.bottom, ModesLayout.rowPadding.vertical + 4)
+        }
+    }
+
+    /// What a beginner needs and nothing else: name, icon, language, shortcut, speech model.
+    ///
+    /// **`Voice` is read-only here.** Its name and icon are fixed (``Mode/isProtected``), so the
+    /// row shows the name as plain text beside a lock rather than an editable field that would
+    /// refuse every keystroke; the caption says why rather than leaving the reader to discover it
+    /// by trying. Everything below that row -- language, shortcut, speech model -- stays editable:
+    /// `isProtected` only guards `name` and `symbol` (`Mode.editorValidationError`).
+    private func identityCard(_ draft: ModeDraft) -> some View {
+        HomeCard(title: "Identity") {
+            VStack(alignment: .leading, spacing: ModesLayout.fieldSpacing) {
+                if draft.mode.isProtected {
+                    protectedNameRow(draft)
+                } else {
+                    field("Name", text: text(\.name), placeholder: "Voice")
+                    iconPicker(draft)
+                }
                 languagePicker(draft)
                 shortcutRow(draft)
                 speechModelPicker(draft)
+            }
+        }
+    }
 
-                // The one switch that changes what the mode *is*, which is why it is here and not
-                // on the advanced screen: it decides whether what Louis says reaches a language
-                // model at all, and it is what the row's second badge is drawn from.
-                toggle("Refine the transcript", isOn: flag(\.llm.enabled))
+    /// `Voice`'s own Name row: its glyph and name as static text, a lock, and the caption that
+    /// says why nothing here can be typed into. Stands in for both the Name field and the icon
+    /// grid at once -- there is nothing to pick when there is nothing to change.
+    private func protectedNameRow(_ draft: ModeDraft) -> some View {
+        labelled("Name", note: "Voice is the built-in dictation mode") {
+            HStack(spacing: 8) {
+                Image(systemName: draft.mode.symbolName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(role: .secondaryText))
+                Text(draft.mode.name)
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(Color(role: .primaryText))
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color(role: .secondaryText))
+            }
+        }
+    }
 
+    /// The technical half: the refiner's own kind and model, its instructions, what those two
+    /// plus Context actually send, and the door to the advanced screen. Hidden entirely for
+    /// `Voice` (there is no refiner to configure) -- the call site (`editor`) is what decides
+    /// that, so this function can assume `draft.mode.isProtected == false` throughout.
+    private func refinerCard(_ draft: ModeDraft) -> some View {
+        HomeCard(title: "Refiner") {
+            VStack(alignment: .leading, spacing: ModesLayout.fieldSpacing) {
                 if draft.mode.llm.enabled {
-                    // Moved here from the advanced screen (task 3): "for each mode I want to see
-                    // ... its refiner model" was read as the whole refiner block, api included --
-                    // a mode's dialect is not machinery the way its endpoint is, it is half of
-                    // what "Instructions" even means (``Mode/LLM/API/s1``).
-                    apiPicker(draft)
+                    kindPicker(draft)
                     refinerModelPicker(draft)
                     // The note is the fix for Louis opening `Prompt`, reading
                     // `"[Context: general]"` and concluding there was no prompt at all: under
-                    // `api: .s1` this field is a control line the model copies rather than reads,
-                    // and that has to be readable right here, not only in `apiPicker`'s own note.
+                    // `api: .s1` this field is a control line the model copies rather than
+                    // reads, and that has to be readable right here.
                     field("Instructions", text: text(\.instructions),
                           placeholder: draft.mode.llm.api == .s1
                               ? "[Context: general]" : "Clean up the transcript.",
                           note: draft.mode.llm.api == .s1
                               ? "A control line for the s1 model (bracketed fields only, e.g. "
-                                  + "\u{201C}[Context: general]\u{201D}) -- the model copies this "
-                                  + "into its answer instead of following it."
-                              : "The written prompt sent to the refiner model as its system turn.",
+                                  + "\u{201C}[Context: general]\u{201D}) -- the model copies "
+                                  + "this into its answer instead of following it."
+                              : "The written prompt sent to the refiner model as its system "
+                                  + "turn.",
                           lines: 2...6)
-                }
-                // Outside the `if`, deliberately: `RefinementPreview.render` has its own branch
-                // for `llm.enabled == false` (`RefinementPreview.noRefinerText`), and a preview
-                // nested inside this guard would never draw it -- Voice, the daily mode, would
-                // show no preview at all rather than the one sentence that answers the question
-                // "what does this mode send" (review, lot 3a, item 1). Between Instructions and
-                // Context, matching the brief's own field order -- what the preview shows is the
-                // Instructions field's own content plus whichever Context toggles are on, so it
-                // reads as the answer to "what does Instructions actually produce", sitting
-                // between the field that feeds it and the toggles that also feed it.
-                previewBlock(draft)
-
-                if draft.mode.llm.enabled {
                     contextGroup(draft)
+                    DisclosureGroup("What the refiner receives") {
+                        previewBlock(draft)
+                    }
+                } else {
+                    refinerOffNotice()
                 }
-
                 advancedButton(draft)
-                actions(draft)
             }
-            .padding(.horizontal, ModesLayout.rowPadding.horizontal)
-            .padding(.bottom, ModesLayout.rowPadding.vertical + 4)
+        }
+    }
+
+    /// A loaded mode other than `Voice` can still have `llm.enabled == false` -- files predating
+    /// spec §3's "a mode without a refiner IS Voice" rule, or one somebody switched off by hand --
+    /// and removing the old toggle (task 6) took away the one control that turned it back on.
+    /// This notice is that control's replacement: it says what the mode does today and offers the
+    /// one press that fixes it, rather than leaving Louis to find `llm.enabled` in the JSON.
+    ///
+    /// `switchKind(draft.mode.llm.api)` after setting the flag: turning the refiner on with no
+    /// installed model and no instructions would save a mode `Mode.validationError` refuses the
+    /// moment Save is pressed, so the button lands the draft on that api's own recommended model
+    /// and default instructions in the same motion -- the identical reset a kind switch already
+    /// gives when nothing was typed yet (``ModesPaneModel/switchKind(_:)``).
+    private func refinerOffNotice() -> some View {
+        VStack(alignment: .leading, spacing: ModesLayout.messageSpacing) {
+            messageText("This mode has no refiner, so it behaves exactly like Voice.")
+            Button("Turn the refiner on") {
+                model.draft?.mode.llm.enabled = true
+                model.switchKind(model.draft?.mode.llm.api ?? .chat)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
     }
 
@@ -309,12 +378,14 @@ struct ModesPaneView: View {
     /// itself calls, so this can never show a system turn a real dictation would not actually
     /// send. Rebuilt on every edit: `RefinementPreview` is a pure function of `draft.mode`, so
     /// there is nothing to cache and nothing that can go stale while the field is being typed in.
+    ///
+    /// **No heading of its own (task 6).** It used to draw "What the refiner receives" itself;
+    /// now it is always shown wrapped in a `DisclosureGroup` carrying that exact title
+    /// (`refinerCard`), and a second copy here would repeat the label the disclosure's own
+    /// chevron already names.
     private func previewBlock(_ draft: ModeDraft) -> some View {
         let preview = RefinementPreview.render(mode: draft.mode)
         return VStack(alignment: .leading, spacing: ModesLayout.messageSpacing) {
-            Text("What the refiner receives")
-                .font(.system(size: 12, design: .rounded))
-                .foregroundStyle(Color(role: .secondaryText))
             ScrollView {
                 VStack(alignment: .leading, spacing: ModesLayout.fieldSpacing) {
                     ForEach(Array(preview.turns.enumerated()), id: \.offset) { _, turn in
@@ -357,83 +428,69 @@ struct ModesPaneView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The Icon field (task 4): a grid of `ModeSymbol.library`'s twelve tiles, the same tile the
-    /// sidebar draws for a section (`MainWindowView.row(_:)`) -- one rounded square, one glyph,
-    /// coloured by whether it is the one in use. The tile matching `Mode.symbolName` -- the glyph
-    /// this mode actually draws everywhere, `symbol` when set and the stage default otherwise -- is
-    /// always the one shown selected, so the grid never reads as "nothing chosen" for a mode that
-    /// has never had its icon touched.
+    /// The Icon field (task 4, single-list task 6): a grid of `ModeSymbol.library`'s eleven
+    /// tiles, the same tile the sidebar draws for a section (`MainWindowView.row(_:)`) -- one
+    /// rounded square, one glyph, coloured by whether it is the one in use.
     ///
-    /// **A first "Default" tile, ahead of the twelve.** Without it, picking any tile here was a
-    /// one-way door -- nothing in the grid could ever set `symbol` back to nil, so a mode explored
-    /// out of curiosity would keep an explicit icon it never meant to keep (review, lot 3a, item
-    /// 10). Its own glyph is the stage-derived default computed the same way ``ModeStage`` computes
-    /// it for a nil `symbol` -- not `draft.mode.symbolName`, which would just echo back whatever is
-    /// currently picked -- so the tile keeps showing what tapping it will produce, not what is
-    /// already selected. It reads selected exactly when `symbol` is nil.
+    /// **One list, not the library plus a separate "Default" tile (task 6, spec §5).** The tile
+    /// equal to this mode's own stage default (``ModeSymbol/isStageDefault(_:for:)``, `mic.fill`
+    /// for a transcribe-only mode, `sparkles` for a refining one) carries a small "Default"
+    /// caption under it, and tapping IT clears `symbol` back to nil rather than setting it to its
+    /// own name -- so the grid still has exactly one way back to "nothing chosen", it is just the
+    /// tile that already reads as the default rather than a thirteenth tile ahead of it.
     private func iconPicker(_ draft: ModeDraft) -> some View {
         let columns = Array(
             repeating: GridItem(.fixed(WindowLayout.sidebarTileSize), spacing: ModesLayout.iconGridSpacing),
             count: ModesLayout.iconGridColumns)
-        let stageDefault = draft.mode.llm.enabled
-            ? ModeStage.refinement.symbolName : ModeStage.transcription.symbolName
+        let stage: ModeStage = draft.mode.llm.enabled ? .refinement : .transcription
         return labelled("Icon", note: nil) {
             LazyVGrid(columns: columns, alignment: .leading, spacing: ModesLayout.iconGridSpacing) {
-                defaultIconTile(stageDefault, isSelected: draft.mode.symbol == nil)
                 ForEach(ModeSymbol.library, id: \.self) { symbol in
-                    iconTile(symbol, isSelected: symbol == draft.mode.symbolName)
+                    iconTile(symbol, for: stage, draft: draft)
                 }
             }
         }
-    }
-
-    /// The one tile that does not pick an entry from `ModeSymbol.library` -- it clears `symbol`
-    /// back to nil, handing the glyph back to whatever `ModeStage` derives. `stageGlyph` is drawn
-    /// on it regardless of the mode's current `symbol`, so the tile always previews what tapping it
-    /// will produce, and `.help` says "Default" rather than the glyph's own SF Symbol name, since
-    /// unlike every other tile this one is not that glyph so much as a rule that computes one.
-    private func defaultIconTile(_ stageGlyph: String, isSelected: Bool) -> some View {
-        let palette: (tile: WindowRole, glyph: WindowRole) = isSelected
-            ? (.materialTile, .materialGlyph)
-            : (.machineryTile, .machineryGlyph)
-        return Button {
-            model.draft?.mode.symbol = nil
-        } label: {
-            RoundedRectangle(cornerRadius: WindowLayout.chipCornerRadius, style: .continuous)
-                .fill(Color(role: palette.tile))
-                .frame(width: WindowLayout.sidebarTileSize, height: WindowLayout.sidebarTileSize)
-                .overlay {
-                    Image(systemName: stageGlyph)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color(role: palette.glyph))
-                }
-        }
-        .buttonStyle(.plain)
-        .help("Default")
     }
 
     /// One tile of the grid. Selected uses the accent (`WindowRole.materialTile`), the same role
     /// `MainWindowView` gives a *material* sidebar section -- unselected is the neutral machinery
     /// tile: not a dimmer accent, because the split has to read as a kind (chosen vs not), not as
     /// an emphasis (`WindowPalette.token(for:)`'s own reasoning for the same two roles).
-    private func iconTile(_ symbol: String, isSelected: Bool) -> some View {
+    ///
+    /// **The stage-default tile is selected on two conditions, every other tile on one.** `symbol
+    /// == nil` reads as "this mode has never picked one, so its glyph is whatever the stage
+    /// derives" -- which is this exact tile -- so it has to show selected then too, not only when
+    /// `symbol` happens to equal its own name explicitly. Tapping it stores `nil`, never its own
+    /// name, so the grid keeps exactly one way back to "nothing chosen" without a thirteenth tile.
+    private func iconTile(_ symbol: String, for stage: ModeStage, draft: ModeDraft) -> some View {
+        let isDefault = ModeSymbol.isStageDefault(symbol, for: stage)
+        let isSelected = isDefault
+            ? (draft.mode.symbol == nil || draft.mode.symbol == symbol)
+            : draft.mode.symbol == symbol
         let palette: (tile: WindowRole, glyph: WindowRole) = isSelected
             ? (.materialTile, .materialGlyph)
             : (.machineryTile, .machineryGlyph)
-        return Button {
-            model.draft?.mode.symbol = symbol
-        } label: {
-            RoundedRectangle(cornerRadius: WindowLayout.chipCornerRadius, style: .continuous)
-                .fill(Color(role: palette.tile))
-                .frame(width: WindowLayout.sidebarTileSize, height: WindowLayout.sidebarTileSize)
-                .overlay {
-                    Image(systemName: symbol)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color(role: palette.glyph))
-                }
+        return VStack(spacing: 2) {
+            Button {
+                model.draft?.mode.symbol = isDefault ? nil : symbol
+            } label: {
+                RoundedRectangle(cornerRadius: WindowLayout.chipCornerRadius, style: .continuous)
+                    .fill(Color(role: palette.tile))
+                    .frame(width: WindowLayout.sidebarTileSize, height: WindowLayout.sidebarTileSize)
+                    .overlay {
+                        Image(systemName: symbol)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color(role: palette.glyph))
+                    }
+            }
+            .buttonStyle(.plain)
+            .help(isDefault ? "Default" : symbol)
+            if isDefault {
+                Text("Default")
+                    .font(.caption2)
+                    .foregroundStyle(Color(role: .secondaryText))
+            }
         }
-        .buttonStyle(.plain)
-        .help(symbol)
     }
 
     /// The Language field, as a picker over what WhisperKit's decoder actually accepts
@@ -564,9 +621,16 @@ struct ModesPaneView: View {
     /// The word is the mode's, not this file's: a built-in cannot be deleted, because Murmure
     /// writes it again at every launch, so its button says `Reset…` and its dialog says what
     /// actually goes (`ModeRemoval`). Both carry the ellipsis because both stop to ask.
+    ///
+    /// **Also absent for `Voice` (task 6, `model.canDeleteDraft`).** `Voice` is a built-in too, so
+    /// without this guard it would draw the same `Reset…` button every other built-in gets --
+    /// which is not what protects it: `Mode.isProtected` is a stronger rule than "this mode ships
+    /// with the app", and this row has to draw that stronger rule, not the weaker one `removal`
+    /// alone would give it.
     private func actions(_ draft: ModeDraft) -> some View {
         HStack(spacing: 8) {
-            if let key = draft.previousKey, let mode = model.modes.first(where: { $0.key == key }) {
+            if model.canDeleteDraft,
+               let key = draft.previousKey, let mode = model.modes.first(where: { $0.key == key }) {
                 Button(mode.removal.buttonTitle) { model.askToRemove(mode) }
                     .buttonStyle(.plain)
                     .font(.system(size: 12, design: .rounded))
@@ -673,23 +737,34 @@ struct ModesPaneView: View {
     /// The `api` discriminator, as the two wire protocols it names — never as a model.
     ///
     /// Only meaningful when the refiner is on, because with it off the field decides nothing --
-    /// which is why the call site (`editor`'s own `if draft.mode.llm.enabled`) is what decides
-    /// whether this is drawn at all. No second guard here: a duplicate `if` around the whole body
-    /// only ever agrees with the one the caller already checked (review, lot 3a, item 9).
+    /// which is why the call site (`refinerCard`'s own `if draft.mode.llm.enabled`) is what
+    /// decides whether this is drawn at all. No second guard here: a duplicate `if` around the
+    /// whole body only ever agrees with the one the caller already checked (review, lot 3a, item
+    /// 9).
     ///
     /// A segmented picker rather than a toggle: these are two dialects, not on and off, and a
     /// third one is a case in `Mode.LLM.API` rather than a redesign here.
-    private func apiPicker(_ draft: ModeDraft) -> some View {
+    ///
+    /// **Bound through `model.switchKind(_:)`, not straight into the draft (task 6).** A kind
+    /// switch resets `llm.model` and `instructions` to that kind's own defaults
+    /// (`Mode.switching(to:)`) -- writing `api` directly here would change the wire protocol and
+    /// leave the model and instructions of the OTHER kind sitting under it, which is exactly the
+    /// mismatch `Mode.validationError` exists to catch at Save. `switchKind` is also what raises
+    /// `model.kindSwitchPrompt` when instructions were actually edited, so going around it here
+    /// would silently drop that confirmation.
+    private func kindPicker(_ draft: ModeDraft) -> some View {
         labelled("Refiner API", note: draft.mode.llm.api == .s1
             ? "s1 takes a control line such as [Context: general], never written instructions."
             : "chat takes written instructions as the system turn.") {
-            Picker("", selection: api) {
-                Text("chat").tag(Mode.LLM.API.chat)
-                Text("s1").tag(Mode.LLM.API.s1)
+            Picker("", selection: Binding(
+                get: { draft.mode.llm.api },
+                set: { model.switchKind($0) })
+            ) {
+                Text(Mode.LLM.API.s1.title).tag(Mode.LLM.API.s1)
+                Text(Mode.LLM.API.chat.title).tag(Mode.LLM.API.chat)
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 140)
         }
     }
 
@@ -717,14 +792,20 @@ struct ModesPaneView: View {
         return options
     }
 
-    /// Same reasoning as ``speechModelOptions(currentValue:)``, over Ollama's own listing instead
-    /// of the speech-model store -- with one more distinction that store never needs: **unreachable
-    /// is not the same fact as "not installed".** When `model.ollamaUnreachableNote` is set, Ollama
-    /// was never actually asked, so the fallback item names the stored value plain, with no
-    /// "(not installed)" suffix -- the same line `ModelInventory`'s own `.undetermined` (a probe
-    /// that could not be run) draws against `.absent` (a probe that ran and said no).
-    private func refinerModelOptions(currentValue: String) -> [PickerOption] {
-        var options = model.ollamaModels.map { PickerOption(value: $0.name, label: $0.name) }
+    /// Same reasoning as ``speechModelOptions(currentValue:)``, over `model.refinerChoices(for:)`
+    /// instead of the speech-model store -- with one more distinction that store never needs:
+    /// **unreachable is not the same fact as "not installed".** When `model.ollamaUnreachableNote`
+    /// is set, Ollama was never actually asked, so the fallback item names the stored value plain,
+    /// with no "(not installed)" suffix -- the same line `ModelInventory`'s own `.undetermined` (a
+    /// probe that could not be run) draws against `.absent` (a probe that ran and said no).
+    ///
+    /// **Limited to the current kind (task 6).** `refinerChoices(for:)` already filters
+    /// `ollamaModels` to what `api` can drive (`Mode.LLM.API.accepts(modelName:)`) -- offering
+    /// every installed model regardless of kind would let this picker pick a name `Mode
+    /// .validationError` never checks against `api` at all, so a mismatched pair would only ever
+    /// surface as a bad refinement at dictation time.
+    private func refinerModelOptions(for api: Mode.LLM.API, currentValue: String) -> [PickerOption] {
+        var options = model.refinerChoices(for: api).map { PickerOption(value: $0.name, label: $0.name) }
         if !options.contains(where: { $0.value == currentValue }) {
             let label: String
             if currentValue.isEmpty {
@@ -757,20 +838,40 @@ struct ModesPaneView: View {
     }
 
     /// The Refiner model field, as a picker over Ollama's own `/api/tags` listing
-    /// (`ModesPaneModel.ollamaModels`). When Ollama could not be reached at all, the picker still
-    /// holds the mode's stored value (`refinerModelOptions`'s fallback) and the note below names
-    /// why, in `OllamaFailure`'s own wording -- the same sentence a dictation failure would show,
-    /// so there are not two vocabularies for one server being unreachable.
+    /// (`ModesPaneModel.ollamaModels`), limited to the current kind
+    /// (`ModesPaneModel.refinerChoices(for:)`). When Ollama could not be reached at all, the
+    /// picker still holds the mode's stored value (`refinerModelOptions`'s fallback) and the note
+    /// below names why, in `OllamaFailure`'s own wording -- the same sentence a dictation failure
+    /// would show, so there are not two vocabularies for one server being unreachable.
+    ///
+    /// **Each row carries its own fit badge (task 6, spec §6).** `model.fit(forRefiner:)` is nil
+    /// for the one fallback row that is not actually one of `ollamaModels` -- the mode's stored
+    /// value when it is not installed -- so that row alone draws no badge, which is correct: there
+    /// is no size to classify for a model Ollama never reported.
     private func refinerModelPicker(_ draft: ModeDraft) -> some View {
-        let options = refinerModelOptions(currentValue: draft.mode.llm.model)
+        let options = refinerModelOptions(for: draft.mode.llm.api, currentValue: draft.mode.llm.model)
         return labelled("Refiner model", note: model.ollamaUnreachableNote) {
             Picker("", selection: text(\.llm.model)) {
                 ForEach(options) { option in
-                    Text(option.label).tag(option.value)
+                    refinerModelRow(option).tag(option.value)
                 }
             }
             .labelsHidden()
             .pickerStyle(.menu)
+        }
+    }
+
+    /// One row of the Refiner model picker: the name, and -- when `model.fit(forRefiner:)` has an
+    /// answer -- a small badge naming how this model sits against this Mac's own memory.
+    private func refinerModelRow(_ option: PickerOption) -> some View {
+        HStack(spacing: 6) {
+            Text(option.label)
+            if let fit = model.fit(forRefiner: option.value) {
+                Spacer(minLength: 8)
+                Label(fit.label, systemImage: fit.symbolName)
+                    .font(.caption2)
+                    .foregroundStyle(Color(role: .secondaryText))
+            }
         }
     }
 
@@ -779,32 +880,33 @@ struct ModesPaneView: View {
     /// from whatever `Instructions` holds plus whichever of these is on -- which is why this sits
     /// right under that field rather than on the advanced screen where it used to live.
     ///
+    /// **A compact row, not a stacked field (task 6).** Three independent switches used to cost
+    /// three full `labelled` rows -- a label column and a description each -- which is more room
+    /// than three yes/no questions need once the whole editor is two cards instead of one long
+    /// list. Each toggle keeps its label (`ContextSource.label`) beside its switch and its
+    /// description (`ContextSource.description`) as a `.help` tooltip rather than a printed line --
+    /// still one hover away, not gone.
+    ///
     /// **Shown and DISABLED under `api: .s1`, never hidden.** An `s1` mode's instructions are a
     /// control line the model copies into its answer rather than reads (`Mode/LLM/API/s1`), so
     /// there is nowhere for a selection, a clipboard or an app name to go -- `RefinementRequest`
     /// already refuses to fold them in for that api. Hiding the row would read as a missing
     /// feature; disabling it with a reason says what it is instead: a control that does nothing
-    /// here, not a control that was never built.
-    ///
-    /// Each toggle carries its own one-line description (task 2, `ContextSource.description`):
-    /// what is captured, when, and how the refiner sees it -- the answer to "does this actually do
-    /// anything", read right where the toggle is rather than worked out by trial and error. The
-    /// reason all three are disabled under s1 is shared too (`ContextSource.s1DisabledReason`), so
-    /// the sentence in the view and the one a test in `MurmureCore` pins can never say two
-    /// different things about the same api.
+    /// here, not a control that was never built. The reason itself is shared with a test in
+    /// `MurmureCore` (`ContextSource.s1DisabledReason`), so the sentence in the view and the one
+    /// that test pins can never say two different things about the same api.
     private func contextGroup(_ draft: ModeDraft) -> some View {
         let disabledForS1 = draft.mode.llm.api == .s1
-        return VStack(alignment: .leading, spacing: ModesLayout.fieldSpacing) {
-            // The three labels come from `ContextSource.label` rather than being typed again here
-            // -- this file used to spell the third one "Frontmost app", one word short of
-            // `ContextSource.frontmostApp.label`'s "Frontmost application", which is also what the
-            // system turn itself is headed with (review, lot 3a, item 7).
-            toggle(ContextSource.selectedText.label, isOn: flag(\.context.selectedText),
-                   disabled: disabledForS1, note: ContextSource.selectedText.description)
-            toggle(ContextSource.clipboard.label, isOn: flag(\.context.clipboard),
-                   disabled: disabledForS1, note: ContextSource.clipboard.description)
-            toggle(ContextSource.frontmostApp.label, isOn: flag(\.context.appContext),
-                   disabled: disabledForS1, note: ContextSource.frontmostApp.description)
+        return VStack(alignment: .leading, spacing: ModesLayout.messageSpacing) {
+            HStack(spacing: 16) {
+                // The three labels come from `ContextSource.label` rather than being typed again
+                // here -- this file used to spell the third one "Frontmost app", one word short of
+                // `ContextSource.frontmostApp.label`'s "Frontmost application", which is also what
+                // the system turn itself is headed with (review, lot 3a, item 7).
+                compactContextToggle(.selectedText, isOn: flag(\.context.selectedText), disabled: disabledForS1)
+                compactContextToggle(.clipboard, isOn: flag(\.context.clipboard), disabled: disabledForS1)
+                compactContextToggle(.frontmostApp, isOn: flag(\.context.appContext), disabled: disabledForS1)
+            }
             if disabledForS1 {
                 Text(ContextSource.s1DisabledReason)
                     .font(.system(size: 11, design: .rounded))
@@ -812,6 +914,20 @@ struct ModesPaneView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// One switch of the compact Context row: its own label beside it, its description as a
+    /// hover tooltip.
+    private func compactContextToggle(
+        _ source: ContextSource, isOn: Binding<Bool>, disabled: Bool
+    ) -> some View {
+        Toggle(source.label, isOn: isOn)
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .font(.system(size: 12, design: .rounded))
+            .foregroundStyle(Color(role: .primaryText))
+            .disabled(disabled)
+            .help(source.description)
     }
 
     // MARK: - The footer
@@ -952,19 +1068,6 @@ struct ModesPaneView: View {
         }
     }
 
-    private func toggle(
-        _ label: String, isOn: Binding<Bool>, disabled: Bool = false, note: String? = nil
-    ) -> some View {
-        labelled(label, note: note) {
-            Toggle("", isOn: isOn)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .disabled(disabled)
-        }
-    }
-
     /// A label column, the control, and — under the control — the message for whichever field this
     /// is, when there is one. **Under the input that caused it**, which is the whole reason
     /// `ModeField` exists: a banner at the top of the editor would name a JSON path and leave the
@@ -1057,12 +1160,6 @@ struct ModesPaneView: View {
         Binding(
             get: { model.draft?.mode[keyPath: keyPath] ?? false },
             set: { model.draft?.mode[keyPath: keyPath] = $0 })
-    }
-
-    private var api: Binding<Mode.LLM.API> {
-        Binding(
-            get: { model.draft?.mode.llm.api ?? .chat },
-            set: { model.draft?.mode.llm.api = $0 })
     }
 
     /// `autoActivate` is a list in the file and one line in the editor. The two conversions are in

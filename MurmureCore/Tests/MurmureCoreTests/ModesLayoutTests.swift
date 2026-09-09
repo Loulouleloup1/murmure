@@ -9,6 +9,10 @@ final class ModesLayoutTests: XCTestCase {
         XCTAssertGreaterThan(ModesLayout.iconGridSpacing, 0)
     }
 
+    func testTheCardSpacingIsPinnedAtTwelve() {
+        XCTAssertEqual(ModesLayout.cardSpacing, 12)
+    }
+
     func testThePreviewHeightIsARange() {
         XCTAssertLessThan(ModesLayout.previewHeight.minimum, ModesLayout.previewHeight.maximum)
     }

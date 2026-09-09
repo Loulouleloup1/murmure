@@ -11,6 +11,11 @@ public enum ModesLayout {
     /// Between two cards. The doc corpus's own gap, and the only separator there is.
     public static let rowSpacing: CGFloat = 8
 
+    /// Between the Identity and Refiner cards inside an open editor (task 6) -- a touch more
+    /// breathing room than `rowSpacing` gives two collapsed rows, because these two are full
+    /// `HomeCard`s rather than list rows.
+    public static let cardSpacing: CGFloat = 12
+
     /// Inside a card.
     public static let rowPadding = (horizontal: CGFloat(14), vertical: CGFloat(10))
 
