@@ -280,6 +280,52 @@ extension Mode {
     }
 }
 
+extension Mode.LLM.API {
+    /// What the kind switch (Modes editor, task 4) shows for this kind.
+    public var title: String {
+        switch self {
+        case .s1: "Superwhisper S1 (fixed-format cleanup)"
+        case .chat: "General model (Gemma, Llama, …)"
+        }
+    }
+
+    /// The model a mode lands on the moment it switches to this kind — see
+    /// ``Mode/switching(to:)``.
+    public var defaultModel: String {
+        switch self {
+        case .s1: Mode.cleanupModel
+        case .chat: Mode.rewriteModel
+        }
+    }
+
+    /// Both kinds start from Prompt's instructions: for S1 they are already control fields only,
+    /// for a general model they are a sensible cleanup prompt to edit from.
+    public var defaultInstructions: String { Mode.prompt.instructions }
+
+    /// Which installed Ollama names this kind can drive. S1 is one model family with its own
+    /// request shape; a general model is anything that can hold a chat and is not an embedder.
+    public func accepts(modelName: String) -> Bool {
+        switch self {
+        case .s1: ChatModelFilter.looksLikeS1(modelName)
+        case .chat: ChatModelFilter.isChatCapable(modelName)
+        }
+    }
+}
+
+extension Mode {
+    /// A copy switched to another refiner kind: `llm.api`, `llm.model` and `instructions` reset
+    /// to that kind's defaults, everything else (name, stt, context, …) unchanged. The kind switch
+    /// in the Modes editor (task 4) calls this rather than mutating those three fields itself, so
+    /// the reset stays in one place as the kinds' own defaults change.
+    public func switching(to api: Mode.LLM.API) -> Mode {
+        var copy = self
+        copy.llm.api = api
+        copy.llm.model = api.defaultModel
+        copy.instructions = api.defaultInstructions
+        return copy
+    }
+}
+
 extension Mode {
     /// Voice is the built-in dictation mode: its identity (name, glyph) is fixed and it cannot be
     /// deleted, so that "press the shortcut and speak" always exists. Everything else about it
@@ -405,7 +451,7 @@ extension Mode {
     /// The cleanup model: purpose-built for normalising speech-to-text, 1.08 GB resident, 0.38 s
     /// median. Speaks ``LLM/API/s1`` and nothing else. The tag is the Ollama model id, not the
     /// benchmark's `s1-mini` alias.
-    private static let cleanupModel = "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M"
+    static let cleanupModel = "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M"
 
     /// The rewriting model. No mode ships pointing at it; it is the placeholder in `Voice`, whose
     /// refiner is off, and the value `set-refiner.sh` and the README name for the one job a

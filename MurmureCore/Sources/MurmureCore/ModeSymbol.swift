@@ -36,4 +36,10 @@ public enum ModeSymbol {
         "pencil.line",
         "list.bullet",
     ]
+
+    /// The glyph a mode shows when it has chosen none: the stage default. The picker captions that
+    /// tile "Default" and stores `nil` for it, so the list holds each glyph once.
+    public static func isStageDefault(_ symbol: String, for stage: ModeStage) -> Bool {
+        symbol == stage.symbolName
+    }
 }

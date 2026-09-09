@@ -30,4 +30,17 @@ final class ModeSymbolTests: XCTestCase {
     func testNoEntryIsBlank() {
         XCTAssertFalse(ModeSymbol.library.contains { $0.trimmingCharacters(in: .whitespaces).isEmpty })
     }
+
+    // MARK: - Stage defaults (task 4)
+
+    func testTheLibraryListsEachGlyphOnce() {
+        XCTAssertEqual(Set(ModeSymbol.library).count, ModeSymbol.library.count)
+    }
+
+    func testTheStageDefaultsAreInTheLibraryAndRecognised() {
+        XCTAssertTrue(ModeSymbol.isStageDefault("mic.fill", for: .transcription))
+        XCTAssertTrue(ModeSymbol.isStageDefault("sparkles", for: .refinement))
+        XCTAssertFalse(ModeSymbol.isStageDefault("sparkles", for: .transcription))
+        XCTAssertTrue(ModeSymbol.library.contains("mic.fill") && ModeSymbol.library.contains("sparkles"))
+    }
 }

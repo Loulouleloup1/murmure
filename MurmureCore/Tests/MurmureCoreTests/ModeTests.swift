@@ -343,6 +343,30 @@ final class ModeTests: XCTestCase {
         XCTAssertNil(edited.editorValidationError(original: .voice))
     }
 
+    // MARK: - Refiner kinds (task 4)
+
+    func testEachRefinerKindHasItsOwnDefaultsAndModelFilter() {
+        XCTAssertEqual(Mode.LLM.API.s1.defaultModel, Mode.cleanupModel)
+        XCTAssertEqual(Mode.LLM.API.chat.defaultModel, Mode.rewriteModel)
+        XCTAssertTrue(Mode.LLM.API.s1.accepts(modelName: "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M"))
+        XCTAssertFalse(Mode.LLM.API.s1.accepts(modelName: "gemma4:12b-it-qat"))
+        XCTAssertTrue(Mode.LLM.API.chat.accepts(modelName: "gemma4:12b-it-qat"))
+        XCTAssertFalse(Mode.LLM.API.chat.accepts(modelName: "hf.co/superwhisper/s1-mini-GGUF:Q4_K_M"))
+        XCTAssertFalse(Mode.LLM.API.chat.accepts(modelName: "nomic-embed-text:latest"))
+    }
+
+    func testSwitchingKindResetsModelAndInstructionsOnly() {
+        var mode = Mode.prompt
+        mode.name = "Meeting"; mode.llm.api = .chat; mode.llm.model = "gemma4:12b-it-qat"
+        mode.instructions = "Rewrite as bullet points."
+        let switched = mode.switching(to: .s1)
+        XCTAssertEqual(switched.llm.api, .s1)
+        XCTAssertEqual(switched.llm.model, Mode.cleanupModel)
+        XCTAssertEqual(switched.instructions, Mode.LLM.API.s1.defaultInstructions)
+        XCTAssertEqual(switched.name, "Meeting")
+        XCTAssertEqual(switched.stt, mode.stt)
+    }
+
     func testANonProtectedModeNeedsARefinerInTheEditor() {
         var off = Mode.prompt; off.llm.enabled = false
         XCTAssertEqual(off.editorValidationError(original: .prompt), .refinerRequired)
