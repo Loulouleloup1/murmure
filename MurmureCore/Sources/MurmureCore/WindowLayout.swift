@@ -90,6 +90,16 @@ public enum WindowLayout {
     /// separate sections, never as two halves of one.
     public static let vocabularyGroupSpacing: CGFloat = 20
 
+    /// The composer's fields and Add button, in the redesigned Vocabulary pane -- taller than the
+    /// pane's other rows (owner feedback: the old button read as too small and discreet) so the
+    /// whole composer row reads as the primary action on the page.
+    public static let vocabularyFieldHeight: CGFloat = 36
+
+    /// The Add button's share of the composer row's width, measured against a `GeometryReader`
+    /// wrapping just that row (owner feedback: about 30 % of the width, not a bare glyph beside
+    /// the fields).
+    public static let vocabularyAddButtonFraction: CGFloat = 0.30
+
     /// The "Add a model" Inspect sheet's own width -- fixed, unlike the window itself, because a
     /// sheet is not resized by the user and a candidate list reads better at one settled width
     /// than reflowing with whatever the main window happens to be.

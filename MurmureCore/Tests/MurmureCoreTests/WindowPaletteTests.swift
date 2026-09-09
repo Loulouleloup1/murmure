@@ -116,11 +116,17 @@ final class WindowPaletteTests: XCTestCase {
     /// and not re-picked. Two constants that happened to hold the same violet today would drift
     /// the first time he moves one — and the hue is explicitly a placeholder he may move.
     func testTheAccentIsTheNotchsOwnRatherThanASecondOne() {
-        for role in [WindowRole.materialTile, .selection] {
+        for role in [WindowRole.materialTile, .selection, .accent] {
             let token = WindowPalette.token(for: role)
             XCTAssertEqual(token.hue, NotchAppearance.accentHue, "\(role) is not the notch's hue")
             XCTAssertEqual(token.saturation, NotchAppearance.accentSaturation)
         }
+    }
+
+    /// `.accent` is the one role drawn as a FILLED control (Vocabulary's Add button), not a tinted
+    /// surface -- so unlike `.materialTile`/`.selection` it is at full brightness.
+    func testTheAccentRoleIsAtFullBrightness() {
+        XCTAssertEqual(WindowPalette.token(for: .accent).brightness, 1)
     }
 
     /// §2.2's icon-colour split, as a fact about the colours and not about the names: the

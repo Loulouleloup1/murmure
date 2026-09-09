@@ -67,6 +67,10 @@ public enum WindowRole: String, CaseIterable, Sendable {
     case machineryTile
     /// The glyph on it.
     case machineryGlyph
+    /// The accent at full brightness -- a filled control (Vocabulary's Add button) rather than a
+    /// tinted surface, which is why it is its own role instead of a third call to `accent(...)`
+    /// inlined at the call site.
+    case accent
 }
 
 /// The token table. Dark only, for this lot (D18, Q-NB6).
@@ -104,6 +108,7 @@ public enum WindowPalette {
         // the split has to be readable as a kind, not as an emphasis.
         case .machineryTile: .grey(0.26)
         case .machineryGlyph: .grey(0.88)
+        case .accent: accent(brightness: 1)
         }
     }
 

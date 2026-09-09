@@ -79,6 +79,13 @@ final class VocabularyEmptyStateTests: XCTestCase {
         XCTAssertEqual(VocabularyGroup.corrections.headingWithCount(0), "Corrections · 0")
     }
 
+    // MARK: - composerTitle -- the segmented picker's own label, singular unlike `heading`
+
+    func testComposerTitleIsSingularUnlikeTheListHeading() {
+        XCTAssertEqual(VocabularyGroup.wordsToRecognise.composerTitle, "Word to recognise")
+        XCTAssertEqual(VocabularyGroup.corrections.composerTitle, "Correction")
+    }
+
     // MARK: - subtitle -- reused by the section header AND by "nothing yet" below
 
     /// Each group's subtitle talks about what THAT group's own list does, the same split

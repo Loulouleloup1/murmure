@@ -59,6 +59,19 @@ final class WindowLayoutTests: XCTestCase {
         XCTAssertLessThan(WindowLayout.vocabularyHeaderSpacing, WindowLayout.vocabularyGroupSpacing)
     }
 
+    /// The Add button's fraction has to leave the fields the majority of the row -- a button that
+    /// is "about 30 %" of the width is a minority share, not a coin flip with the fields beside it.
+    func testTheVocabularyAddButtonTakesAMinorityOfTheComposerRow() {
+        XCTAssertGreaterThan(WindowLayout.vocabularyAddButtonFraction, 0)
+        XCTAssertLessThan(WindowLayout.vocabularyAddButtonFraction, 0.5)
+    }
+
+    /// Taller than a plain text field's usual resting height, matching the owner's own ask that
+    /// the composer read as the page's primary action rather than a discreet row.
+    func testTheVocabularyFieldHeightIsTallerThanADefaultTextField() {
+        XCTAssertGreaterThan(WindowLayout.vocabularyFieldHeight, 28)
+    }
+
     /// The drafting sheet is wider and taller than the Inspect sheet -- a conversation needs more
     /// room than a candidate list -- and its own height is a real range.
     func testTheDraftSheetIsWiderAndTallerThanTheInspectSheet() {

@@ -263,6 +263,7 @@ private struct HeatmapHoverContent: View {
                     Color.clear.onAppear { tipSize = tipGeo.size }
                         .onChange(of: tipGeo.size) { _, newValue in tipSize = newValue }
                 })
+                .opacity(tipSize == .zero ? 0 : 1)
                 .position(clampedTipCenter(pointer: hoverLocation, size: tipSize, bounds: plotFrame))
         }
     }
@@ -354,6 +355,7 @@ private struct HourProfileHoverContent: View {
                 Color.clear.onAppear { tipSize = tipGeo.size }
                     .onChange(of: tipGeo.size) { _, newValue in tipSize = newValue }
             })
+            .opacity(tipSize == .zero ? 0 : 1)
             .position(clampedTipCenter(pointer: hoverLocation, size: tipSize, bounds: plotFrame))
     }
 }

@@ -31,6 +31,16 @@ public enum VocabularyGroup: Equatable, Sendable, CaseIterable {
         "\(heading) · \(count)"
     }
 
+    /// The label on the composer's segmented picker -- singular, unlike `heading`'s plural list
+    /// title, because the picker names the ONE entry being composed right now ("Word to
+    /// recognise"), not the list it will join ("Words to recognise").
+    public var composerTitle: String {
+        switch self {
+        case .wordsToRecognise: "Word to recognise"
+        case .corrections: "Correction"
+        }
+    }
+
     /// One line saying what putting a word in THIS group's list actually does. The same wording
     /// `VocabularyEmptyState.nothingYet`'s sentence uses below -- reused, not restated, so the
     /// pane's section header and its empty-list message never drift into two descriptions of one
