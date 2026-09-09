@@ -1959,6 +1959,45 @@ final class DictationSessionTests: XCTestCase {
 
         XCTAssertEqual(capture.calls.selectedText, 0)
     }
+
+    /// The archived row carries both word counts computed from the same texts already recorded
+    /// -- raw from the transcript, final from whichever text actually reached the destination.
+    func testTheArchivedRecordCarriesRawAndFinalWordCounts() async throws {
+        // Given -- four raw words, refined down to two
+        let recording = SpyRecording()
+        let refiner = SpyRefiner(mode: .prompt, answer: { _ in "Un, deux." })
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("un deux trois quatre")),
+            inserter: SpyInserter(), refiner: refiner, recording: recording,
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
+        )
+        // When
+        await session.toggle()
+        await session.toggle()
+        // Then
+        let record = try XCTUnwrap(recording.records.last)
+        XCTAssertEqual(record.rawWordCount, 4)
+        XCTAssertEqual(record.finalWordCount, 2)
+    }
+
+    func testAVoiceDictationCountsTheSameWordsRawAndFinal() async throws {
+        let recording = SpyRecording()
+        let session = DictationSession(
+            recorder: FakeRecorder(),
+            transcriber: FakeTranscriber(result: .success("un deux trois")),
+            inserter: SpyInserter(), refiner: SpyRefiner(mode: .voice, answer: { $0 }),
+            recording: recording,
+            vocabulary: FakeVocabulary(),
+            contextCapture: SpyContextCapture(), onStateChange: { _ in }
+        )
+        await session.toggle()
+        await session.toggle()
+        let record = try XCTUnwrap(recording.records.last)
+        XCTAssertEqual(record.rawWordCount, 3)
+        XCTAssertEqual(record.finalWordCount, 3)
+    }
 }
 
 /// Records what it was asked to play. A copy of `CueFeedbackTests`'s own spy rather than a shared

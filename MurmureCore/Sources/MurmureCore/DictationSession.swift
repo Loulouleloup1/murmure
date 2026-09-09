@@ -636,6 +636,8 @@ public actor DictationSession {
             insertedCharacters: insertedCharacters,
             targetBundleID: target.bundleID,
             targetAppName: target.name,
+            rawWordCount: WordCount.count(rawTranscript),
+            finalWordCount: WordCount.count(refinedText ?? correctedText ?? rawTranscript),
             // D7: the name, never the path. `recordings/` moves the day `Storage` changes, and an
             // absolute path in a row survives nothing -- `HistoryRecord.audioURL(inRecordings:)`
             // is what puts the two halves back together, against whichever folder the caller has.
