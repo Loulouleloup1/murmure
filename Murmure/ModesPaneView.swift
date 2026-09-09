@@ -365,11 +365,12 @@ struct ModesPaneView: View {
     /// This notice is that control's replacement: it says what the mode does today and offers the
     /// one press that fixes it, rather than leaving Louis to find `llm.enabled` in the JSON.
     ///
-    /// `switchKind(draft.mode.llm.api)` after setting the flag: turning the refiner on with no
-    /// installed model and no instructions would save a mode `Mode.validationError` refuses the
-    /// moment Save is pressed, so the button lands the draft on that api's own recommended model
-    /// and default instructions in the same motion -- the identical reset a kind switch already
-    /// gives when nothing was typed yet (``ModesPaneModel/switchKind(_:)``).
+    /// The button only calls `switchKind(draft.mode.llm.api)`; the flag itself is set inside
+    /// `applyKindSwitch`, so a cancelled confirmation leaves the mode exactly as it was. Turning the
+    /// refiner on with no installed model and no instructions would save a mode
+    /// `Mode.validationError` refuses the moment Save is pressed, so the switch lands the draft on
+    /// that api's own recommended model and default instructions in the same motion -- the
+    /// identical reset a kind switch already gives (``ModesPaneModel/switchKind(_:)``).
     private func refinerOffNotice() -> some View {
         VStack(alignment: .leading, spacing: ModesLayout.messageSpacing) {
             messageText("This mode has no refiner, so it behaves exactly like Voice.")
@@ -634,15 +635,13 @@ struct ModesPaneView: View {
     /// beside the confirming one is a mis-click that costs a file. Absent while creating — there
     /// is nothing on disk to remove.
     ///
-    /// The word is the mode's, not this file's: a built-in cannot be deleted, because Murmure
-    /// writes it again at every launch, so its button says `Reset…` and its dialog says what
-    /// actually goes (`ModeRemoval`). Both carry the ellipsis because both stop to ask.
+    /// The word is the mode's, not this file's (`ModeRemoval`): every mode that can reach this
+    /// button -- Prompt included, since the `.seeded` marker made it deletable for good -- says
+    /// `Delete…`. The `Reset…` wording survives only for a protected mode, and a protected mode
+    /// never draws the button at all.
     ///
-    /// **Also absent for `Voice` (task 6, `model.canDeleteDraft`).** `Voice` is a built-in too, so
-    /// without this guard it would draw the same `Reset…` button every other built-in gets --
-    /// which is not what protects it: `Mode.isProtected` is a stronger rule than "this mode ships
-    /// with the app", and this row has to draw that stronger rule, not the weaker one `removal`
-    /// alone would give it.
+    /// **Absent for `Voice` (task 6, `model.canDeleteDraft`).** `Mode.isProtected` is the rule this
+    /// row draws: not "ships with the app" (Prompt does too), but "cannot be removed".
     private func actions(_ draft: ModeDraft) -> some View {
         HStack(spacing: 8) {
             if model.canDeleteDraft,
