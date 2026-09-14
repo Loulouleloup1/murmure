@@ -1,8 +1,8 @@
 # Murmure — where the work stands (2026-09-14)
 
-Everything is committed on `feat/murmure-v1` and mirrored on `main` (both at `4afc2fa`, pushed
-2026-09-10). Nothing is in flight. The installed app at `~/Applications/Murmure.app` is that same
-commit. `cd MurmureCore && swift test` passes 1392 tests; `xcodebuild` reports `BUILD SUCCEEDED`.
+Everything is committed on `feat/murmure-v1` and mirrored on `main`; the two branches always point
+at the same commit. Nothing is in flight. The installed app at `~/Applications/Murmure.app` is
+`4afc2fa`, the last commit that touched code (2026-09-10); later commits are documentation only. `cd MurmureCore && swift test` passes 1392 tests; `xcodebuild` reports `BUILD SUCCEEDED`.
 
 This file is the single entry point for whoever picks the project up, human or assistant. The
 detailed record lives in `docs/` (map at the end).
