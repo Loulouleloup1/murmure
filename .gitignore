@@ -70,3 +70,6 @@ benchmark/run_v3*.log
 MurmureCore/Package.resolved
 benchmark/longform/.build/
 benchmark/longform/Package.resolved
+
+# Serena (LSP assistant) workspace -- tool state, not project content.
+.serena/

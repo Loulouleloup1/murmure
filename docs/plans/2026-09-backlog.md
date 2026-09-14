@@ -1,4 +1,4 @@
-# What is left, 2026-09-02 (updated 2026-09-05)
+# What is left, 2026-09-02 (updated 2026-09-10)
 
 Everything below is already argued somewhere — in a plan, a doc comment, or a spec section. This
 file exists because it was **argued in prose and never listed**, so the honest answer to "what is
