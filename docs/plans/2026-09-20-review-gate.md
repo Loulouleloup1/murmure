@@ -2481,3 +2481,11 @@ Fait mesure (revue palier 9) : quand la commande de renvoi echoue, la sortie de 
 Decision en deux parties.
 (a) CORRIGE dans ce palier : les diagnostics d'echec restent bornes et structures ; aucune sortie de commande n'est recopiee sur stderr ni dans l'audit. Le message porte au plus un code de sortie et un extrait court, jamais la sortie de tests.
 (b) LIMITE ASSUMEE, non corrigee : l'ordre « snapshot puis action » est celui de la conception 4.6 (l'existence du snapshot vaut deja juge). Inverser cet ordre serait un changement de conception, et en mode ombre rien n'est renvoye, donc le cas ne se materialise pas. Condition de revisite : le premier passage en `enforce`, ou tout echec de `reopen-review` observe en ombre.
+
+### A20 — le detecteur de tests ne connait pas les commandes reelles : le chiffre du backfill etait un artefact
+
+Fait mesure (palier 10, verifie par le controleur sur les 19 runs reels) : le backfill concluait « 14 faux renvois possibles sur 19 », parce que `tests_ran = false` sur 18 runs et que R2 les renvoyait tous. **Cette mesure est fausse.** Les workers lancaient bien leurs tests, avec des commandes que le registre ne reconnait pas : `python3 -m unittest discover -s benchmark/asr-comparison/tests -v` (runs 104, 106, 111, 94), `scripts/run_tests.sh` (run 53), `swift build` + verifications de benchmark (run 104). Or `test_commands` de la racine `murmure` ne liste que `swift test`, `scripts/codex/verify\.sh`, `xcodebuild .* test` — aucune ne correspond a ces formes.
+
+Decision : les motifs du registre sont corriges pour couvrir les formes REELLEMENT observees. Consequence a assumer : **tout chiffre tire du backfill avant cette correction est nul et non avenu**, y compris l'analyse « R2 est mal calibre pour les roles architect et qa » — elle reposait sur la meme mesure fausse et doit etre refaite apres correction.
+
+Lecon a garder : un detecteur trop etroit produit exactement le symptome d'une gate cassee (renvois massifs) tout en se presentant sous la forme d'un chiffre credible. Toute mesure du backfill doit etre confrontee aux commandes BRUTES de quelques runs avant d'etre publiee.
