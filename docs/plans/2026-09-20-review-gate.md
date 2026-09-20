@@ -2427,3 +2427,14 @@ question absente OU `noul` non numerique OU `choice` hors options connues — co
 backfill (le taux de rattrapage des renvois serait gonfle par des reponses que le modele n'a jamais
 rendues), et 4.6 exige qu'un non-verdict soit visible comme tel dans l'audit. Le mode `enforce`
 n'est pas concerne differemment : sans verdict il n'y a rien a renvoyer.
+
+### A15 — un sous-champ non-objet doit rendre « non jugé », jamais lever (étendu à l'audit)
+
+Fait mesuré (revue de la tâche 7, sur le chemin réel `JevOpenRouter.decide` → `decide_action`, sans réseau) : le bloc A14 écrivait `claim = decision.answers.get(...) or {}`, idiome qui ne couvre que le FALSY. Un sous-champ truthy non-objet levait donc `AttributeError` hors de tout `except` : `{"unsupported_claim": 0.91}` (la forme que montre l'exemple d'audit de la conception §4.7, et la déviation la plus probable pour une question noul), `{"unsupported_claim": [{"noul": 0.9}]}`, `{"next_step": "rerun_tests"}`.
+
+Conséquence, identique à celle fermée deux fois ailleurs : le snapshot est écrit AVANT le jugement (idempotence §4.6, « son existence vaut déjà jugé »), `decide_action` n'est pas dans un `try`, et `write_decision` vient après — la carte n'est jamais jugée, ne produit aucune ligne d'audit, et est sautée à chaque relance jusqu'à `--force`.
+
+Décision : garder la validation d'A14 **et** tester le type des deux sous-champs (`isinstance(..., dict)`) avant de les lire, de sorte que toute forme inexploitable tombe dans `leave_unjudged`. `or {}` est proscrit pour cet usage dans tout le chantier : il ne couvre que le falsy.
+Étendue : le même idiome réapparaît dans la construction de la ligne d'audit (`write_decision`), donc la correction vaut pour l'audit autant que pour la politique — une ligne d'audit qui lève est le même défaut silencieux.
+
+Point lié, traité par un test plutôt qu'en dur dans le code : les COMPORTEMENTS de `policy.py` sont indexés sur trois littéraux (`proceed_to_review`, `rerun_tests`, `strong_review`) alors que la VALIDATION lit les options du registre. Une version du registre qui ajouterait une option passerait en laissez-passer silencieux (fail-open, l'inverse de §4.5). Un test qui assère l'égalité entre les options du registre et l'ensemble traité fait casser la CI, ce qui est le bon signal ; on ne fige pas de liste en dur dans le module.
