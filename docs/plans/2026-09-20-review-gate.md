@@ -2330,3 +2330,18 @@ autoincrement de l'événement. Les chemins de snapshot et d'audit le formatent 
 d'audit JSONL porte la valeur telle quelle (entier), et la clé d'idempotence reste `(task_id, run_id)`.
 Les tests unitaires qui n'ouvrent pas de base (tâches 5 et 7) peuvent garder une valeur d'exemple
 quelconque, mais un entier évite d'accréditer une chaîne.
+
+### A6 — Les identifiants de run sont des entiers dans TOUS les tests (tâches 2, 9, 10)
+
+**Fait mesuré (tâche 2, par l'implémenteur, vérifié) :** `conftest.insert_run` écrit dans `task_runs.id`, qui est `INTEGER PRIMARY KEY AUTOINCREMENT` dans le schéma RÉEL devenu la référence par A4. Passer `"r_a"` y lève `sqlite3.IntegrityError: datatype mismatch` — ce n'est pas une assertion qui échoue, c'est le montage de fixture qui casse. Les tests des tâches 2, 9 et 10 passaient des identifiants de run **chaînes** (`"r_a"`, `"r_b"`, `"r_1"`, `"r_2"`), hérités du schéma écrit à la main de la tâche 0 (`task_runs id TEXT PRIMARY KEY`). Leurs `Expected: N passed` étaient donc inatteignables : la tâche 2 l'a prouvé (`4 failed`, tous en `datatype mismatch` à `conftest.py:90`), et l'implémenteur a validé `kanban.py` inchangé en copie isolée avec des identifiants entiers (`4 passed`, puis `11 passed`).
+
+Note de précision : `task_events.run_id` a une affinité INTEGER mais n'est PAS une clé primaire, donc SQLite y accepte du texte ; c'est `task_runs.id` seul qui refuse. Comme la requête joint `task_runs r ON r.id = e.run_id`, l'identifiant doit être du même type des deux côtés : entier partout.
+
+**Décision :** les identifiants de run sont des **entiers** dans tous les tests et toutes les fixtures.
+
+- Tâche 2 : `_card(kanban_db, "t_a", 1, …)`, `_card(kanban_db, "t_b", 2, …)`, `insert_run(kanban_db, 2, "t_a", …)`, `insert_event(kanban_db, "t_a", 2, "review_requested", …)`, `insert_event(kanban_db, "t_a", 1, "changes_requested", …)` ; les assertions suivent : `(1, "fait", "dev", "dev")`, `reqs[0].run_id == 2`, `[r.run_id …] == [1, 2]` ; `ground_truth(conn, "t_a", 1000)` inchangé (la borne reste un horodatage).
+- Tâche 2 (production `kanban.py`) : `ReviewRequest.run_id: int` et `run_id=row["run_id"]` (le `or ""` était le garde-fou de l'époque chaîne ; A5 a déjà déclaré la valeur entière).
+- Tâche 9 : `insert_task(kanban_db, "t_1", …, run_id=1)`, `insert_run(kanban_db, 1, "t_1", …)`, `insert_event(kanban_db, "t_1", 1, "review_requested", …)`.
+- Tâche 10 : les identifiants passés à `insert_run`/`insert_event` par `rid` sont des entiers.
+- Annotations alignées sur A5 : `ReviewRequest.run_id` (tâche 2), `EvidenceSnapshot.run_id` (tâche 4), `BackfillRow.run_id` (tâche 10) → `int`. Les exemples EN MÉMOIRE des tâches 5, 7 et 8 (`run_id="r"` dans un dict de dataclass, sans base) restent inchangés : ils ne touchent aucune colonne et n'affirment rien sur le type.
+- Inchangé : les horodatages (`created_at`, `event_created_at`, `started_at`, `ended_at`) restent des secondes epoch, entières côté `kanban.db` — la borne de `ground_truth` en est un.
