@@ -2288,3 +2288,30 @@ Le design §5 annonce 18 `review_requested` ; le brief en annonce 19. Mesure sur
 5 `changes_requested`, 36 `completed`. Le backfill rejoue les 19 événements, agrège par carte (14) et
 le rapport porte les deux chiffres. Un événement `review_requested` multiple sur une même carte est un
 run distinct : la clé d'idempotence reste `(task_id, run_id)`.
+
+### A4 — Les fixtures utilisent les schémas **réels**, pas des schémas écrits à la main
+
+La conception §7 (autorité) exige « `hermes_cli.kanban_db.SCHEMA_SQL`, et le schéma de `state.db` copié à
+l'identique ». La tâche 0 du plan écrivait deux schémas simplifiés à la main — `messages` y perd 16
+colonnes, `sessions` en perd 55 — et les tests auraient donc validé le code contre un schéma qui
+n'existe pas. Contrainte mesurée, qui justifie la règle : sur le schéma réel, `sessions` a 59 colonnes
+et exige `source` + `started_at` ; `messages` en a 26 et exige `session_id`, `role`, `timestamp`.
+Sous le schéma écrit à la main, aucune de ces exigences n'existait : les helpers auraient inséré des
+lignes impossibles en production.
+
+**Décision** : `kanban.db` de fixture est construit par `hermes_cli.kanban_db.SCHEMA_SQL` (importé dans
+`tests/conftest.py` seulement ; les modules de production restent sans import de `hermes_cli`), et
+`state.db` de fixture par `tests/schema/state_schema.sql` — dump **verbatim** du DDL réel des deux
+tables que la gate lit (`sessions`, `messages`) et de leurs index, fourni dans le workspace d'exécution
+(`state_schema.sql`, 4 596 o), à committer tel quel.
+
+Les helpers passent en `INSERT` à **colonnes nommées** et fournissent les colonnes obligatoires du
+schéma réel :
+
+```
+tasks        (41 colonnes), obligatoires hors PK : ['title', 'status', 'created_at']
+  task_runs    (17 colonnes), obligatoires hors PK : ['task_id', 'status', 'started_at']
+  task_events  (6 colonnes), obligatoires hors PK : ['task_id', 'kind', 'created_at']
+  sessions     (id, source, started_at) ... obligatoires : source, started_at
+  messages     (session_id, role, timestamp) ... obligatoires
+```
