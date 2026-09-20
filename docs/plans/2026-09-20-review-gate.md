@@ -2411,3 +2411,19 @@ revue adversariale a question fermee. Louis a tranche le 20/09/26 : le juge tour
 `deepseek-flash`, comme toute la flotte. Aucun modele payant n'est invoque par ce chantier.
 Le role et la methodologie du juge (revue adversariale, question fermee, une divergence a la
 fois) restent ceux de la conception : seule la classe de modele change.
+
+### A14 - Une reponse HTTP 200 malformee n'est PAS un verdict
+
+Trou identifie a l'execution de la tache 6 et signale par son implementeur : `decide.py` ne valide
+`answers` qu'en tant que `dict`. Une reponse structurellement valide mais inexploitable (question
+absente, `noul` non numerique, `choice` hors options, `answers` vide) atteindrait donc `policy.py`
+sans garde. Or la conception 4.5 range l'absence de verdict utilisable dans la meme branche que
+l'indisponibilite du fournisseur : LAISSER en revue avec le motif « gate indisponible, non juge »,
+jamais un renvoi, et surtout jamais un « conforme ».
+
+Decision : `policy.decide_action` traite une reponse inexploitable — `decision=None` OU entree de
+question absente OU `noul` non numerique OU `choice` hors options connues — comme
+`leave_unjudged`. Justification : un « laissez-passer » par defaut fausserait la mesure meme du
+backfill (le taux de rattrapage des renvois serait gonfle par des reponses que le modele n'a jamais
+rendues), et 4.6 exige qu'un non-verdict soit visible comme tel dans l'audit. Le mode `enforce`
+n'est pas concerne differemment : sans verdict il n'y a rien a renvoyer.
