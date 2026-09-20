@@ -2453,3 +2453,13 @@ Décision : la ligne d'audit n'écrit que des valeurs que le CODE a lui-même va
 - Et un test de non-régression : A15 n'était garanti dans ce module que par des sondes hors tests (le code verbatim du brief rendait `4 passed` tout en levant).
 
 Écriture robuste du même coup : encodage explicite (`encoding="utf-8"`, `newline="\n"`) et sérialisation effectuée AVANT l'ouverture du fichier, pour qu'un échec de sérialisation ne crée pas un fichier vide et ne dépende pas de la locale — le journal doit rester écrivable alors que les motifs du chantier sont en français.
+
+### A17 — dans la gate, tout ce qui peut lever s'exécute AVANT le marqueur d'idempotence
+
+Fait mesuré (revues des tâches 6, 7 et 8) : l'idempotence de §4.6 repose sur l'EXISTENCE du snapshot (« l'existence du snapshot vaut déjà jugé »), et `judge_request` écrit le snapshot avant de juger. Toute exception levée APRÈS cette écriture produit donc le pire résultat possible : la carte n'est jamais jugée, aucune ligne d'audit n'est écrite, et chaque relance la saute comme déjà traitée.
+
+Or le code du palier 9 calcule `state_hash(state)` **dans la valeur de retour** de `write_decision`, donc après `save_snapshot`. `state_hash` lève un `TypeError` sur un état non sérialisable. L'état produit aujourd'hui est JSON-natif (`state_for_model` ne rend que bool/int/list/str), donc l'atteinte est théorique — mais le coût du correctif est nul et le sens de l'erreur est le bon : le hachage est PUR, il n'a rien à faire après un effet de bord.
+
+Décision : `state = snap.state_for_model(...)` et `state_sha256 = state_hash(state)` sont calculés AVANT `save_snapshot`, puis passés à `write_decision`. Aucun autre changement d'ordre : le snapshot reste écrit avant le jugement (c'est l'idempotence voulue par §4.6), et une action `reopen` reste appliquée après le jugement.
+
+Corollaire de contrat pour le palier 9 : les messages d'erreur journalisés sur stderr doivent être bornés et ne JAMAIS embarquer de texte venu du modèle (le journal est lu par un humain et par le cron ; c'est la même règle que l'audit, appliquée au flux de diagnostic).
