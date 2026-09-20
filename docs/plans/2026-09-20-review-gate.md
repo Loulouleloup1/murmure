@@ -2353,3 +2353,15 @@ Note de précision : `task_events.run_id` a une affinité INTEGER mais n'est PAS
 Aujourd'hui **latent** : 0 cas sur 19, écart minimal mesuré entre une demande et sa décision = 143 s. Il devient possible dès qu'une décision s'écrit sans passage humain (mode `enforce`, décision de la gate) ou qu'un reviewer répond dans la seconde.
 
 **Décision : comparer `created_at >= ?`,** sans changer la signature `(task_id, event_created_at)`. Deux raisons : le filtre `kind IN ('changes_requested','completed')` exclut l'événement `review_requested` lui-même, donc `>=` ne peut pas s'auto-apparier sur la demande ; et le biais choisi (compter une décision ambiguë comme tranchée) va dans le sens du critère de la conception — rattraper tous les renvois — plutôt que de sous-compter. Le test de la tâche 2 est complété par un cas de décision à la seconde identique, pour figer le comportement.
+
+### A8 — Le lien run → session se désambiguïse par la fenêtre du run
+
+**Fait mesuré (tâche 3) :** `find_session_id` retenait `found[-1]`, c'est-à-dire la DERNIÈRE session trouvée dans le fichier de log. Or un log de carte accumule les sessions de toute la vie de la carte : mesuré sur les 36 logs réels de `~/.hermes/kanban/boards/murmure/logs/`, la plupart en portent plusieurs, jusqu'à **17** distinctes (`t_8209b942.log`). Parmi les cartes du backfill : `t_07112ae3` (5), `t_2fd54093` (5), `t_608e71ef` (5), `t_6d617129` (6), `t_4a3570b9` (3), `t_556bcfb1` (3), `t_50536cef` (2).
+
+**Conséquence :** pour un run historique, cette règle rattache les appels d'outils d'un run POSTÉRIEUR. Or c'est de cette session que se dérivent `tests_ran`, la commande et le code de sortie du dernier test, `tests_last_ran_before_last_edit` et les fichiers observés — donc les règles R1, R2, R3 et R5 jugeraient un run avec les preuves d'un autre. C'est exactement le faux renvoi que la conception §4.5 veut rendre impossible, et le backfill mesurerait sa performance sur des preuves décalées.
+
+La conception (§3, ligne 73) ordonne : trailer du log, puis `tasks.session_id`, puis une session de `state.db` — elle ne dit rien du cas « plusieurs trailers », alors que la signature `find_session_id(log_paths, task_session_id, state_db, run_started_at, run_ended_at)` reçoit précisément la fenêtre et la base pour trancher.
+
+**Décision :** parmi les identifiants candidats lus dans les logs (fichier courant puis rotaté), retenir celui dont l'enregistrement de `state.db` **chevauche la fenêtre du run** `[run_started_at, run_ended_at]`. Si aucun candidat ne chevauche, ou si `state_db` ne permet pas de trancher, garder le comportement actuel (dernier trailer) : le défaut redevient alors celui d'aujourd'hui, jamais pire. L'ordre de repli de la conception (`tasks.session_id`, puis state.db) est conservé pour le reste.
+
+**Coût si faux :** une session mal choisie reste une session de la MÊME carte (les trailers sont lus dans le log de la carte), donc on ne peut pas juger un run avec les preuves d'un autre dépôt — seulement avec celles d'une autre fenêtre de temps.
