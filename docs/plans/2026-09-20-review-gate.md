@@ -2315,3 +2315,18 @@ tasks        (41 colonnes), obligatoires hors PK : ['title', 'status', 'created_
   sessions     (id, source, started_at) ... obligatoires : source, started_at
   messages     (session_id, role, timestamp) ... obligatoires
 ```
+
+### A5 — `run_id` est un entier, pas une chaîne
+
+Mesuré sur `~/.hermes/kanban/boards/murmure/kanban.db` : `task_events.run_id` est de type `integer`, et
+`task_runs.id` est `INTEGER PRIMARY KEY AUTOINCREMENT` (112 lignes, toutes entières). Le schéma écrit à
+la main de la tâche 0 (`task_runs id TEXT PRIMARY KEY`) et la signature `run_id: str` de la tâche 4
+étaient donc fausses, et les fixtures de la tâche 0 ont cessé d'accepter une chaîne dès qu'elles ont
+utilisé le schéma réel (`'run_abc'` → `datatype mismatch`).
+
+**Décision** : partout où la valeur vient de la base, `run_id` est un `int` — `ReviewRequest.run_id`,
+`EvidenceSnapshot.run_id`, `BackfillRow.run_id` — et `task_events.event_id` reste l'entier
+autoincrement de l'événement. Les chemins de snapshot et d'audit le formatent (`f"{run_id}"`), la ligne
+d'audit JSONL porte la valeur telle quelle (entier), et la clé d'idempotence reste `(task_id, run_id)`.
+Les tests unitaires qui n'ouvrent pas de base (tâches 5 et 7) peuvent garder une valeur d'exemple
+quelconque, mais un entier évite d'accréditer une chaîne.
