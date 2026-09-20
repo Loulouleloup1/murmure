@@ -2473,3 +2473,11 @@ Consequence, a ne pas confondre avec un defaut du code : pour ces 19 runs `works
 (a) Le taux de rattrapage des renvois reels reste mesurable : les renvois reposent sur les tests lances et l'ordre des evenements, pas sur git.
 (b) Tout declenchement de R5 sur ces runs doit etre lu comme SUSPECT : « annonce de tests sans fichier de test touche » peut n'etre qu'un artefact de la disparition du worktree. Le rapport du backfill doit compter ces cas A PART.
 (c) Ce caveat ne vaut QUE pour le backfill : les cartes vivantes du board ont leur worktree, donc la gate en mode ombre juge sur des preuves completes.
+
+### A19 — echec du renvoi : diagnostic borne, et limite assumee
+
+Fait mesure (revue palier 9) : quand la commande de renvoi echoue, la sortie de test ENTIERE (traceback de 2027 caracteres, 20/20 lignes) partait sur stderr — violation d'une contrainte globale — et la carte, snapshot deja ecrit, n'etait plus jamais jugee (mesure sur 3 cartes : `2.json` ecrit, `t_2` juge 0 fois, aucune ligne d'audit).
+
+Decision en deux parties.
+(a) CORRIGE dans ce palier : les diagnostics d'echec restent bornes et structures ; aucune sortie de commande n'est recopiee sur stderr ni dans l'audit. Le message porte au plus un code de sortie et un extrait court, jamais la sortie de tests.
+(b) LIMITE ASSUMEE, non corrigee : l'ordre « snapshot puis action » est celui de la conception 4.6 (l'existence du snapshot vaut deja juge). Inverser cet ordre serait un changement de conception, et en mode ombre rien n'est renvoye, donc le cas ne se materialise pas. Condition de revisite : le premier passage en `enforce`, ou tout echec de `reopen-review` observe en ombre.
