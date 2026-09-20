@@ -2438,3 +2438,18 @@ Décision : garder la validation d'A14 **et** tester le type des deux sous-champ
 Étendue : le même idiome réapparaît dans la construction de la ligne d'audit (`write_decision`), donc la correction vaut pour l'audit autant que pour la politique — une ligne d'audit qui lève est le même défaut silencieux.
 
 Point lié, traité par un test plutôt qu'en dur dans le code : les COMPORTEMENTS de `policy.py` sont indexés sur trois littéraux (`proceed_to_review`, `rerun_tests`, `strong_review`) alors que la VALIDATION lit les options du registre. Une version du registre qui ajouterait une option passerait en laissez-passer silencieux (fail-open, l'inverse de §4.5). Un test qui assère l'égalité entre les options du registre et l'ensemble traité fait casser la CI, ce qui est le bon signal ; on ne fige pas de liste en dur dans le module.
+
+### A16 — la ligne d'audit ne recopie aucune valeur brute du modèle
+
+Fait mesuré (revue de la tâche 8) : `write_decision` recopiait `answers.next_step.choice` dès que c'était une chaîne, et `probabilities` dès que c'était un objet, sans borne ni validation. Une réponse du modèle contenant `{"next_step": {"choice": "Resume confidentiel du worker", "probabilities": {"note": "sortie de test confidentielle"}}}` écrivait le résumé de carte et la sortie de test MOT POUR MOT dans `decisions.jsonl` ; une ligne a été mesurée à 106 482 octets. `model_returned` était du même motif, non borné.
+
+C'est l'interdit absolu de l'utilisateur (« ni résumé de carte, ni sortie de test, ni clé dans l'audit »), et il était violé par la seule voie qui compte : ce que le MODÈLE renvoie. La conception §4.7 prescrivait ce pass-through ; il est donc amendé. Le test « pas de contenu » du brief ne pouvait pas le voir : il n'asserte que des champs issus du snapshot, jamais les champs du modèle.
+
+Décision : la ligne d'audit n'écrit que des valeurs que le CODE a lui-même validées ou bornées.
+- `choice` écrit = `action.choice`, déjà restreint aux options du registre (None sinon, et `leave_unjudged` dit déjà qu'un verdict a été refusé).
+- `probabilities` filtré : seules les clés présentes dans le critère du registre, valeurs numériques non booléennes, nombre de clés plafonné.
+- Nom du modèle servi borné.
+- Le commentaire du module et les affirmations du rapport qui disaient « jamais du contenu brut du modèle » sont corrigés : une invariante fausse écrite noir sur blanc est précisément ce qui rouvre le trou à la tâche suivante.
+- Et un test de non-régression : A15 n'était garanti dans ce module que par des sondes hors tests (le code verbatim du brief rendait `4 passed` tout en levant).
+
+Écriture robuste du même coup : encodage explicite (`encoding="utf-8"`, `newline="\n"`) et sérialisation effectuée AVANT l'ouverture du fichier, pour qu'un échec de sérialisation ne crée pas un fichier vide et ne dépende pas de la locale — le journal doit rester écrivable alors que les motifs du chantier sont en français.
