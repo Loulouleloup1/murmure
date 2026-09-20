@@ -2403,3 +2403,11 @@ La re-revue du round 3 a mesuré que A11 était **en tort sur un jeton**. Fait �
 **Décision :** `REDIRECT_TOKENS` devient `("&", "<>")` — c'est-à-dire `("&>", "<>")` — et `&>>` en sort, avec un commentaire nommant la mesure (bash 3.2.57 : `&>>` non quoté = erreur de syntaxe, donc jamais une écriture ; la forme quotée est masquée). `&>` et `<>` restent comptés : mesuré, ils écrivent réellement. Le test `test_amp_append_redirect_counts_as_write` doit être **inversé** (le cas devient non-écriture) et renommé pour dire pourquoi. Le cas `make &>> build.log` reste non-écriture, mais désormais pour une seconde raison (jeton non reconnu en plus de l'exclusion `.log`).
 
 **Règle générale à retenir :** une forme de redirection ne peut compter comme écriture que si elle est **exécutable sous le shell qui exécute réellement les commandes** — le comptage ne mesure pas une propriété du texte, mais une propriété de la commande telle qu'elle sera lancée. Vérifier le shell avant d'ajouter une forme.
+
+### A13 - Juge de divergence du backfill : deepseek-flash (decision de Louis, 2026-09-20)
+
+La conception 8.5 prevoit pour les divergences du backfill un juge sur un modele FORT (Opus), en
+revue adversariale a question fermee. Louis a tranche le 20/09/26 : le juge tourne sur
+`deepseek-flash`, comme toute la flotte. Aucun modele payant n'est invoque par ce chantier.
+Le role et la methodologie du juge (revue adversariale, question fermee, une divergence a la
+fois) restent ceux de la conception : seule la classe de modele change.
