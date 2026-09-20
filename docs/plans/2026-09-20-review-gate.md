@@ -2345,3 +2345,11 @@ Note de précision : `task_events.run_id` a une affinité INTEGER mais n'est PAS
 - Tâche 10 : les identifiants passés à `insert_run`/`insert_event` par `rid` sont des entiers.
 - Annotations alignées sur A5 : `ReviewRequest.run_id` (tâche 2), `EvidenceSnapshot.run_id` (tâche 4), `BackfillRow.run_id` (tâche 10) → `int`. Les exemples EN MÉMOIRE des tâches 5, 7 et 8 (`run_id="r"` dans un dict de dataclass, sans base) restent inchangés : ils ne touchent aucune colonne et n'affirment rien sur le type.
 - Inchangé : les horodatages (`created_at`, `event_created_at`, `started_at`, `ended_at`) restent des secondes epoch, entières côté `kanban.db` — la borne de `ground_truth` en est un.
+
+### A7 — `ground_truth` : une décision prise dans la même seconde que la demande compte
+
+**Fait mesuré (revue de la tâche 2, confirmé) :** `ground_truth(conn, task_id, event_created_at)` comparait `created_at > ?`. Quand un `changes_requested` ou un `completed` porte **exactement** le même `created_at` (granularité : la seconde) que la `review_requested`, la fonction rend `"pending"` alors que la carte est tranchée — un échec **silencieux**, et c'est exactement la mesure qui porte le critère « zéro omission » de la conception §5. Le test du brief ne peut pas l'attraper (ses écarts sont 1000 → 1100 et 2000 → 2100).
+
+Aujourd'hui **latent** : 0 cas sur 19, écart minimal mesuré entre une demande et sa décision = 143 s. Il devient possible dès qu'une décision s'écrit sans passage humain (mode `enforce`, décision de la gate) ou qu'un reviewer répond dans la seconde.
+
+**Décision : comparer `created_at >= ?`,** sans changer la signature `(task_id, event_created_at)`. Deux raisons : le filtre `kind IN ('changes_requested','completed')` exclut l'événement `review_requested` lui-même, donc `>=` ne peut pas s'auto-apparier sur la demande ; et le biais choisi (compter une décision ambiguë comme tranchée) va dans le sens du critère de la conception — rattraper tous les renvois — plutôt que de sous-compter. Le test de la tâche 2 est complété par un cas de décision à la seconde identique, pour figer le comportement.
