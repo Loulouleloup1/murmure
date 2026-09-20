@@ -2489,3 +2489,15 @@ Fait mesure (palier 10, verifie par le controleur sur les 19 runs reels) : le ba
 Decision : les motifs du registre sont corriges pour couvrir les formes REELLEMENT observees. Consequence a assumer : **tout chiffre tire du backfill avant cette correction est nul et non avenu**, y compris l'analyse « R2 est mal calibre pour les roles architect et qa » — elle reposait sur la meme mesure fausse et doit etre refaite apres correction.
 
 Lecon a garder : un detecteur trop etroit produit exactement le symptome d'une gate cassee (renvois massifs) tout en se presentant sous la forme d'un chiffre credible. Toute mesure du backfill doit etre confrontee aux commandes BRUTES de quelques runs avant d'etre publiee.
+
+### A21 — la gate n'a aucun pouvoir discriminant sur l'historique reel : 19 renvois sur 19
+
+Mesure (palier 10, apres correction du detecteur A20) : sur les 19 demandes de revue reelles, la gate renvoie **19 fois sur 19** — R2 (12), R4 (3), R5 (1), R3 (1), modele (2). Face au dossier humain (5 `changes_requested`, 14 `accepted`) : 5 accords, **14 faux renvois (74 %)**, 0 omission.
+
+Le chiffre qui compte n'est pas « 5 rattrapages sur 5 » mais que ces 5 rattrapages sont **gratuits** : une gate qui renvoie toujours attrape tout ce qu'on lui demande d'attraper. Sa precision sur cet historique est de 5/19, soit 26 % — moins qu'un tirage au sort.
+
+Cause verifiee, pas hypothese : le jeu de regles est calibre pour un run d'IMPLEMENTATION (il doit avoir lance la suite, il doit finir vert, il ne doit plus rien modifier ensuite). Or 15 des 19 runs sont des runs d'architecte (11) ou de QA (4), ou ces trois attentes sont fausses : un architecte ne lance pas la suite du projet, et il modifie son PLAN apres une verification (R4) ; un QA dont la suite echoue a fait son travail, l'echec est son constat et non un defaut (R3).
+
+Consequence : **le passage en `enforce` est bloque** et ne peut pas etre decide sur la base actuelle. Conditions de revisite, une seule suffit : (a) une regle par ROLE de run (implementation vs architecture/QA/analyse), ou un jugement reserve aux runs d'implementation ; (b) des regles conditionnees a l'annonce du resume, avec la perte de rattrapage chiffree ; (c) un mode « signalement » qui remonte la carte au PM sans la renvoyer au worker.
+
+Le mode ombre reste utile et sans risque : il n'ecrit que dans son propre journal et ne renvoie rien.
