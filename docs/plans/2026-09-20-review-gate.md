@@ -2463,3 +2463,13 @@ Or le code du palier 9 calcule `state_hash(state)` **dans la valeur de retour** 
 Décision : `state = snap.state_for_model(...)` et `state_sha256 = state_hash(state)` sont calculés AVANT `save_snapshot`, puis passés à `write_decision`. Aucun autre changement d'ordre : le snapshot reste écrit avant le jugement (c'est l'idempotence voulue par §4.6), et une action `reopen` reste appliquée après le jugement.
 
 Corollaire de contrat pour le palier 9 : les messages d'erreur journalisés sur stderr doivent être bornés et ne JAMAIS embarquer de texte venu du modèle (le journal est lu par un humain et par le cron ; c'est la même règle que l'audit, appliquée au flux de diagnostic).
+
+### A18 — les worktrees historiques ont disparu : lecture du backfill a corriger
+
+Fait mesure (palier 9, verifie par le controleur) : **0 des 19** worktrees des demandes de revue historiques existe encore (`~/Projects/murmure/.worktrees/t_*` et `~/.hermes/hermes-agent/.worktrees/t_*` sont tous absents), alors que les 19 lignes de `tasks` portent bien un `workspace_path`. Une mesure anterieure annoncait l'inverse ; cette note la corrige.
+
+Consequence, a ne pas confondre avec un defaut du code : pour ces 19 runs `workspace_present = False`, donc `changed_files_git = None` et `test_files_touched` ne peut plus se fonder que sur les fichiers DECLARES par le worker (`task_runs.metadata.changed_files`).
+
+(a) Le taux de rattrapage des renvois reels reste mesurable : les renvois reposent sur les tests lances et l'ordre des evenements, pas sur git.
+(b) Tout declenchement de R5 sur ces runs doit etre lu comme SUSPECT : « annonce de tests sans fichier de test touche » peut n'etre qu'un artefact de la disparition du worktree. Le rapport du backfill doit compter ces cas A PART.
+(c) Ce caveat ne vaut QUE pour le backfill : les cartes vivantes du board ont leur worktree, donc la gate en mode ombre juge sur des preuves completes.
