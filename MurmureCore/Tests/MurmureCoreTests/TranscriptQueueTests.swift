@@ -419,10 +419,6 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
         XCTAssertEqual(journal.maximumSimultane, 1, "zéro travail concurrent — \(contrat)")
         let ids = [panel.id, socket.id, secondPanel.id]
         XCTAssertEqual(Set(ids).count, 3, "chaque soumission a son identité — \(contrat)")
-        assertContratDansSource(
-            "MurmureCore/Sources/MurmureCore/TranscriptQueue.swift",
-            #"func\s+wait\s*\(\s*for\s+id\s*:\s*String"#,
-            "la file expose l'attente par identifiant")
     }
 
     func testCriterion2ConcurrentWaitsReturnTheResultAttachedToTheirOwnID() async throws {
@@ -435,21 +431,27 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
         }
         let first = await file.enqueue(source: "first")
         let second = await file.enqueue(source: "second")
+        let firstEntered = PortePartage()
+        let secondEntered = PortePartage()
+        let waitFirst = Task {
+            firstEntered.open()
+            return try await file.wait(for: first.id)
+        }
+        let waitSecond = Task {
+            secondEntered.open()
+            return try await file.wait(for: second.id)
+        }
+        await firstEntered.wait()
+        await secondEntered.wait()
 
-        async let waitFirst = attendreTerminal(file: file, id: first.id)
-        async let waitSecond = attendreTerminal(file: file, id: second.id)
         let drainage = Task { await file.drain() }
-        let resultats = try await (waitFirst, waitSecond)
+        let resultats = try await (waitFirst.value, waitSecond.value)
         await drainage.value
 
         XCTAssertEqual(resultats.0.source, "first", "la première attente garde son id — \(contrat)")
         XCTAssertEqual(resultats.1.source, "second", "la seconde attente garde son id — \(contrat)")
         XCTAssertEqual(resultats.0.id, first.id, "aucun résultat d'un autre travail — \(contrat)")
         XCTAssertEqual(resultats.1.id, second.id, "aucun résultat d'un autre travail — \(contrat)")
-        assertContratDansSource(
-            "MurmureCore/Sources/MurmureCore/TranscriptQueue.swift",
-            #"func\s+wait\s*\(\s*for\s+id\s*:\s*String"#,
-            "les attentes sont rendues par identifiant")
     }
 
     func testCriterion3FailureIsTerminalForItsWaitThenTheNextEntryStarts() async throws {
@@ -461,21 +463,24 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
         }
         let failed = await file.enqueue(source: "failed")
         let next = await file.enqueue(source: "next")
-        let attente = Task { try await attendreTerminal(file: file, id: failed.id) }
+        let waitEntered = PortePartage()
+        let attente = Task {
+            waitEntered.open()
+            return try await file.wait(for: failed.id)
+        }
+        await waitEntered.wait()
         await file.drain()
         let issue = try await attente.value
-        let nextIssue = try await attendreTerminal(file: file, id: next.id)
+        let nextIssue = try await file.wait(for: next.id)
 
-        XCTAssertEqual(issue.state, .failed, "l'échec termine l'attente visée — \(contrat)")
+        XCTAssertEqual(issue.id, failed.id, "l'échec termine l'attente visée — \(contrat)")
+        XCTAssertEqual(issue.state, .failed, "l'échec est terminal — \(contrat)")
         XCTAssertEqual(issue.error, "fixture failed", "l'erreur reste attachée à son id — \(contrat)")
+        XCTAssertEqual(nextIssue.id, next.id, "le suivant garde son identité — \(contrat)")
         XCTAssertEqual(nextIssue.state, .done, "le suivant démarre après l'échec — \(contrat)")
         XCTAssertEqual(
             journal.evenements, ["debut failed", "debut next", "fin next"],
             "l'échec n'arrête pas la file — \(contrat)")
-        assertContratDansSource(
-            "MurmureCore/Sources/MurmureCore/TranscriptQueue.swift",
-            #"func\s+wait\s*\(\s*for\s+id\s*:\s*String"#,
-            "l'échec termine l'attente de cette entrée")
     }
 
     func testCriterion4CancellationTerminatesItsOwnWaitAndDoesNotStrandTheNextEntry() async throws {
@@ -493,7 +498,12 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
         }
         let cancelled = await file.enqueue(source: "cancelled")
         let next = await file.enqueue(source: "next")
-        let attente = Task { try await attendreTerminal(file: file, id: cancelled.id) }
+        let waitEntered = PortePartage()
+        let attente = Task {
+            waitEntered.open()
+            return try await file.wait(for: cancelled.id)
+        }
+        await waitEntered.wait()
         let drainage = Task { await file.drain() }
         let startedSuccessfully = await attendreCondition("le travail démarre") {
             journal.evenements.contains("debut cancelled")
@@ -504,26 +514,46 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
         finish.open()
         let issue = try await attente.value
         await drainage.value
-        let suivant = try await attendreTerminal(file: file, id: next.id)
+        let suivant = try await file.wait(for: next.id)
 
+        XCTAssertEqual(issue.id, cancelled.id, "l'annulation termine l'attente visée — \(contrat)")
         XCTAssertEqual(issue.state, .failed, "l'annulation est terminale — \(contrat)")
         XCTAssertNil(issue.error, "l'annulation n'invente pas de raison — \(contrat)")
+        XCTAssertEqual(suivant.id, next.id, "le suivant garde son identité — \(contrat)")
         XCTAssertEqual(suivant.state, .done, "le suivant n'est pas perdu — \(contrat)")
-        assertContratDansSource(
-            "MurmureCore/Sources/MurmureCore/TranscriptQueue.swift",
-            #"func\s+wait\s*\(\s*for\s+id\s*:\s*String"#,
-            "l'annulation termine l'attente de cette entrée")
     }
 
-    func testCriterion5StatusIsExactlyIdleRunningOrWaitingAndNeverLeaksSourceOrTranscript() throws {
-        let queue = try String(contentsOf: racine(for: "MurmureCore/Sources/MurmureCore/TranscriptQueue.swift"), encoding: .utf8)
+    func testCriterion5StatusTransitionsExactlyIdleRunningAndWaiting() async throws {
+        let started = PortePartage()
+        let finish = PortePartage()
+        let file = TranscriptQueue { _ in
+            started.open()
+            await finish.wait()
+        }
+        let vide = await file.status
+        let first = await file.enqueue(source: "first")
+        let second = await file.enqueue(source: "second")
+        let waiting = await file.status
+        let drainage = Task { await file.drain() }
+        await started.wait()
+        let running = await file.status
+
+        finish.open()
+        await drainage.value
+        let terminal = await file.status
+
+        XCTAssertEqual(vide, "idle", "une file vide est idle — \(contrat)")
+        XCTAssertEqual(waiting, "idle, 2 waiting", "deux attentes sont exactes — \(contrat)")
+        XCTAssertEqual(running, "running \(first.source), 1 waiting", "le travail courant est exact — \(contrat)")
+        XCTAssertEqual(terminal, "idle", "plus rien à attendre après la terminaison — \(contrat)")
+        XCTAssertNotEqual(running, waiting, "le statut suit la transition de la file — \(contrat)")
         let server = try String(contentsOf: racine(for: "Murmure/TranscriptControlServer.swift"), encoding: .utf8)
-        XCTAssertTrue(queue.contains(#"return "idle""#), "la file produit idle — \(contrat)")
-        XCTAssertTrue(queue.contains(#"running \(element.source), \(waiting.count) waiting"#), "la file produit running exact — \(contrat)")
-        XCTAssertTrue(queue.contains(#"idle, \(waiting.count) waiting"#), "la file produit waiting exact — \(contrat)")
-        XCTAssertTrue(queue.contains("var status"), "le statut commun est calculé par la file — \(contrat)")
-        XCTAssertTrue(server.contains("statusProvider()"), "status appelle le provider injecté — \(contrat)")
-        XCTAssertFalse(server.range(of: #"logger\.(?:debug|info|notice|warning|error).*?(?:source|transcript|segment)"#, options: [.regularExpression, .caseInsensitive]) != nil, "status ne journalise ni source ni transcript — \(contrat)")
+        XCTAssertFalse(
+            server.range(
+                of: #"logger\.(?:debug|info|notice|warning|error).*?(?:source|transcript|segment)"#,
+                options: [.regularExpression, .caseInsensitive]
+            ) != nil,
+            "status ne journalise ni source ni transcript — \(contrat)")
     }
 
     func testCriterion6TheCommonQueueNeverRunsDuplicateOrParallelWork() async throws {
@@ -564,17 +594,6 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(relative)
     }
-
-    private func assertContratDansSource(
-        _ relative: String, _ expression: String, _ raison: String, file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        let contenu = (try? String(
-            contentsOf: racine(for: relative), encoding: .utf8)) ?? ""
-        XCTAssertNotNil(
-            contenu.range(of: expression, options: .regularExpression),
-            "\(raison) — \(contrat)", file: file, line: line)
-    }
 }
 
 private extension String {
@@ -585,19 +604,6 @@ private extension String {
             Range(match.range, in: self).map { String(self[$0]) }
         }
     }
-}
-
-private func attendreTerminal(
-    file: TranscriptQueue, id: String, limite: Double = 1
-) async throws -> TranscriptQueueEntry {
-    let echeance = Date().addingTimeInterval(limite)
-    while Date() < echeance {
-        if let entry = await file.entries.first(where: { $0.id == id }),
-            entry.state == .done || entry.state == .failed
-        { return entry }
-        try await Task.sleep(nanoseconds: 2_000_000)
-    }
-    throw EchecPartage(message: "timeout waiting for \(id)")
 }
 
 private final class JournalPartage: @unchecked Sendable {
