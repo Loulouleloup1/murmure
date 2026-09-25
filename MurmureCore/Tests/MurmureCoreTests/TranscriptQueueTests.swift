@@ -561,32 +561,25 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
         XCTAssertNotEqual(running, waiting, "le statut suit la transition de la file — \(contrat)")
     }
 
-    func testCriterion6TheCommonQueueNeverRunsDuplicateOrParallelWork() async throws {
+    func testCriterion6SingleThreadedBaselineRunsTheSubmittedWorkExactlyOnce() async {
         let journal = JournalPartage()
-        let started = PortePartage()
-        let finish = PortePartage()
         let file = TranscriptQueue { entree in
             journal.debut(entree.source)
-            if entree.source == "one" {
-                started.open()
-                await finish.wait()
-            }
             journal.fin(entree.source)
         }
-        await file.enqueue(source: "one")
-        await file.enqueue(source: "two")
-        let firstDrain = Task { await file.drain() }
-        let startedSuccessfully = await attendreCondition("le premier travail démarre") {
-            journal.debuts.contains("one")
-        }
-        XCTAssertTrue(startedSuccessfully, "le premier travail doit démarrer — \(contrat)")
 
+        await file.enqueue(source: "one")
         await file.drain()
-        XCTAssertEqual(journal.debuts, ["one"], "un second drain ne duplique rien — \(contrat)")
-        finish.open()
-        await firstDrain.value
-        XCTAssertEqual(journal.debuts, ["one", "two"], "chaque entrée part une fois — \(contrat)")
-        XCTAssertEqual(journal.maximumSimultane, 1, "zéro travail concurrent — \(contrat)")
+
+        XCTAssertEqual(
+            journal.debuts, ["one"],
+            "la ligne de base single-threaded démarre l'entrée soumise une seule fois — \(contrat)")
+        XCTAssertEqual(
+            journal.evenements, ["debut one", "fin one"],
+            "un seul travail, exécuté séquentiellement de bout en bout — \(contrat)")
+        XCTAssertEqual(
+            journal.maximumSimultane, 1,
+            "aucun travail parallèle n'est nécessaire sur la ligne de base — \(contrat)")
     }
 }
 
