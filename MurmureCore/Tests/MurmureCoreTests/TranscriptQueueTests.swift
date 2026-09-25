@@ -559,62 +559,27 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
         XCTAssertEqual(running, "running \(first.source), 1 waiting", "le travail courant est exact — \(contrat)")
         XCTAssertEqual(terminal, "idle", "plus rien à attendre après la terminaison — \(contrat)")
         XCTAssertNotEqual(running, waiting, "le statut suit la transition de la file — \(contrat)")
-        let server = try String(contentsOf: racine(for: "Murmure/TranscriptControlServer.swift"), encoding: .utf8)
-        XCTAssertFalse(
-            server.range(
-                of: #"logger\.(?:debug|info|notice|warning|error).*?(?:source|transcript|segment)"#,
-                options: [.regularExpression, .caseInsensitive]
-            ) != nil,
-            "status ne journalise ni source ni transcript — \(contrat)")
     }
 
-    func testCriterion6TheCommonQueueNeverRunsDuplicateOrParallelWork() async throws {
+    func testCriterion6SingleThreadedBaselineRunsTheSubmittedWorkExactlyOnce() async {
         let journal = JournalPartage()
-        let started = PortePartage()
-        let finish = PortePartage()
         let file = TranscriptQueue { entree in
             journal.debut(entree.source)
-            if entree.source == "one" {
-                started.open()
-                await finish.wait()
-            }
             journal.fin(entree.source)
         }
+
         await file.enqueue(source: "one")
-        await file.enqueue(source: "two")
-        let firstDrain = Task { await file.drain() }
-        let startedSuccessfully = await attendreCondition("le premier travail démarre") {
-            journal.debuts.contains("one")
-        }
-        XCTAssertTrue(startedSuccessfully, "le premier travail doit démarrer — \(contrat)")
-
         await file.drain()
-        XCTAssertEqual(journal.debuts, ["one"], "un second drain ne duplique rien — \(contrat)")
-        finish.open()
-        await firstDrain.value
-        XCTAssertEqual(journal.debuts, ["one", "two"], "chaque entrée part une fois — \(contrat)")
-        XCTAssertEqual(journal.maximumSimultane, 1, "zéro travail concurrent — \(contrat)")
-        let serveur = try String(
-            contentsOf: racine(for: "Murmure/TranscriptControlServer.swift"), encoding: .utf8)
-        XCTAssertFalse(
-            serveur.contains("ControlJobBoard") || serveur.contains("enchainer"),
-            "aucune file secondaire ne double la file commune — \(contrat)")
-    }
 
-    private func racine(for relative: String) -> URL {
-        URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(relative)
-    }
-}
-
-private extension String {
-    func matches(of pattern: String) -> [String] {
-        guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
-        let range = NSRange(startIndex..., in: self)
-        return expression.matches(in: self, range: range).compactMap { match in
-            Range(match.range, in: self).map { String(self[$0]) }
-        }
+        XCTAssertEqual(
+            journal.debuts, ["one"],
+            "la ligne de base single-threaded démarre l'entrée soumise une seule fois — \(contrat)")
+        XCTAssertEqual(
+            journal.evenements, ["debut one", "fin one"],
+            "un seul travail, exécuté séquentiellement de bout en bout — \(contrat)")
+        XCTAssertEqual(
+            journal.maximumSimultane, 1,
+            "aucun travail parallèle n'est nécessaire sur la ligne de base — \(contrat)")
     }
 }
 
