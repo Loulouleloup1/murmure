@@ -7,37 +7,60 @@
 #     red or green on the evidence found in the source; none of them is red by construction.  A
 #     server that satisfies the graph passes all of them, and the DEV that lands the 10-S seam
 #     turns this whole family green.
-#   * the CORE filter, a real XCTest run.  `Executed 0 tests` is an INVENTORY red of its own
-#     (a filter that selects nothing is silent evidence, never a passing verdict); the verdict
-#     control is green only on a non-zero execution with zero failures.
+#   * the CORE filter, a real XCTest run, split into three named controls so a red says which of
+#     the three things went wrong: the 10-S test target not compiling, a filter that selects
+#     nothing (silent evidence, never a passing verdict), or an actual test failure.  Only the
+#     verdict control can be green, and it is green on a non-zero execution with zero failures.
 #
-# The 10-S sources are untracked in the writer worktrees, so the current worktree may not carry
-# them.  A missing source is therefore never a silent skip: the control that needs it is red,
-# naming the file, and every source is echoed with the root it was resolved from.
+# The 10-S sources are untracked in every writer worktree, so the tree under test may not carry
+# them at all.  Each of the four is therefore an INVENTORY control ON THE TREE UNDER TEST: a file
+# that only exists in a writer worktree is red by name, so a green verdict can never rest on a
+# source the tested tree does not contain.  The graph controls still read the real assembled
+# source — every resolved path is printed with the root it came from — so what they report is the
+# wiring actually written, and the red they raise is the red of that wiring, not of an empty file.
+#
+# A mutant mode is a DIFFERENCE, not a state: the run re-checks the graph on the unmutated
+# assembly, then on the mutated one, and claims a capture only for a control that was GREEN on the
+# first and RED on the second.  A control that was already red proves nothing, and a mutation that
+# changes nothing is inapplicable; both exit 3 saying so.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 MODE=${1:-wire}
 EXPECTED=""
 
-# The plan (revision 16) names the last writer of each 10-S path.  Resolution tries the tree under
-# test first, then those worktrees in the declared order, so the graph is read from a real source
-# instead of from an absent file.  Every hit prints the root it came from.
-FALLBACK_ROOTS=(
-  "$ROOT/../t_d1dbdc77"   # TranscriptControlServer.swift, TranscriptQueue + its tests
-  "$ROOT/../t_70d649b1"   # TranscriptsPaneModel.swift
-  "$ROOT/../t_c17a5c14"   # TranscriptQueue.swift, TranscriptQueueTests.swift
-)
-ROOTS=("$ROOT" "${FALLBACK_ROOTS[@]}")
-[[ -n "${MURMURE_WIRING_ROOT:-}" ]] && ROOTS=("$MURMURE_WIRING_ROOT" "${ROOTS[@]}")
+# The tree under test.  `MURMURE_WIRING_ROOT` lets a harness declare a different assembly AS the
+# tree under test (a correct-by-construction 10-S, for instance); the inventory controls then judge
+# that assembly instead, which is what makes a green base reproducible outside the worktree.  It is
+# a source root, never a test hook: the controls below read files and run XCTest, they do not know
+# who supplied them.
+TEST_ROOT=${MURMURE_WIRING_ROOT:-$ROOT}
+SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
 
-# `MURMURE_WIRING_ROOT` lets a harness point the graph at another assembly of the same sources
-# (a correct-by-construction server, for instance).  It is a source root, never a test hook: the
-# controls below read files and run XCTest, they do not know who supplied them.
+# When the tested tree lacks a 10-S source, the graph is read from the worktrees that actually
+# wrote it, newest first: t_0799321d carries the current version of all four, t_d1dbdc77 the
+# earlier 10-S assembly (its TranscriptsPaneModel predates decision O1 on the menu-bar badge, so
+# it is a fallback for reachability only, never an authority).
+FALLBACK_ROOTS=(
+  "$ROOT/../t_0799321d"   # all four 10-S sources, current version
+  "$ROOT/../t_d1dbdc77"   # all four 10-S sources, earlier assembly
+)
+ROOTS=("$TEST_ROOT" "${FALLBACK_ROOTS[@]}")
+# Every path is canonicalised through its DIRECTORY (`cd` into a file fails, so canonising the
+# file itself would silently keep the `..` segments), so a sibling worktree reached through `..`
+# can never string-prefix the tree under test and pass a `-sous-test` control it does not own.
+canon() { # a file path -> that file with its directory resolved
+  local dir base
+  dir=$(dirname "$1"); base=$(basename "$1")
+  dir=$(cd "$dir" 2>/dev/null && pwd -P) || return 1
+  [[ "$base" == "." || -z "$base" ]] && { printf '%s' "$dir"; return 0; }
+  printf '%s' "$dir/$base"
+}
+TEST_ROOT_REAL=$(canon "$TEST_ROOT") || TEST_ROOT_REAL=$TEST_ROOT
 resolve() { # relative path -> prints the absolute path of the first root that holds it
   local rel=$1 root
   for root in "${ROOTS[@]}"; do
-    [[ -f "$root/$rel" ]] && { printf '%s' "$root/$rel"; return 0; }
+    [[ -f "$root/$rel" ]] && { canon "$root/$rel"; return 0; }
   done
   return 1
 }
@@ -66,16 +89,78 @@ done
 [[ -n "$server_file" ]] && cp "$server_file" "$work/server.swift" || : >"$work/server.swift"
 [[ -n "$pane_file" ]] && cp "$pane_file" "$work/pane.swift" || : >"$work/pane.swift"
 
+# `MURMURE_WIRING_SERVER` points the server check at one specific file, so a mutant can be measured
+# as a DIFFERENCE between two assemblies of the same tree instead of being asserted.  Like
+# MURMURE_WIRING_ROOT it is a source locator, not a verdict hook: the controls below re-read the
+# file and re-run XCTest, they do not learn from it whether they should pass.
+if [[ -n "${MURMURE_WIRING_SERVER:-}" && -f "${MURMURE_WIRING_SERVER:-}" ]]; then
+  server_file=$(canon "$MURMURE_WIRING_SERVER")
+  cp "$server_file" "$work/server.swift"
+  printf 'INFO source=serveur-surchargé chemin=%s\n' "$server_file"
+fi
+
+# A mutant is only PROOF if it flips a control that was green: a control already red before the
+# mutation proves nothing, so the run measures the baseline and the mutant and compares them.  Both
+# halves read real files through the same controls — the mutant is not a claim, it is a difference.
+mutate() { # <perl-args...>: applies the edit in place, 0 if the file changed
+  local before after
+  before=$(shasum -a 256 <"$work/server.swift")
+  perl "$@" "$work/server.swift"
+  after=$(shasum -a 256 <"$work/server.swift")
+  [[ "$before" != "$after" ]]
+}
+# The graph family is re-run in this same process, on whichever server file MURMURE_WIRING_SERVER
+# names, and its red set is collected in `red_set`.  Swift is not re-run: it filters MurmureCore,
+# which no server mutation touches.
+run_graph() { # <label> -> prints the red controls of that assembly
+  local label=$1 line name out
+  # `red_set` is a space-delimited list padded on BOTH ends, so the membership test is exactly
+  # `" $EXPECTED "` against the list.  Padding only the front would make the LAST element of the
+  # list unmatchable — a silent failure that reads as "green on the reference" for whichever
+  # control happens to come last, and as a capture the run never measured.
+  red_set=" "
+  # MURMURE_WIRING_ROOT travels with the call: the reference assembly and the mutated one must be
+  # judged against the SAME tree under test, or their red sets are not comparable.
+  out=$(MURMURE_WIRING_ROOT="$TEST_ROOT" MURMURE_WIRING_SERVER=$work/server.swift "$SELF" graph 2>&1)
+  while IFS= read -r line; do
+    [[ "$line" == ROUGE\ contrôle=* ]] || continue
+    name=${line#ROUGE contrôle=}; name=${name%% *}
+    red_set="$red_set $name"
+  done <<<"$out"
+  printf '%s rouges=%s\n' "$label" "${red_set:- aucun}"
+  # The re-read server lives in a temp directory, so `source-serveur-sous-test` is red BY
+  # CONSTRUCTION here and says nothing about the assembly under test.  It is excluded from the
+  # comparison so it can never stand in for the control a mutant is meant to flip.
+  red_set=${red_set// source-serveur-sous-test/}
+  red_set="$red_set "
+  # Recorded, not just printed: the verdict below compares the MUTATED red set against this one.
+  baseline_red=$red_set
+}
 case "$MODE" in
-  wire) ;;
+  wire|graph) ;;
   mutant-queue) EXPECTED=server-no-secondary-queue
-    printf '\nprivate final class ControlJobBoard2 {}\n' >>"$work/server.swift" ;;
+    # Appending a job board is the mutation the card forbids: a secondary queue in the server.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    printf '\nprivate final class ControlJobBoard2 {}\n' >>"$work/server.swift"
+    MUTATED=1 ;;
   mutant-runner) EXPECTED=transcribe-injected
-    perl -0pi -e 's/await submitter\(/await runner.submit(/g' "$work/server.swift" ;;
+    # transcribe routes to its own runner instead of the injected submitter.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate -0pi -e 's/await (?:submitter|submitteur)\(/await runner.submit(/g'; then
+      MUTATED=1
+    fi ;;
   mutant-status) EXPECTED=status-injected
-    perl -0pi -e 's/statusProvider\(\)/phantomFile.status()/g' "$work/server.swift" ;;
+    # status reads a file of its own instead of the injected provider.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate -0pi -e 's/(?:statusProvider|fournisseurStatut)\(\)/phantomFile.status()/g'; then
+      MUTATED=1
+    fi ;;
   *) printf 'usage: %s [wire|mutant-queue|mutant-runner|mutant-status]\n' "$0" >&2; exit 64 ;;
 esac
+if [[ -n "$EXPECTED" && -z "${MUTATED:-}" ]]; then
+  printf 'MUTANT INAPPLICABLE mode=%s : la mutation n’a rien changé dans la copie du serveur\n' "$MODE"
+  exit 3
+fi
 
 fail=0
 matched=0
@@ -88,11 +173,27 @@ check() {
   total=$((total + 1))
   if [[ "$2" -eq 0 ]]; then matched=$((matched + 1)); pass "$1"; else red "$1" "$3"; fi
 }
-# source_check <name> <resolved-path> <detail-when-absent>: a required source is a red control, not
-# a skip.  The denominator counts executed controls only.
-source_check() {
-  if [[ -z "$2" ]]; then red "$1" "$3 absent de l'assemblage"; else pass "$1"; fi
+# Two inventory controls per 10-S source, both executed, never skipped:
+#   <name>-present    the file was resolved somewhere, so the graph below reads a real source;
+#   <name>-sous-test  the file is IN THE TREE UNDER TEST, which is what a verdict must rest on.
+# A source that only exists in a writer worktree therefore turns the second control red by name:
+# green and absent stay distinguishable, and the denominator counts executed controls only.
+source_check() { # <name> <resolved-path> <detail-when-absent>
+  local name=$1 hit=$2 detail=$3
   total=$((total + 1))
+  if [[ -z "$hit" ]]; then
+    red "$name-present" "$detail absent de tout assemblage"
+  else
+    matched=$((matched + 1)); pass "$name-present"
+  fi
+  total=$((total + 1))
+  if [[ -n "$hit" && "$hit" == "$TEST_ROOT_REAL/"* ]]; then
+    matched=$((matched + 1)); pass "$name-sous-test"
+  elif [[ -n "$hit" ]]; then
+    red "$name-sous-test" "$detail présent hors de l'arbre sous test : $hit"
+  else
+    red "$name-sous-test" "$detail absent de l'arbre sous test $TEST_ROOT"
+  fi
 }
 
 # Balanced Swift body for a named signature, so a forbidden word in a comment or in an unrelated
@@ -103,6 +204,13 @@ body_for() {
     my $o=index($x,"{",$-[0]); my $d=0; my $e=$o;
     for my $p ($o..length($x)-1) { my $c=substr($x,$p,1); $d++ if $c eq "{"; $d-- if $c eq "}"; if (!$d) {$e=$p; last} }
     exit 1 if $d; print substr($x,$o+1,$e-$o-1);'
+}
+# Signature of a named declaration: from the match up to the opening brace, so an INJECTED
+# dependency (a parameter) is seen, not only what the body does with it.
+sig_for() {
+  SIGNATURE="$1" SOURCE="$2" perl -0777 -e '
+    my($s,$x)=@ENV{qw(SIGNATURE SOURCE)}; exit 1 unless $x =~ /\Q$s\E[^{]*\{/s;
+    print substr($x,$-[0],index($x,"{",$-[0])-$-[0]);'
 }
 # Body of the first func whose body matches $2 (regex source).
 method_with() {
@@ -115,6 +223,28 @@ method_with() {
     }'
 }
 
+# The codebase names the same two seams in French or English depending on the file, so a control
+# accepts either spelling rather than pinning a DEV to one.  Both lists are explicit: no wildcard.
+#
+# The initializer names its seams as PARAMETERS (`submitteur:`), the methods CALL them
+# (`submitteur(`); requiring a call in the initializer would be red on a correct injection, and
+# accepting a bare name in the methods would be green on a server that never calls its own seam.
+SUBMIT_PARAMS=('submitteur:' 'submitter:')
+STATUS_PARAMS=('fournisseurStatut:' 'statusProvider:')
+SUBMIT_CALLS=('submitter(' 'submitteur(')
+STATUS_CALLS=('statusProvider(' 'fournisseurStatut(')
+has_any() { # <haystack> <needle>...
+  local hay=$1 needle
+  shift
+  for needle in "$@"; do [[ "$hay" == *"$needle"* ]] && return 0; done
+  return 1
+}
+# Does this code BUILD a queue?  A Swift construction is `TranscriptQueue(` or `TranscriptQueue {`
+# — the trailing-closure form is the one a DEV actually writes, and matching only the parenthesised
+# form lets a server smuggle a queue of its own past the control.  `TranscriptQueue` as a bare type
+# (a parameter annotation, say) is not a construction and stays allowed.
+builds_queue() { printf '%s' "$1" | grep -qE 'TranscriptQueue[[:space:]]*[({]'; }
+
 server=$(<"$work/server.swift"); pane=$(<"$work/pane.swift")
 
 # --- inventory: the 10-S sources themselves -------------------------------------------------
@@ -126,17 +256,23 @@ source_check source-test   "$test_file"    "$TEST_REL"
 # --- the named wiring graph: TranscriptControlServer -----------------------------------------
 if [[ -n "$server_file" ]]; then
   init=$(body_for 'init' "$server" || true)
-  [[ -n "$init" && "$init" == *submitter* ]]; check initialiseur-submitteur "$?" \
+  # The seam is INJECTED: the initializer's SIGNATURE carries it as a parameter, and its body must
+  # not build a queue of its own.  `TranscriptQueue(` in the initializer is caught below too.
+  init_sig=$(sig_for 'init' "$server" || true)
+  [[ -n "$init_sig" ]] && has_any "$init_sig" "${SUBMIT_PARAMS[@]}"; check initialiseur-submitteur "$?" \
     "l'initialiseur ne reçoit pas de submitteur injecté"
-  [[ -n "$init" && "$init" == *statusProvider* ]]; check initialiseur-status "$?" \
+  [[ -n "$init_sig" ]] && has_any "$init_sig" "${STATUS_PARAMS[@]}"; check initialiseur-status "$?" \
     "l'initialiseur ne reçoit pas de status provider injecté"
   transcribe=$(body_for 'func transcribe' "$server" || body_for 'func transcrire' "$server" || true)
-  [[ -n "$transcribe" && "$transcribe" == *'submitter('* ]]; check transcribe-injected "$?" \
+  has_any "$transcribe" "${SUBMIT_CALLS[@]}" && [[ -n "$transcribe" ]]; check transcribe-injected "$?" \
     "transcribe n'appelle pas le submitteur injecté"
   status=$(body_for 'func status' "$server" || body_for 'func statut' "$server" || true)
-  [[ -n "$status" && "$status" == *'statusProvider('* ]]; check status-injected "$?" \
+  has_any "$status" "${STATUS_CALLS[@]}" && [[ -n "$status" ]]; check status-injected "$?" \
     "status n'appelle pas le status provider injecté"
-  [[ -n "$status" && "$status" != *'TranscriptQueue('* ]]; check status-no-queue "$?" \
+  # `status` must not build OR reach a queue: the card puts the queue in the pane, so a server that
+  # constructs one to answer `status` is a server with a second queue, however it spells the call.
+  # A construction anywhere else in the server is caught by `server-no-queue-construction`.
+  ! builds_queue "$status" && [[ -n "$status" ]]; check status-no-queue "$?" \
     "status construit une file secondaire"
 
   # Comments carry the vocabulary of the old design; only code is searched.
@@ -144,7 +280,7 @@ if [[ -n "$server_file" ]]; then
   [[ "$clean" != *'ControlJobBoard'* && "$clean" != *'enchainer'* \
      && "$clean" != *'dernierTravail'* && "$clean" != *'Task<ControlJobOutcome'* ]]
   check server-no-secondary-queue "$?" "le serveur contient une file/chaîne provisoire"
-  [[ "$clean" != *'TranscriptQueue('* ]]; check server-no-queue-construction "$?" \
+  ! builds_queue "$clean"; check server-no-queue-construction "$?" \
     "le serveur construit une file"
 else
   for c in initialiseur-submitteur initialiseur-status transcribe-injected status-injected \
@@ -162,7 +298,9 @@ if [[ -n "$pane_file" ]]; then
   lecture=$(method_with '(?:file|fileDeTravail)\s*\.\s*(?:entries|waiting|running)\b' "$pane" || true)
   [[ -n "$lecture" ]]; check pane-status-source "$?" \
     "le panneau ne lit pas les éléments de sa file (entries/waiting/running)"
-  count=$(printf '%s' "$pane" | perl -ne '$n+=()=/TranscriptQueue\s*\{/g; END{print $n+0}')
+  # Exactly ONE construction, in either Swift form; the pane owns the queue and nothing else does.
+  pane_clean=$(printf '%s' "$pane" | perl -0777 -pe 's{/\*.*?\*/}{}gs; s{//[^\n]*}{}g')
+  count=$(printf '%s' "$pane_clean" | perl -ne '$n+=()=/TranscriptQueue\s*[({]/g; END{print $n+0}')
   [[ "$count" -eq 1 ]]; check pane-one-queue "$?" \
     "constructions de file dans TranscriptsPaneModel=$count (exactement 1 attendue)"
 else
@@ -172,49 +310,74 @@ else
 fi
 
 # --- the core behavioural filter ------------------------------------------------------------
-# `TranscriptQueue` is a regex: it selects every XCTestCase class of the queue contract, present
-# or not yet added by 10-S.  A filter that selects nothing is silent evidence, so it is reported as
-# its own inventory control and never as a verdict.
-# The XCTest run must happen in the same assembly that supplied the test file: running the filter
-# in a `MurmureCore` that does not contain the contract would select nothing and prove nothing.
+# Three named controls, kept apart so each red says WHICH of the three things went wrong:
+#   swift-10-S-compile     the 10-S test target builds.  This is where an unimplemented 10-S seam
+#                          shows up: the contract calls API the production type does not have yet.
+#   filtre-10-S-non-vide   the filter selects at least one test — a filter that selects nothing is
+#                          silent evidence, never a passing verdict.
+#   swift-10-S             the verdict: a non-zero execution with zero failures.  It can turn
+#                          green, and it is the only one of the three that can.
+# `TranscriptQueue` is a regex so it selects every XCTestCase class of the queue contract, added
+# by 10-S or not.  The run happens in the same assembly that supplied the test file: running the
+# filter in a `MurmureCore` without the contract would select nothing and prove nothing.
 swift_pkg=""
 if [[ -n "$test_file" ]]; then
   swift_pkg="$(cd "$(dirname "$test_file")/../../.." && pwd)/MurmureCore"
   [[ -f "$swift_pkg/Package.swift" ]] || swift_pkg=""
-elif [[ -f "$ROOT/MurmureCore/Package.swift" ]]; then
-  swift_pkg="$ROOT/MurmureCore"
+elif [[ -f "$TEST_ROOT/MurmureCore/Package.swift" ]]; then
+  swift_pkg="$TEST_ROOT/MurmureCore"
 fi
 
 swift_log="$work/swift.log"
-if [[ -n "$swift_pkg" ]]; then
+if [[ "$MODE" == graph ]]; then
+  # Internal mode: the graph family only.  A mutant is measured by re-running the graph on two
+  # assemblies, and the core filter does not depend on any server mutation, so it is skipped here
+  # rather than paid for twice per mutant.
+  printf 'SWIFT paquet=inattiné (mode graph) résumé=""\n'
+elif [[ -n "$swift_pkg" ]]; then
   (cd "$swift_pkg" && swift test --filter 'TranscriptQueue') >"$swift_log" 2>&1
   swift_rc=$?
   summary=$(grep -E 'Executed [0-9]+ tests?, with [0-9]+ failures?' "$swift_log" | tail -1 | sed 's/^[[:space:]]*//' || true)
   # BSD sed has no `\+` in a basic regex: the counters are matched positionally.
   executed=$(printf '%s' "$summary" | sed -n 's/.*Executed \([0-9][0-9]*\) tests\{0,1\}.*/\1/p')
   failures=$(printf '%s' "$summary" | sed -n 's/.*with \([0-9][0-9]*\) failures\{0,1\}.*/\1/p')
-  printf 'SWIFT rc=%s résumé="%s"\n' "$swift_rc" "$summary"
-  # inventory: the filter must select something, otherwise it proves nothing.
+  printf 'SWIFT paquet=%s rc=%s résumé="%s"\n' "$swift_pkg" "$swift_rc" "$summary"
+  # A build error is the seam missing its implementation, so it is named as such: the first
+  # `error:` line carries the API the production type is missing.
+  build_error=$(grep -E '^[^ ].*: error: ' "$swift_log" | head -1 || true)
+  [[ -z "$build_error" ]]; check swift-10-S-compile "$?" \
+    "la cible de tests 10-S ne compile pas : ${build_error:-erreur de compilation non identifiée}"
   [[ -n "$summary" && "${executed:-0}" -gt 0 ]]; check filtre-10-S-non-vide "$?" \
     "le filtre Swift n'a sélectionné aucun test (preuve muette) : ${summary:-aucun résumé XCTest}"
   # verdict: a non-zero execution with zero failures is green, and can turn green.
   [[ -n "$summary" && "${executed:-0}" -gt 0 && "${failures:-1}" -eq 0 && "$swift_rc" -eq 0 ]]
   check swift-10-S "$?" "le contrat de file 10-S échoue (${summary:-aucun résumé XCTest})"
 else
+  red swift-10-S-compile "aucun assemblage MurmureCore exécutable (Package.swift absent)"
   red filtre-10-S-non-vide "aucun assemblage MurmureCore exécutable (Package.swift absent)"
   red swift-10-S "aucun assemblage MurmureCore exécutable (Package.swift absent)"
-  total=$((total + 2))
-  printf 'SWIFT rc=skippé résumé=""\n'
+  total=$((total + 3))
+  printf 'SWIFT paquet=aucun rc=skippé résumé=""\n'
 fi
 
 printf 'CONTRÔLE=N/M=%d/%d\n' "$matched" "$total"
 
-if [[ "$fail" -ne 0 ]]; then
-  if [[ -z "${EXPECTED// /}" ]]; then exit 1; fi
-  if [[ "$failed_controls" == *" $EXPECTED "* ]]; then
-    printf 'MUTANT capturé contrôle=%s\n' "$EXPECTED"; exit 1
+# A mutant run is a DIFFERENCE, not a state: the expected control must have been GREEN on the
+# reference assembly and RED on the mutated one.  A control that was already red proves nothing,
+# so the run says so and exits 3 rather than claiming a capture it did not measure.
+if [[ -n "$EXPECTED" ]]; then
+  if [[ "$failed_controls" != *" $EXPECTED "* ]]; then
+    printf 'MUTANT NON capturé contrôle=%s (aucun rouge exact sur l’assemblage muté)\n' "$EXPECTED"
+    exit 3
   fi
-  printf 'MUTANT NON capturé contrôle=%s (aucun rouge exact)\n' "$EXPECTED"; exit 3
+  if [[ "${baseline_red:- }" == *" $EXPECTED "* ]]; then
+    printf 'MUTANT NON capturé contrôle=%s (déjà rouge sur l’assemblage de référence : la mutation ne prouve rien)\n' \
+      "$EXPECTED"
+    exit 3
+  fi
+  printf 'MUTANT capturé contrôle=%s (vert sur l’assemblage de référence, rouge sur l’assemblage muté)\n' \
+    "$EXPECTED"
+  exit 1
 fi
-[[ -z "${EXPECTED// /}" ]] || { printf 'MUTANT NON capturé contrôle=%s (aucun rouge)\n' "$EXPECTED"; exit 3; }
+[[ "$fail" -eq 0 ]] || exit 1
 printf 'VERT contrôle=10-S\n'
