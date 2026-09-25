@@ -245,6 +245,69 @@ sig_for() {
     }
     exit 1 unless $found; print substr($x, $st, $o - $st);'
 }
+# EVERY executed `status` path of the server, ACCUMULATED — not just the first form found.
+#
+# `status` reaches its answer through one of two shapes, and BOTH are legitimate under the plan
+# (§10-S criterion 3 only says that `status` reads the common queue, §11-S criterion 3 the same):
+#   * a DECLARATION `func status()` / `func statut()` — a method that returns the provider's string;
+#   * a ROUTING ARM `case .status:` / `case "status":` — the shape the DELIVERED server already
+#     uses (`Murmure/TranscriptControlServer.swift:371-372`, `case .status:` →
+#     `ControlResponse(…, text: board.description)`), where the provider is awaited inline.
+# Reading only the declaration (the round-3 and round-7 defect, never closed) makes the contract
+# red on the minimal, natural edit of the delivered code: a DEV forced to invent a method the plan
+# does not ask for. Worse, it makes the plan's MANDATORY mutant (c) « lire un status fantôme »
+# uncapturable — on an assembly whose `status` answers from a `case`, the control is already red
+# before the mutation, so the mutation proves nothing (the run reports rc=3, honestly, but the
+# contract then has no witness for the ghost-status defect at all).
+#
+# The sibling probe `status-sans-journalisation.sh` already accepts both shapes; the two artefacts
+# disagreed on what a « chemin status » is. They now agree.
+#
+# Comments are stripped first, so a `statusProvider()` mentioned in prose is not a call, and the
+# arm walk stops only on a line at the EXACT indentation of the `case` (`case`/`default`/`}`): a
+# NESTED `switch` or `if` is not a new arm in Swift, and letting its `}` end the arm would hide
+# everything below it — the false green already measured and fixed in the sibling probe.
+cat >"$work/status_paths.pl" <<'STATUS_PATHS_PL'
+use strict; use warnings;
+local $/; my $x = <STDIN>;
+$x =~ s{/\*.*?\*/}{}gs;
+$x =~ s{//[^\n]*}{}g;
+my $trouve = 0;
+# 1. every `func status` / `func statut` body, balanced from the declaration's own brace.
+while ($x =~ /^[ \t]*(?:(?:public|private|internal|fileprivate|open|override|class|static|final|mutating)[ \t]+)*func[ \t]+(?:status|statut)\b[^{]*\{/gm) {
+  my $o = index($x, '{', $-[0]); my $d = 0; my $e = -1;
+  for my $p ($o .. length($x) - 1) {
+    my $c = substr($x, $p, 1);
+    $d++ if $c eq '{'; $d-- if $c eq '}';
+    if (!$d) { $e = $p; last }
+  }
+  next if $e < 0;   # unbalanced: not a func body, refuse rather than report on the file's tail
+  print substr($x, $o + 1, $e - $o - 1);
+  $trouve = 1;
+}
+# 2. every `case .status:` / `case "status":` arm, to the next same-indent `case`/`default`/`}`.
+#    A BLANK line does not end the arm (it used to, which truncated the arm at the first empty
+#    line and hid any logging added below it).
+while ($x =~ /^([ \t]*)case[ \t]+(?:\.status|"status")[ \t]*:[ \t]*\n/gm) {
+  my $st = $-[0]; my $ind = $1; my $p = index($x, "\n", $st); my $out = '';
+  while ($p < length($x)) {
+    my $nl = index($x, "\n", $p + 1); $nl = length($x) if $nl < 0;
+    my $line = substr($x, $p + 1, $nl - $p - 1);
+    last if $line =~ /^\Q$ind\E(?:case\b|default\b|\})/;
+    $out .= $line . "\n";
+    $p = $nl;
+  }
+  print $out;
+  $trouve = 1;
+  pos($x) = $p;   # resume AFTER the observed arm: the next one belongs to another switch
+}
+# Exit 0 only if at least one path was observed: printing nothing while exiting 0 would let an
+# empty extraction look like a found path, and the diagnostic would name the wrong cause of red.
+exit($trouve ? 0 : 1);
+STATUS_PATHS_PL
+status_paths() { # <swift-source> -> every executed `status` path, concatenated
+  perl "$work/status_paths.pl"
+}
 # Body of the first func whose body matches $2 (regex source).
 method_with() {
   RELATION="$1" SOURCE="$2" perl -0777 -e '
@@ -300,14 +363,18 @@ if [[ -n "$server_file" ]]; then
   transcribe=$(body_for 'func transcribe' "$server" || body_for 'func transcrire' "$server" || true)
   has_any "$transcribe" "${SUBMIT_CALLS[@]}" && [[ -n "$transcribe" ]]; check transcribe-injected "$?" \
     "transcribe n'appelle pas le submitteur injecté"
-  status=$(body_for 'func status' "$server" || body_for 'func statut' "$server" || true)
+  # `status-injected` and `status-no-queue` read the ACCUMULATION of every executed `status` path
+  # (`func status`/`func statut` bodies PLUS every `case .status:`/`case "status":` arm), so the
+  # contract accepts the shape the delivered server already uses and judges the executed graph in
+  # either shape. The control names stay the same: the denominator of the contract does not move.
+  status=$(printf '%s' "$server" | status_paths || true)
   has_any "$status" "${STATUS_CALLS[@]}" && [[ -n "$status" ]]; check status-injected "$?" \
-    "status n'appelle pas le status provider injecté"
+    "aucun chemin status exécuté n'appelle le status provider injecté (cherché : func status/statut, case .status:)"
   # `status` must not build OR reach a queue: the card puts the queue in the pane, so a server that
   # constructs one to answer `status` is a server with a second queue, however it spells the call.
   # A construction anywhere else in the server is caught by `server-no-queue-construction`.
   ! builds_queue "$status" && [[ -n "$status" ]]; check status-no-queue "$?" \
-    "status construit une file secondaire"
+    "un chemin status construit une file secondaire"
 
   # Comments carry the vocabulary of the old design; only code is searched.
   clean=$(printf '%s' "$server" | perl -0777 -pe 's{/\*.*?\*/}{}gs; s{//[^\n]*}{}g')
