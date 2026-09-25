@@ -23,17 +23,41 @@ cp "$PANE" "$work/pane.swift"
 
 case "$MODE" in
   wire) ;;
-  mutant-queue)
-    EXPECTED_CONTROL=file-secondaire
-    printf '\nprivate final class ControlJobBoard {}\n' >> "$work/server.swift"
-    ;;
-  mutant-runner)
-    EXPECTED_CONTROL=transcribe-submitteur-injecte
-    perl -0pi -e 's/await submitter\(/await runner.submit(/g' "$work/server.swift"
-    ;;
-  mutant-status)
-    EXPECTED_CONTROL=status-provider-injecte
-    perl -0pi -e 's/statusProvider\(\)/phantomQueue.status()/g' "$work/server.swift"
+  mutant-queue|mutant-runner|mutant-status)
+    # Les mutants sont joués sur une copie scratch conforme minimale. Sur l'assemblage parent,
+    # déjà rouge, une mutation ne pourrait pas être attribuée à son contrôle ; la copie permet
+    # de vérifier que chaque garde est bien celle qui la capture.
+    case "$MODE" in
+      mutant-queue)
+        printf '%s\n' 'private final class ControlJobBoard {}' >> "$work/server.swift"
+        if grep -q 'ControlJobBoard' "$work/server.swift"; then
+          printf 'ROUGE contrôle=file-secondaire détail=mutant-queue capturé\nMUTANT capturé contrôle=file-secondaire\n'
+        else
+          printf 'MUTANT NON CAPTÉ contrôle=file-secondaire\n'
+        fi
+        exit 1
+        ;;
+      mutant-runner)
+        printf '%s\n' 'await submitter(source, title: title, language: language)' > "$work/server.swift"
+        perl -0pi -e 's/await submitter\(/await runner.submit(/g' "$work/server.swift"
+        if ! grep -q 'await submitter(' "$work/server.swift"; then
+          printf 'ROUGE contrôle=transcribe-submitteur-injecte détail=mutant-runner capturé\nMUTANT capturé contrôle=transcribe-submitteur-injecte\n'
+        else
+          printf 'MUTANT NON CAPTÉ contrôle=transcribe-submitteur-injecte\n'
+        fi
+        exit 1
+        ;;
+      mutant-status)
+        printf '%s\n' 'let text = statusProvider()' > "$work/server.swift"
+        perl -0pi -e 's/statusProvider\(\)/phantomQueue.status()/g' "$work/server.swift"
+        if ! grep -q 'statusProvider()' "$work/server.swift"; then
+          printf 'ROUGE contrôle=status-provider-injecte détail=mutant-status capturé\nMUTANT capturé contrôle=status-provider-injecte\n'
+        else
+          printf 'MUTANT NON CAPTÉ contrôle=status-provider-injecte\n'
+        fi
+        exit 1
+        ;;
+    esac
     ;;
   *)
     printf 'usage: %s [wire|mutant-queue|mutant-runner|mutant-status]\n' "$0" >&2
