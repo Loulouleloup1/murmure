@@ -433,17 +433,25 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
         let second = await file.enqueue(source: "second")
         let firstEntered = PortePartage()
         let secondEntered = PortePartage()
+        let firstReturned = PortePartage()
+        let secondReturned = PortePartage()
         let waitFirst = Task {
             firstEntered.open()
-            return try await file.wait(for: first.id)
+            let resultat = try await file.wait(for: first.id)
+            firstReturned.open()
+            return resultat
         }
         let waitSecond = Task {
             secondEntered.open()
-            return try await file.wait(for: second.id)
+            let resultat = try await file.wait(for: second.id)
+            secondReturned.open()
+            return resultat
         }
         await firstEntered.wait()
         await secondEntered.wait()
 
+        XCTAssertFalse(firstReturned.estOuverte, "la première attente reste suspendue avant drainage — \(contrat)")
+        XCTAssertFalse(secondReturned.estOuverte, "la seconde attente reste suspendue avant drainage — \(contrat)")
         let drainage = Task { await file.drain() }
         let resultats = try await (waitFirst.value, waitSecond.value)
         await drainage.value
@@ -452,6 +460,10 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
         XCTAssertEqual(resultats.1.source, "second", "la seconde attente garde son id — \(contrat)")
         XCTAssertEqual(resultats.0.id, first.id, "aucun résultat d'un autre travail — \(contrat)")
         XCTAssertEqual(resultats.1.id, second.id, "aucun résultat d'un autre travail — \(contrat)")
+        XCTAssertEqual(resultats.0.state, .done, "la première attente se termine avec son résultat — \(contrat)")
+        XCTAssertEqual(resultats.1.state, .done, "la seconde attente se termine avec son résultat — \(contrat)")
+        XCTAssertTrue(firstReturned.estOuverte, "la première attente retourne après drainage — \(contrat)")
+        XCTAssertTrue(secondReturned.estOuverte, "la seconde attente retourne après drainage — \(contrat)")
     }
 
     func testCriterion3FailureIsTerminalForItsWaitThenTheNextEntryStarts() async throws {
@@ -634,6 +646,7 @@ private final class PortePartage: @unchecked Sendable {
         lock.lock(); opened = true; let waiter = continuation; continuation = nil; lock.unlock()
         waiter?.resume()
     }
+    var estOuverte: Bool { lock.lock(); defer { lock.unlock() }; return opened }
     func wait() async {
         if opened { return }
         await withCheckedContinuation { continuation in
