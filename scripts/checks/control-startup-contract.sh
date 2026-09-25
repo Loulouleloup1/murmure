@@ -98,7 +98,7 @@ short_home=$(mktemp -d "/tmp/m11s.XXXXXX")
 # `kill 0` — ce que `${APP_PID:-0}` donnerait quand aucun processus n'a été lancé — tue le GROUPE
 # DE PROCESSUS ENTIER, le script et le terminal qui l'a lancé compris : un run qui s'achève
 # correctement se faisait SIGTERM lui-même (mesuré). Le piège ne tue donc que s'il a un PID réel.
-trap '[[ -n "${APP_PID:-}" && "$APP_PID" -gt 1 ]] && kill "$APP_PID" 2>/dev/null; rm -rf "$work" "$short_home"' EXIT
+trap '[[ -n "${HARNESS_PID:-}" ]] && kill "$HARNESS_PID" 2>/dev/null; [[ -n "${APP_PID:-}" && "$APP_PID" -gt 1 ]] && kill "$APP_PID" 2>/dev/null; rm -rf "$work" "$short_home"' EXIT
 
 APP_REL=Murmure/TranscriptControlServer.swift
 DELEGATE_REL=Murmure/AppDelegate.swift
@@ -129,6 +129,10 @@ done
 [[ -n "$appfile_file" ]] && cp "$appfile_file" "$work/app.swift" || : >"$work/app.swift"
 [[ -n "$pane_file" ]] && cp "$pane_file" "$work/pane.swift" || : >"$work/pane.swift"
 [[ -n "$dictation_file" ]] && cp "$dictation_file" "$work/dictation.swift" || : >"$work/dictation.swift"
+[[ -n "$engine_file" ]] && cp "$engine_file" "$work/engine.swift" || : >"$work/engine.swift"
+
+# (le corpus de comptage est construit APRÈS les surcharges ci-dessous : il doit refléter les
+# fichiers rejoués, pas ceux d'avant)
 
 # `MURMURE_STARTUP_SERVER` / `MURMURE_STARTUP_DELEGATE` pointent un contrôle de graphe sur UN
 # fichier précis, pour qu'un mutant soit mesuré comme une DIFFÉRENCE entre deux assemblages. Comme
@@ -146,6 +150,32 @@ if [[ -n "${MURMURE_STARTUP_APP:-}" && -f "${MURMURE_STARTUP_APP:-}" ]]; then
   cp "$(canon "$MURMURE_STARTUP_APP")" "$work/app.swift"
   printf 'INFO source=app-surchargé chemin=%s\n' "$(canon "$MURMURE_STARTUP_APP")"
 fi
+
+# Le CORPUS de comptage : TOUT `Murmure/` de l'arbre sous test, puis les six copies de travail —
+# qui incluent les surcharges ET les mutations — écrasant leur version d'origine. C'est la seule
+# façon de compter « une seule construction dans Murmure/ » sans regarder deux noms de fichiers :
+# un second moteur ou une seconde file dans `MurmureApp.swift` serait compté (mesuré : les
+# contrôles `one-engine-construction`/`one-queue-construction` d'une version antérieure ne
+# surveillaient que le panneau et le serveur, et un second moteur dans MurmureApp les laissait
+# tous deux verts — 24/24).
+#
+# Construit À LA DEMANDE, jamais au chargement : le mode mutant mute les copies de travail avant
+# de rejouer le graphe, un corpus figé ne verrait pas la mutation (et le mutant serait déclaré
+# capturé sur une base où il n'a rien changé).
+build_corpus() {
+  mkdir -p "$work/corpus"
+  if [[ -d "$TEST_ROOT/Murmure" ]]; then
+    cp "$TEST_ROOT/Murmure"/*.swift "$work/corpus/" 2>/dev/null || true
+  fi
+  cp "$work/server.swift"    "$work/corpus/TranscriptControlServer.swift"  2>/dev/null || true
+  cp "$work/delegate.swift"  "$work/corpus/AppDelegate.swift"              2>/dev/null || true
+  cp "$work/app.swift"       "$work/corpus/MurmureApp.swift"              2>/dev/null || true
+  cp "$work/pane.swift"      "$work/corpus/TranscriptsPaneModel.swift"    2>/dev/null || true
+  cp "$work/dictation.swift" "$work/corpus/DictationController.swift"     2>/dev/null || true
+  cp "$work/engine.swift"    "$work/corpus/WhisperKitEngine.swift"         2>/dev/null || true
+  printf 'INFO corpus=%s fichiers=%s\n' "$work/corpus" \
+    "$(find "$work/corpus" -name '*.swift' -type f 2>/dev/null | wc -l | tr -d ' ')"
+}
 
 mutate() { # <file> <perl-args...>: applies the edit in place, 0 if the file changed
   local file=$1; shift
@@ -192,14 +222,55 @@ case "$MODE" in
       MUTATED=1
     fi ;;
   mutant-second-engine) EXPECTED=one-engine-construction
-    # Une seconde construction de moteur : exactement le défaut du critère 1.
+    # Une seconde construction de moteur : exactement le défaut du critère 1. Elle est injectée
+    # dans MurmureApp, PAS dans le panneau : c'est le site que les contrôles d'origine ne
+    # surveillaient pas, et le mutant doit tomber sur le contrôle le plus large (F2/F3 de la
+    # revue round 1 — un second moteur dans MurmureApp laissait 24/24 verts).
     baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
-    if mutate "$work/pane.swift" -0pi -e 's/^(\s*)private let engine: WhisperKitEngine$/$1private let engine2: WhisperKitEngine = WhisperKitEngine(progress: DecodeProgressBox())/m'; then
+    # `\@` dans le MOTIF : sans l'échappement, `@NSApplicationDelegateAdaptor` est interprété
+    # comme un tableau Perl vide et le motif ne matche jamais (mesuré : mutant INAPPLICABLE).
+    if mutate "$work/app.swift" -0pi -e 's/^(\s*)\@NSApplicationDelegateAdaptor\(AppDelegate\.self\) private var appDelegate$/$1private let rogueEngine = WhisperKitEngine(progress: DecodeProgressBox()) { _ in }\n$1\@NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate/m'; then
+      MUTATED=1
+    fi ;;
+  mutant-second-queue) EXPECTED=one-queue-construction
+    # Une seconde FILE, dans MurmureApp : le mutant obligatoire « seconde construction
+    # moteur/file », sur le site que `server-no-queue` ne surveillait pas.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/app.swift" -0pi -e 's/^(\s*)\@NSApplicationDelegateAdaptor\(AppDelegate\.self\) private var appDelegate$/$1private let rogueQueue = TranscriptQueue { entry in _ = entry }\n$1\@NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate/m'; then
+      MUTATED=1
+    fi ;;
+  mutant-dedicated-compute) EXPECTED=video-compute-not-dedicated
+    # `dedicatingComputeUnits: true` : la vidéo prend le chemin du modèle dédié
+    # (`WhisperKitEngine.swift:331`), c'est-à-dire la seconde instance que le critère 1 interdit.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/pane.swift" -0pi -e 's/dedicatingComputeUnits: false/dedicatingComputeUnits: true/'; then
+      MUTATED=1
+    fi ;;
+  mutant-non-idempotent) EXPECTED=delegate-handover-idempotent
+    # Un handover qui reconstruit un serveur à CHAQUE configuration, avec un simple
+    # `if controlServer == nil { log.info(…) }` qui ne retourne pas : le défaut exact du critère 2,
+    # et ce qu'un grep `== nil` laissait passer (mesuré, 24/24 — F4 de la revue round 1).
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/delegate.swift" -0pi \
+        -e 's/^(\s*)guard controlServer == nil else \{ return \}$/$1if controlServer == nil { _ = applicationLaunched }/m'; then
+      MUTATED=1
+    fi ;;
+  mutant-unguarded-construction) EXPECTED=delegate-handover-idempotent
+    # Le handover CORRECT, plus une construction de serveur AVANT la garde : le serveur est
+    # reconstruit à chaque configuration alors que la garde, la sortie anticipée et la comparaison
+    # sur la propriété sont toutes présentes. Seule la contrainte (c) du contrôle peut le voir —
+    # c'est le mutant qui prouve que (c) n'est pas décorative.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/delegate.swift" -0pi \
+        -e 's/^(\s*)guard controlServer == nil else \{ return \}$/$1_ = TranscriptControlServer(submitteur: submitteur, fournisseurStatut: fournisseurStatut)\n$1guard controlServer == nil else { return }/m'; then
       MUTATED=1
     fi ;;
   mutant-harness-start) EXPECTED=finder-launched-by-launchservices
-    # Le harnais qui pilote `start()` au lieu du Finder : rien n'ouvre le bundle, donc rien ne
-    # prouve le chemin réel. La mutation retire l'ouverture LaunchServices du harnais.
+    # Le harnais qui pilote `start()` au lieu du Finder. Ce n'est pas un drapeau : un processus
+    # ÉTRANGER sert réellement le socket du contrat (voir `run_finder`), donc le socket EXISTE et
+    # le CLI peut le joindre — la situation qu'un harnais produirait, et que rien ne prouve le
+    # chemin Finder. Le contrôle tombe sur l'état du monde (open exécuté + processus du bundle
+    # vivant), jamais sur une variable que ce mode écrit (F5 de la revue round 1).
     baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
     MUTATED=1
     FINDER_MUTANT_HARNESS=1 ;;
@@ -210,7 +281,7 @@ case "$MODE" in
        || mutate "$work/app.swift" -0pi -e 's/transcriptsModel\.queueStatus\(\)/"idle" (nothing)/'; then
       MUTATED=1
     fi ;;
-  *) printf 'usage: %s [finder|wire|mutant-no-start|mutant-second-engine|mutant-harness-start|mutant-ghost-status]\n' "$0" >&2; exit 64 ;;
+  *) printf 'usage: %s [finder|wire|mutant-no-start|mutant-second-engine|mutant-second-queue|mutant-dedicated-compute|mutant-non-idempotent|mutant-unguarded-construction|mutant-harness-start|mutant-ghost-status]\n' "$0" >&2; exit 64 ;;
 esac
 if [[ -n "$EXPECTED" && -z "${MUTATED:-}" ]]; then
   printf 'MUTANT INAPPLICABLE mode=%s : la mutation n’a rien changé dans la copie\n' "$MODE"
@@ -277,6 +348,59 @@ sig_for() {
     }
     exit 1 unless $found; print substr($t, $st, $o - $st);'
 }
+# Le comptage « une seule construction dans Murmure/ », sur le CORPUS entier et non sur deux
+# noms de fichiers. Un site de construction est WARMUP s'il est dans le corps de la déclaration
+# `enum ModelWarmup`, APP sinon ; `WhisperKitEngine {` dans `WhisperKitEngine.swift:29` est la
+# DÉCLARATION de l'acteur, pas une construction, et ne doit pas être comptée.
+cat >"$work/corpus_scan.pl" <<'CORPUS_SCAN_PL'
+use strict; use warnings;
+my $dir = $ARGV[0];
+opendir(my $dh, $dir) or exit 2;
+my @files = sort grep { /\.swift$/ } readdir $dh;
+closedir $dh;
+sub strip { my $t = shift; $t =~ s{/\*.*?\*/}{}gs; $t =~ s{//[^\n]*}{}g; $t }
+my %sites;   # type -> [ [fichier, offset], ... ]
+my %warmup_body_span;
+for my $f (@files) {
+  open(my $fh, '<', "$dir/$f") or next;
+  my $raw = do { local $/; <$fh> }; close $fh;
+  my $t = strip($raw);
+  # The span of `enum ModelWarmup`'s body, in the coordinates of the STRIPPED text.
+  if ($t =~ /enum\s+ModelWarmup\b[^{]*\{/s) {
+    my $o = index($t, '{', $-[0]); my $d = 0; my $e = -1;
+    for my $p ($o .. length($t) - 1) {
+      my $c = substr($t, $p, 1); $d++ if $c eq '{'; $d-- if $c eq '}';
+      if (!$d) { $e = $p; last }
+    }
+    $warmup_body_span{$f} = [$o, $e] if $e > 0;
+  }
+  for my $type (qw(WhisperKitEngine TranscriptQueue)) {
+    pos($t) = 0;
+    while ($t =~ /\b\Q$type\E\s*[({]/g) {
+      my $st = $-[0];
+      # A DECLARATION (`actor X {`, `class X {`, `struct X(`, …) is not a construction.
+      my $head = substr($t, ($st > 40 ? $st - 40 : 0), ($st > 40 ? 40 : $st));
+      next if $head =~ /\b(?:actor|class|struct|enum|extension|protocol|typealias)\s+$/;
+      push @{ $sites{$type} }, [$f, $st];
+    }
+  }
+}
+for my $type (qw(WhisperKitEngine TranscriptQueue)) {
+  my ($app, $warm) = (0, 0); my %byfile;
+  for my $s (@{ $sites{$type} || [] }) {
+    my ($f, $off) = @$s;
+    my $sp = $warmup_body_span{$f};
+    if ($sp && $off > $sp->[0] && $off < $sp->[1]) { $warm++ } else { $app++; $byfile{$f}++ }
+  }
+  print "SCAN type=$type total=" . scalar(@{ $sites{$type} || [] })
+      . " app=$app warmup=$warm files=";
+  print join(',', map { "$_=$byfile{$_}" } sort keys %byfile);
+  print "\n";
+}
+exit 0;
+CORPUS_SCAN_PL
+scan_corpus() { build_corpus >/dev/null; perl "$work/corpus_scan.pl" "$work/corpus"; }
+
 # EVERY executed `status` path of the server, ACCUMULATED — a `func status`/`func statut` body PLUS
 # every `case .status:`/`case "status":` arm. The same two shapes `control-queue-wiring.sh`
 # accepts, and for the same reason: the delivered server answers `status` from a `case`, and a
@@ -317,6 +441,96 @@ STATUS_PATHS_PL
 status_paths() { perl "$work/status_paths.pl"; }
 has_any() { local hay=$1 needle; shift; for needle in "$@"; do [[ "$hay" == *"$needle"* ]] && return 0; done; return 1; }
 
+# IDEMPOTENCE du handover,proofed STRUCTURELLEMENT. Exige, dans le corps de la méthode :
+#   (a) une comparaison de la propriété `controlServer` à `nil` (le serveur, pas un paramètre) ;
+#   (b) une SORTIE ANTICIPÉE sur le chemin « déjà configuré » : `guard … else { return }`, ou
+#       `if controlServer == nil { … } else { return }` ;
+#   (c) AUCUNE construction `TranscriptControlServer(` en dehors de la branche qui crée.
+# Un handover non idempotent qui reconstruit un serveur à chaque appel viole (b) — son `if … { log }`
+# ne retourne pas — et (c) le vérifie séparément. Sort 0 = idempotent, 1 = défaut, 2 = indécidable.
+cat >"$work/handover_idem.pl" <<'HANDOVER_IDEM_PL'
+use strict; use warnings;
+local $/; my $x = <STDIN> // '';
+$x =~ s{/\*.*?\*/}{}gs; $x =~ s{//[^\n]*}{}g;
+# Every `TranscriptControlServer(` CONSTRUCTION offset, and the spans of the branches.
+my @constr;
+while ($x =~ /\bTranscriptControlServer\s*\(/g) { push @constr, $-[0] }
+exit 2 unless @constr;                     # no construction at all -> nothing to guard
+# Spans of `if <cond involving controlServer == nil> { … } [else { … }]`
+my @create_branches;
+# Each guard is recorded as [debut_condition, fin_condition, debut_bloc_else, fin_bloc_else].
+my @guards;
+while ($x =~ /\bguard\b([^;{]*?)\belse\b\s*\{/gs) {
+  my $st = $-[0]; my $en = $+[0];
+  my $o = $en - 1; my $d = 0; my $e = -1;
+  for my $p ($o .. length($x) - 1) {
+    my $c = substr($x, $p, 1); $d++ if $c eq '{'; $d-- if $c eq '}';
+    if (!$d) { $e = $p; last }
+  }
+  push @guards, [$st, $en, $o, $e];
+}
+while ($x =~ /\bif\b([^{]*?)\{/gs) {
+  my $st = $-[0]; my $en = $+[0];
+  my $cond = substr($x, $st + 2, $en - $st - 3);
+  next unless $cond =~ /controlServer\s*==\s*nil/;
+  my $o = $en - 1; my $d = 0; my $e = -1;
+  for my $p ($o .. length($x) - 1) {
+    my $c = substr($x, $p, 1); $d++ if $c eq '{'; $d-- if $c eq '}';
+    if (!$d) { $e = $p; last }
+  }
+  next if $e < 0;
+  push @create_branches, [$st, $en, $o, $e];
+  # the `else` branch, if any, with its span
+  if (substr($x, $e + 1) =~ /^\s*else\b\s*\{/s) {
+    my $eo = index($x, '{', $e + 1);
+    my $ed = 0; my $ee = -1;
+    for my $p ($eo .. length($x) - 1) {
+      my $c = substr($x, $p, 1); $ed++ if $c eq '{'; $ed-- if $c eq '}';
+      if (!$ed) { $ee = $p; last }
+    }
+    push @guards, [$e + 1, $eo + 1, $eo, $ee] if $ee > 0;
+  }
+}
+# (a) a guard whose CONDITION — the text BETWEEN `guard` and `else` — compares the server property.
+my $cond_guard = 0;
+for my $g (@guards) {
+  my $cond = substr($x, $g->[0], $g->[1] - $g->[0]);
+  $cond_guard = 1 if $cond =~ /controlServer\s*(?:==|!=)\s*nil/;
+}
+# (b) an EARLY RETURN on the already-configured path: the `else` block that follows the guard, or
+#     the `else` of the nil-branch, must START with `return`.
+my $early = 0;
+for my $g (@guards) {
+  next if $g->[3] < 0;
+  my $else_body = substr($x, $g->[2] + 1, $g->[3] - $g->[2] - 1);
+  $early = 1 if $else_body =~ /^\s*return\b/s;
+}
+# (c) every construction inside the nil-branch, or after a guard that is BOTH on the property AND
+#     early-returning. Without that conjonction, ` constructions_gardees=1` sortait vert même
+#     sans aucune garde (mesuré sur le mutant non idempotent) : un contrôle ne doit pas être vert
+#     par défaut.
+my $enclosed = 1;
+my $early_guard_end = -1;
+for my $g (@guards) {
+  next if $g->[3] < 0;
+  my $else_body = substr($x, $g->[2] + 1, $g->[3] - $g->[2] - 1);
+  my $cond = substr($x, $g->[0], $g->[1] - $g->[0]);
+  next unless $else_body =~ /^\s*return\b/s;
+  next unless $cond =~ /controlServer\s*(?:==|!=)\s*nil/;
+  $early_guard_end = $g->[3] if $g->[3] > $early_guard_end;
+}
+for my $c (@constr) {
+  # Sans garde properties-correcte, AUCUNE construction n'est « gardée » : `(c)` ne doit pas être
+  # vert par défaut (mesuré : il l'était, `$early_guard_end` valant -1 et tout offset étant > -1).
+  my $inside = ($early_guard_end >= 0 && $c > $early_guard_end) ? 1 : 0;
+  for my $br (@create_branches) { $inside = 1 if $c > $br->[2] && $c < $br->[3] }
+  $enclosed = 0 unless $inside;
+}
+print STDERR "handover: constructions=" . scalar(@constr)
+  . " garde_condition=$cond_guard sortie_anticipee=$early constructions_gardees=$enclosed\n";
+exit(($cond_guard && $early && $enclosed) ? 0 : 1);
+HANDOVER_IDEM_PL
+
 server=$(clean_of <"$work/server.swift")
 delegate=$(clean_of <"$work/delegate.swift")
 appfile=$(clean_of <"$work/app.swift")
@@ -344,7 +558,14 @@ if [[ -n "$delegate_file" ]]; then
   handover=$(body_for 'func configureControlServer' "$delegate" || true)
   [[ -n "$handover" ]]; check delegate-configure-handover "$?" \
     "le delegate ne reçoit pas les dépendances par une méthode de configuration nommée"
-  printf '%s' "$handover" | grep -qE 'guard .*(== nil|!= nil)|if .*(== nil|!= nil)'; check delegate-handover-idempotent "$?" \
+  # IDEMPOTENCE —structurelle, pas lexicale. Un `if controlServer == nil { log.info(…) }` qui ne
+  # retourne PAS fait passer un grep `== nil` alors qu'un `TranscriptControlServer(…)` non gardé
+  # construit un second serveur à chaque configuration : c'est exactement le défaut du critère 2,
+  # et une version antérieure de ce contrôle le laissait passer (mesuré, 24/24). Le contrôle exige
+  # donc, dans le corps de la méthode : une comparaison sur la PROPRIÉTÉ `controlServer`, une SORTIE
+  # ANTICIPÉE (`guard … else { return }`, ou un `else { return }`), et toute construction de serveur
+  # du côté de la branche qui crée.
+  printf '%s' "$handover" | perl "$work/handover_idem.pl"; check delegate-handover-idempotent "$?" \
     "configureControlServer n'est pas idempotent : une seconde configuration créerait un second serveur"
   # The server is a PROPERTY of the delegate, not something it builds per call.
   printf '%s' "$delegate" | grep -qE 'var[[:space:]]+[A-Za-z_]*[Ss]erver[^\n]*:[[:space:]]*TranscriptControlServer\?'; \
@@ -375,25 +596,70 @@ else
 fi
 
 # --- the named wiring graph: ONE engine, ONE queue --------------------------------------------
-# Criterion 1: exactly one `WhisperKitEngine(` CONSTRUCTION in `Murmure/`, and it is the dictation's.
+# Criterion 1: exactly ONE `WhisperKitEngine(` CONSTRUCTION in the whole APP, and it is the
+# dictation's. The scope is the CORPUS (every `Murmure/*.swift` of the tree under test), not two
+# filenames: a second engine in `MurmureApp.swift` left both former controls green (measured,
+# 24/24) while breaking the criterion.
+#
 # The construction form is `WhisperKitEngine(` or `WhisperKitEngine {`; a bare type mention (a
-# parameter annotation) is not a construction and stays allowed.
+# parameter annotation) and the `actor WhisperKitEngine {` DECLARATION are not constructions.
+# ONE legitimate exception exists and is not a filename convention: `ModelWarmup` is the
+# `--prepare-model` bootstrap tool, a different process from the same binary that exits before
+# SwiftUI exists (`MurmureApp.swift:28`). It is counted separately by the scan and excluded BY ITS
+# DECLARATION, never by its file name — and `one-engine-warmup-is-bootstrap` proves the exclusion
+# is still true: the warm-up body must not be reachable from the app's own graph.
 if [[ -n "$pane_file" && -n "$dictation_file" ]]; then
-  n_engine=$(printf '%s' "$dictation" | perl -ne '$n+=()=/WhisperKitEngine\s*[({]/g; END{print $n+0}')
-  n_engine_pane=$(printf '%s' "$pane" | perl -ne '$n+=()=/WhisperKitEngine\s*[({]/g; END{print $n+0}')
-  [[ "$n_engine" -ge 1 && "$n_engine_pane" -eq 0 ]]; check one-engine-construction "$?" \
-    "constructions de WhisperKitEngine : dictée=$n_engine panneau=$n_engine_pane (1 au total, dans la dictée)"
-  # And the video reuses it: `loadedModelForVideo` on the RECEIVED engine, with the shared policy.
+  scan=$(scan_corpus || true)
+  eng_line=$(grep -E '^SCAN type=WhisperKitEngine ' <<<"$scan" || true)
+  que_line=$(grep -E '^SCAN type=TranscriptQueue ' <<<"$scan" || true)
+  printf 'SCAN >> %s | %s\n' "$eng_line" "$que_line"
+  eng_app=$(sed -n 's/.* app=\([0-9]*\) .*/\1/p' <<<"$eng_line")
+  que_app=$(sed -n 's/.* app=\([0-9]*\) .*/\1/p' <<<"$que_line")
+  # The app's single engine is the dictation's, and it is only that one.
+  [[ "${eng_app:-0}" -eq 1 && "$eng_line" == *"DictationController.swift=1"* ]]; check one-engine-construction "$?" \
+    "constructions de WhisperKitEngine dans l'app=$eng_app ($eng_line) — 1 attendue, dans la dictée"
+  # The warm-up exclusion stays an exclusion: its engine lives in `ModelWarmup`, which only
+  # `Launch.main` calls, and only behind the `--prepare-model` flag.
+  warm_body=$(body_for 'enum ModelWarmup' "$(clean_of <"$work/corpus/ModelWarmup.swift" 2>/dev/null || printf '')" || true)
+  warm_engine=$(printf '%s' "$warm_body" | perl -ne '$n+=()=/WhisperKitEngine\s*[({]/g; END{print $n+0}')
+  app_calls_warmup=0
+  if [[ -s "$work/corpus/MurmureApp.swift" ]]; then
+    clean_of <"$work/corpus/MurmureApp.swift" | grep -qE 'ModelWarmup\.run\(\)' \
+      && ! clean_of <"$work/corpus/MurmureApp.swift" | grep -qE 'CommandLine\.arguments\.contains\(ModelWarmup\.flag\)' \
+      && app_calls_warmup=1
+  fi
+  [[ "${warm_engine:-0}" -le 1 && "$app_calls_warmup" -eq 0 ]]; check one-engine-warmup-is-bootstrap "$?" \
+    "moteurs dans le corps de ModelWarmup=${warm_engine:-0} (1 max, l'outil --prepare-model) ; appel sans garde de drapeau=$app_calls_warmup"
+  # Criterion 1, POLITIQUE: the video path must ask for the DEFAULT compute units. `true` takes a
+  # wholly different branch in `WhisperKitEngine.loadedModelForVideo` (dedicated model out of
+  # `cachedModelFolder`, `Failure.modelNotOnDisk`) — the SECOND instance the criterion forbids. The
+  # argument is therefore READ, not merely the shape of the call (measured: `dedicatingComputeUnits:
+  # true` passed 24/24 before this control existed).
+  # And the video reuses the RECEIVED engine: the call is made on `engine`, the injected property.
   printf '%s' "$pane" | grep -qE 'engine\.loadedModelForVideo\('; check video-uses-shared-engine "$?" \
     "la vidéo n'appelle pas loadedModelForVideo sur le moteur reçu"
-  # One queue: the pane's. 10-S already freezes this in the panel; 11-S must not add a second.
-  n_queue=$(printf '%s' "$pane" | perl -ne '$n+=()=/TranscriptQueue\s*[({]/g; END{print $n+0}')
-  [[ "$n_queue" -eq 1 ]]; check one-queue-construction "$?" \
-    "constructions de TranscriptQueue dans le panneau=$n_queue (exactement 1 attendue)"
+  # L'argument est LU, pas seulement la forme de l'appel. Un appel SANS argument prend la valeur
+  # par défaut de `loadedModelForVideo(dedicatingComputeUnits: Bool = false)`
+  # (`WhisperKitEngine.swift:331`) et reste donc conforme : le contrôle ne rougit que sur une valeur
+  # EXPLICITE qui dédiaise, et il n'exige donc pas une écriture particulière du DEV.
+  video_arg=$(sed -n 's/.*loadedModelForVideo(\([^)]*\)).*/\1/p' <<<"$pane" | head -1)
+  if [[ -z "$video_arg" ]]; then
+    video_policy=0; video_why="aucun argument → défaut dedicatingComputeUnits: false"
+  elif has_any "$video_arg" 'dedicatingComputeUnits: false' 'dedicatingComputeUnits:false'; then
+    video_policy=0; video_why="dédicatingComputeUnits: false (moteur partagé)"
+  else
+    video_policy=1; video_why="dédicatingComputeUnits EXPLICITE et non false"
+  fi
+  check video-compute-not-dedicated "$video_policy" \
+    "loadedModelForVideo est appelé avec « ${video_arg:-aucun argument} » : $video_why"
+  # One queue: the pane's, and only that one — counted over the corpus too.
+  [[ "${que_app:-0}" -eq 1 && "$que_line" == *"TranscriptsPaneModel.swift=1"* ]]; check one-queue-construction "$?" \
+    "constructions de TranscriptQueue dans l'app=$que_app ($que_line) — exactement 1, dans le panneau"
   printf '%s' "$server" | perl -ne '$n+=()=/TranscriptQueue\s*[({]/g; exit($n>0)'; check server-no-queue "$?" \
     "le serveur construit une file"
 else
-  for c in one-engine-construction video-uses-shared-engine one-queue-construction server-no-queue; do
+  for c in one-engine-construction one-engine-warmup-is-bootstrap video-uses-shared-engine \
+           video-compute-not-dedicated one-queue-construction server-no-queue; do
     check "$c" 1 "sources du moteur ou du panneau absentes de l'assemblage"
   done
 fi
@@ -426,10 +692,29 @@ run_finder() { # the real Finder path; prints its evidence, sets FINDER_* reason
   # 1. Build Release. No bootstrap, no model download, no xcodegen regeneration beyond the spec
   #    that the tree already carries (AGENTS.md).
   printf 'BUILD configuration=Release\n'
-  if [[ -f "$TEST_ROOT/project.yml" && -d "$TEST_ROOT/Murmure" ]]; then
+  # L'IDENTITÉ DE SIGNATURE est une exigence de la gate (§4 du lot 11-S : « un bundle Release
+  # signé/chargé »), et elle manquait entièrement. Un bundle `TeamIdentifier=not set` est une
+  # application SANS identité stable : son empreinte dérive des octets du binaire, donc chaque
+  # reconstruction est une application DIFFÉRENTE pour macOS et aucune autorisation ne lui est
+  # réaccordée. Un vert obtenu sur un tel bundle ne prouve pas le chemin Finder — il prouve qu'un
+  # serveur a démarré dans un processus que macOS ne connaît pas. Mesuré : les deux builds de la
+  # nuit du 25 au 26 (`.assemblage-11s`, `.assemblage-11s-vert`) sortaient `Signature=adhoc`,
+  # `TeamIdentifier=not set`. L'identité est donc résolue avant la construction, et le bundle
+  # construit est VÉRIFIÉ après coup : c'est le bundle ouvert, pas l'intention, qui est contrôlé.
+  local sign_id="${MURMURE_CODESIGN_IDENTITY:-}"
+  if [[ -z "$sign_id" ]]; then
+    sign_id=$(security find-identity -v -p codesigning 2>/dev/null \
+      | sed -n 's/.*) \([0-9A-F]\{40\}\) ".*".*/\1/p' | head -1)
+  fi
+  printf 'BUILD identité=%s\n' "${sign_id:-AUCUNE}"
+  if [[ -z "$sign_id" ]]; then
+    build_rc=65
+    printf 'error: aucune identité de signature résolutionnable (security find-identity -v -p codesigning)\n' \
+      >"$work/build.log"
+  elif [[ -f "$TEST_ROOT/project.yml" && -d "$TEST_ROOT/Murmure" ]]; then
     ( cd "$TEST_ROOT" && xcodebuild -project Murmure.xcodeproj -scheme Murmure \
         -configuration Release -derivedDataPath "$work/dd" \
-        CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build ) >"$work/build.log" 2>&1
+        CODE_SIGN_IDENTITY="$sign_id" CODE_SIGN_STYLE=Manual build ) >"$work/build.log" 2>&1
     build_rc=$?
   else
     build_rc=65
@@ -455,6 +740,15 @@ run_finder() { # the real Finder path; prints its evidence, sets FINDER_* reason
   fi
   printf 'FINDER bundle_construit=%s\n' "$built"
   cp -R "$built" "$app"
+  # L'identité est contrôlée SUR LE BUNDLE COPIÉ, donc sur celui qui va être ouvert. `codesign -dv`
+  # sort sur stderr : sans `2>&1` la mesure ne verrait rien et le contrôle serait vert par défaut.
+  local codesign_out team
+  codesign_out=$(codesign -dv --verbose=2 "$app" 2>&1 || true)
+  team=$(sed -n 's/^TeamIdentifier=//p' <<<"$codesign_out" | head -1)
+  printf 'FINDER signature bundle=%s TeamIdentifier=%s\n' \
+    "$(sed -n 's/^Signature=//p' <<<"$codesign_out" | head -1)" "${team:-absent}"
+  [[ -n "$team" && "$team" != 'not set' && "$team" != '(null)' ]]; check finder-bundle-signe "$?" \
+    "TeamIdentifier=${team:-absent} : bundle sans identité stable, chaque reconstruction est une application différente pour macOS — le chemin Finder n'est pas prouvé"
   [[ -x "$app/Contents/Helpers/murmure" ]]; check finder-cli-in-bundle "$?" \
     "le bundle construit ne porte pas Contents/Helpers/murmure"
   cli="$app/Contents/Helpers/murmure"
@@ -477,21 +771,44 @@ run_finder() { # the real Finder path; prints its evidence, sets FINDER_* reason
 
   # 3. THE FINDER PATH. `/usr/bin/open -gj` on the bundle — LaunchServices, like a double-click.
   #    The harness never starts the server, and says so.
+  # `ps`/`pgrep` rapportent le chemin CANONIQUE (`/private/var/…`) là où le script a construit un
+  # chemin symlinké (`/var/…`) : chercher le chemin du script rendait ce contrôle rouge sur le
+  # bundle CORRECT (mesuré), et c'est aussi pour cela qu'une correspondance par simple nom
+  # (`Murmure`) serait fausse — l'app stable de Louis tourne en même temps (mesuré).
+  local app_real
+  app_real=$(cd "$app" 2>/dev/null && pwd -P || printf '%s' "$app")
   printf 'FINDER ouverture=LaunchServices commande="/usr/bin/open -gj --env CFFIXED_USER_HOME=%s %s"\n' \
     "$home" "$app"
   if [[ -n "${FINDER_MUTANT_HARNESS:-}" ]]; then
-    # The mutant: a harness that drives `start()` instead of the Finder. Reproduced HERE, on the
-    # same base, so the control below flips for the reason the card names.
-    printf 'FINDER MUTANT le harnais pilote start() au lieu du Finder\n'
-    launched=0
+    # THE MUTANT, reproduced for real (measured: the previous version only skipped `open` and wrote
+    # `launched=0`, variable que le contrôle relisait ensuite — une capture tautologique, et
+    # `open_rc` n'était jamais testé). Ici un processus ÉTRANGER sert réellement le socket du
+    # contrat : c'est ce que « un harnais qui pilote start() » produit — un socket qui existe, que
+    # le CLI peut joindre, et qui ne prouve absolutely nothing du chemin Finder. Le contrôle qui
+    # doit tomber est alors `finder-launched-by-launchservices`, mesuré sur le processus réel.
+    printf 'FINDER MUTANT un processus étranger sert le socket du contrat (harnais start())\n'
+    ( nc -lU "$socket" >/dev/null 2>&1 & echo $! >"$work/harness.pid" )
+    sleep 0.5
+    HARNESS_PID=$(cat "$work/harness.pid" 2>/dev/null || true)
+    printf 'FINDER MUTANT pid_harnais=%s\n' "${HARNESS_PID:-inconnu}"
   else
     /usr/bin/open -gj --env CFFIXED_USER_HOME="$home" "$app" >/dev/null 2>&1
     open_rc=$?
-    launched=1
     printf 'FINDER open rc=%s\n' "$open_rc"
   fi
-  [[ "$launched" -eq 1 ]]; check finder-launched-by-launchservices "$?" \
-    "le bundle n'a pas été ouvert par LaunchServices : rien ne prouve le chemin Finder réel"
+  # Le témoin est l'ETAT DU MONDE, jamais une variable que le mutant écrit : `open` a rendu 0 ET le
+  # processus du bundle construit est réellement vivant. Un `open` en échec laisse donc ce contrôle
+  # ROUGE (mesuré : `open_rc` n'était pas testé, un échec laissait `finder-launched-by-launchservices`
+  # vert), et un socket servi par un tiers ne le rend pas vert non plus.
+  local app_proc=0 app_pid=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    app_pid=$(pgrep -f "$app_real/Contents/MacOS/Murmure" 2>/dev/null | head -1)
+    if [[ -n "$app_pid" ]]; then app_proc=1; break; fi
+    sleep 0.5
+  done
+  printf 'FINDER processus_bundle pid=%s (attendu sous %s)\n' "${app_pid:-aucun}" "$app_real"
+  [[ "${open_rc:-1}" -eq 0 && "$app_proc" -eq 1 ]]; check finder-launched-by-launchservices "$?" \
+    "le bundle n'a pas été ouvert par LaunchServices (open rc=${open_rc:-non exécuté}, processus du bundle vivant=$app_proc) : rien ne prouve le chemin Finder réel"
 
   # 4. The socket inside the 10 s window, and OWNED BY THE APP — a socket some other process
   #    happens to serve is not the acceptance proof.
@@ -509,17 +826,28 @@ run_finder() { # the real Finder path; prints its evidence, sets FINDER_* reason
     [[ -n "$owner" ]] && owner_exe=$(ps -o command= -p "$owner" 2>/dev/null || true)
     # `ps` rapporte un chemin CANONIQUE (`/private/var/…`) là où le script a construit un chemin
     # symlinké (`/var/…`) : une comparaison de chaînes rendait ce contrôle rouge sur le bundle
-    # correct (mesuré). Les deux côtés sont donc canonicalisés avant d'être comparés.
+    # correct (mesuré). Les deux côtés sont donc canonicalisés avant d'être comparés — `app_real`
+    # l'est déjà, calculé une seule fois avant l'`open`.
     [[ -n "$owner_exe" ]] && owner_app=$(cd "$(dirname "$owner_exe")/../.." 2>/dev/null && pwd -P || true)
-    local app_real
-    app_real=$(cd "$app" 2>/dev/null && pwd -P || printf '%s' "$app")
     [[ "$owner_app" == "$app_real" ]]; check finder-socket-served-by-bundle "$?" \
       "le socket est servi par « ${owner_app:-inconnu} », pas par le bundle ouvert ($app_real)"
+    # Le socket doit être servi par LE PROCESSUS OUVERT PAR LE FINDER, pas par un homonyme.
+    [[ -n "$app_pid" && "$owner" == "$app_pid" ]]; check finder-socket-owner-is-opened-bundle "$?" \
+      "le socket est tenu par le pid ${owner:-inconnu}, pas par le processus ${app_pid:-inconnu} ouvert par LaunchServices"
     printf 'FINDER socket_appeared_after=%ss owner_pid=%s\n' "$elapsed" "${owner:-inconnu}"
     [[ "$(awk "BEGIN{print ($elapsed <= $SOCKET_WINDOW) ? 0 : 1}")" -eq 0 ]]; check finder-socket-in-window "$?" \
       "le socket a mis ${elapsed}s à apparaître (fenêtre du §2.5 : ${SOCKET_WINDOW}s)"
+    if [[ -n "${FINDER_MUTANT_HARNESS:-}" ]]; then
+      # Le verdict du mutant porte sur `finder-launched-by-launchservices`, déjà rouge. Payer une
+      # transcription réelle sur un socket servi par `nc` measuringait le harnais, pas le chemin
+      # Finder, et coûterait le délai maximal ; la suite est donc déclarée NON EXÉCUTÉE, jamais verte.
+      printf 'FINDER MUTANT suite non exécutée (socket servi par un tiers, pas par le bundle)\n'
+      FINDER_NO_APP="mutant harnais : le socket est servi par un processus étranger"
+      return 1
+    fi
   else
-    for c in finder-socket-owner-is-app finder-socket-served-by-bundle finder-socket-in-window; do
+    for c in finder-socket-owner-is-app finder-socket-served-by-bundle finder-socket-owner-is-opened-bundle \
+             finder-socket-in-window; do
       check "$c" 1 "le socket n'a pas été créé en ${SOCKET_WINDOW}s (chemin Finder non prouvé)"
     done
     FINDER_NO_APP="le socket n'a pas été créé en ${SOCKET_WINDOW}s"
@@ -593,18 +921,32 @@ run_finder() { # the real Finder path; prints its evidence, sets FINDER_* reason
     "« MURMURE_NO_APP_LAUNCH=1 » sur un socket absent rend $refusal_rc (3 attendu) : $refusal_out"
 
   # 8. The journal carries no transcribed text (criterion 5). The log is read AFTER the work, and
-  #    the check is a negative on a POSITIVE corpus: the same window must contain the server's
-  #    control lines, or the absence of transcript text proves nothing (an empty log is silent
-  #    evidence, never a passing verdict).
-  # `--info --debug` est OBLIGATOIRE et mesuré : le serveur journalise « control: listening » en
-  # `.info`, et `log show` SANS `--info` ne rend que le défaut et au-dessus — le contrôle
-  # `log-has-control-activity` était donc rouge sur une application qui, elle, journalisait
-  # (mesuré : la ligne est bien dans la base, invisible sans le drapeau).
-  log_out=$(log show --last 30m --predicate 'subsystem == "com.louiscourcier.Murmure"' --info --debug --style compact 2>/dev/null || true)
+  #    the check is a negative on a POSITIVE corpus: the same window must contain lines from THIS
+  #    process, or the absence of transcript text proves nothing (an empty log is silent evidence,
+  #    never a passing verdict).
+  #
+  #    DEUX MESURES CORRIGENT CE CONTRÔLE, l'une après l'autre :
+  #
+  #    * Le prédicat est restreint à `processID == $app_pid`. Sans cela il ramassait le journal de
+  #      TOUTES les instances de Murmure — y compris l'app stable de Louis, qui transcrit en
+  #      parallèle (mesuré : PID 97743 dans la même fenêtre) : une fuite de transcript de l'app
+  #      stable aurait été imputée à CE run, et le témoin positif pouvait venir de l'autre.
+  #    * Le témoin positif est la ligne de transcription RÉELLEMENT émise par ce run
+  #      (`transcript … written: N unit(s)`, TranscriptJobRunner), pas la ligne
+  #      `control: listening on the control socket`. Cette dernière est `.info` et macOS ne la
+  #      conserve pas dans le magasin : mesuré sur le run complet du 26/09, `log show` ne la rend
+  #      NI avec `--info` NI avec `--debug`, alors que les lignes `.info` de `transcription` sont,
+  #      elles, bien là. Exiger cette ligne rendait le contrôle rouge sur une application qui
+  #      journalisait — le défaut de contrat que la revue round 1 avait déjà relevé une fois.
+  log_out=$(log show --last 45m --predicate "processID == $app_pid AND subsystem == \"com.louiscourcier.Murmure\"" \
+    --info --debug --style compact 2>/dev/null || true)
+  printf 'FINDER journal_lignes=%s (pid %s)\n' "$(grep -c . <<<"$log_out")" "$app_pid"
   local listening=0 leaked=0
-  grep -qi 'control' <<<"$log_out" && listening=1
+  grep -qE 'transcript .* written: [0-9]+ unit' <<<"$log_out" && listening=1
+  grep -qi 'control: listening' <<<"$log_out" && printf 'FINDER journal_ligne_controle=présente\n' \
+    || printf 'FINDER journal_ligne_controle=absente du magasin (ligne .info, non conservée — sans effet sur le verdict)\n'
   [[ "$listening" -eq 1 ]]; check log-has-control-activity "$?" \
-    "le journal ne mentionne pas le contrôle : une absence de transcript y serait une preuve muette"
+    "le journal de ce run ne contient pas la ligne de transcription réelle : une absence de transcript y serait une preuve muette"
   if [[ "$listening" -eq 1 ]]; then
     if [[ -n "$doc" ]]; then
       # The exact segments of the document just written: a real leak, not a guess.
