@@ -23,11 +23,23 @@
 # assembly, then on the mutated one, and claims a capture only for a control that was GREEN on the
 # first and RED on the second.  A control that was already red proves nothing, and a mutation that
 # changes nothing is inapplicable; both exit 3 saying so.
+#
+# `wire` is the ONLY mode that renders a verdict end to end.  The graph-only re-run the mutant
+# harness needs takes `graph` as a SECOND argument and deliberately cannot report green: it skips
+# the XCTest filter, prints `PARTIEL` instead of `VERT contrôle=10-S`, and exits 1.  It is not a
+# public mode, because a run that never executed the tests must never look like one that did.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 MODE=${1:-wire}
 EXPECTED=""
+
+# `graph` re-runs the wiring family alone, so a mutant can be measured as a DIFFERENCE between two
+# assemblies.  It is not a mode of the contract: it is accepted as the SECOND argument only, never
+# as `$1`, and it cannot report green (see the tail).  Accepting it as `$1` would let a run that
+# never executed the XCTest filter print `VERT contrôle=10-S` and exit 0 — a green output
+# indistinguishable from a real one.
+GRAPH_ONLY=${2:-}
 
 # The tree under test.  `MURMURE_WIRING_ROOT` lets a harness declare a different assembly AS the
 # tree under test (a correct-by-construction 10-S, for instance); the inventory controls then judge
@@ -121,7 +133,7 @@ run_graph() { # <label> -> prints the red controls of that assembly
   red_set=" "
   # MURMURE_WIRING_ROOT travels with the call: the reference assembly and the mutated one must be
   # judged against the SAME tree under test, or their red sets are not comparable.
-  out=$(MURMURE_WIRING_ROOT="$TEST_ROOT" MURMURE_WIRING_SERVER=$work/server.swift "$SELF" graph 2>&1)
+  out=$(MURMURE_WIRING_ROOT="$TEST_ROOT" MURMURE_WIRING_SERVER=$work/server.swift "$SELF" wire graph 2>&1)
   while IFS= read -r line; do
     [[ "$line" == ROUGE\ contrôle=* ]] || continue
     name=${line#ROUGE contrôle=}; name=${name%% *}
@@ -137,7 +149,7 @@ run_graph() { # <label> -> prints the red controls of that assembly
   baseline_red=$red_set
 }
 case "$MODE" in
-  wire|graph) ;;
+  wire) ;;
   mutant-queue) EXPECTED=server-no-secondary-queue
     # Appending a job board is the mutation the card forbids: a secondary queue in the server.
     baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
@@ -205,12 +217,33 @@ body_for() {
     for my $p ($o..length($x)-1) { my $c=substr($x,$p,1); $d++ if $c eq "{"; $d-- if $c eq "}"; if (!$d) {$e=$p; last} }
     exit 1 if $d; print substr($x,$o+1,$e-$o-1);'
 }
-# Signature of a named declaration: from the match up to the opening brace, so an INJECTED
-# dependency (a parameter) is seen, not only what the body does with it.
+# Signature of a named DECLARATION, from the declaration keyword up to the opening brace, so an
+# INJECTED dependency (a parameter) is seen and not only what the body does with it.
+#
+# The keyword is anchored to a line-initial DECLARATION, `^\s*(public |private |internal |
+# fileprivate |override |convenience |required |final )*init\b`, and the window stops at the brace
+# that opens the body.  Matching the bare substring instead — the round-4 defect — lets a comment
+# that merely NAMES an initializer ("voir `MurmureApp.init`", "appelé à init", `initiated`) donate
+# its own brace, the window then lands on prose, the parameters are never found, and the injection
+# controls go red on a server whose injection is correct.  A control of injection must be red for
+# a MISSING SEAM, never for a way of talking about one; this idiom is the house style here
+# (`MurmureApp.init`, `DictationController.init`, `WhisperKit.init` all appear in `Murmure/`).
+#
+# A trailing-closure default (`handler: () -> Void = { _ in }`) also opens a brace before the
+# body's, so the window counts brace depth from the declaration and stops at the brace that brings
+# it back to 0 — the body's own opener, whatever the parameters contain.
 sig_for() {
   SIGNATURE="$1" SOURCE="$2" perl -0777 -e '
-    my($s,$x)=@ENV{qw(SIGNATURE SOURCE)}; exit 1 unless $x =~ /\Q$s\E[^{]*\{/s;
-    print substr($x,$-[0],index($x,"{",$-[0])-$-[0]);'
+    my($s,$x)=@ENV{qw(SIGNATURE SOURCE)}; my $k = $s;
+    exit 1 unless $x =~ /^[ \t]*(?:(?:public|private|internal|fileprivate|open|override|convenience|required|final)[ \t]+)*\Q$k\E\b[^\n{(]*[(<]/m;
+    my $st = $-[0];
+    my $o = $st; my $d = 0; my $found = 0;
+    for my $p ($st .. length($x) - 1) {
+      my $c = substr($x, $p, 1);
+      $d++ if $c eq "{"; $d-- if $c eq "}";
+      if ($c eq "{" && $d == 1) { $o = $p; $found = 1; last }
+    }
+    exit 1 unless $found; print substr($x, $st, $o - $st);'
 }
 # Body of the first func whose body matches $2 (regex source).
 method_with() {
@@ -255,9 +288,10 @@ source_check source-test   "$test_file"    "$TEST_REL"
 
 # --- the named wiring graph: TranscriptControlServer -----------------------------------------
 if [[ -n "$server_file" ]]; then
-  init=$(body_for 'init' "$server" || true)
   # The seam is INJECTED: the initializer's SIGNATURE carries it as a parameter, and its body must
-  # not build a queue of its own.  `TranscriptQueue(` in the initializer is caught below too.
+  # not build a queue of its own.  `TranscriptQueue(` in the initializer is caught by
+  # `server-no-queue-construction` below, which reads the whole file, so no second, weaker read of
+  # the initializer is kept here.
   init_sig=$(sig_for 'init' "$server" || true)
   [[ -n "$init_sig" ]] && has_any "$init_sig" "${SUBMIT_PARAMS[@]}"; check initialiseur-submitteur "$?" \
     "l'initialiseur ne reçoit pas de submitteur injecté"
@@ -329,8 +363,8 @@ elif [[ -f "$TEST_ROOT/MurmureCore/Package.swift" ]]; then
 fi
 
 swift_log="$work/swift.log"
-if [[ "$MODE" == graph ]]; then
-  # Internal mode: the graph family only.  A mutant is measured by re-running the graph on two
+if [[ "$GRAPH_ONLY" == graph ]]; then
+  # Graph family only.  A mutant is measured by re-running the graph on two
   # assemblies, and the core filter does not depend on any server mutation, so it is skipped here
   # rather than paid for twice per mutant.
   printf 'SWIFT paquet=inattiné (mode graph) résumé=""\n'
@@ -377,6 +411,16 @@ if [[ -n "$EXPECTED" ]]; then
   fi
   printf 'MUTANT capturé contrôle=%s (vert sur l’assemblage de référence, rouge sur l’assemblage muté)\n' \
     "$EXPECTED"
+  exit 1
+fi
+# The graph-only re-run exists to be COMPARED, not to be believed.  It skipped the XCTest filter,
+# so it carries no verdict on the 10-S seam: it says so, and it never prints `VERT contrôle=10-S`
+# and never exits 0, because a green output from a run that never executed the tests is exactly
+# the false green this contract is meant to be incapable of.  `wire` is the only end-to-end mode,
+# and the mutant harness only ever reads the red controls out of this re-run, never its exit code.
+if [[ "$GRAPH_ONLY" == graph ]]; then
+  printf 'PARTIEL famille=câblage N/M=%d/%d (filtre XCTest non exécuté : aucun verdict de bout en bout)\n' \
+    "$matched" "$total"
   exit 1
 fi
 [[ "$fail" -eq 0 ]] || exit 1
