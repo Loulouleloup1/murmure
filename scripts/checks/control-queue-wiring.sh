@@ -12,9 +12,12 @@ TEST="$ROOT/MurmureCore/Tests/MurmureCoreTests/TranscriptQueueTests.swift"
 MODE=${1:-wire}
 EXPECTED=""
 
-for path in "$SERVER" "$PANE" "$QUEUE" "$TEST"; do
-  if [[ ! -f "$path" ]]; then
-    printf 'INFO source-presente=non chemin=%s (aucune hypothese sur ce fichier)\n' "$path"
+for spec in "server:$SERVER" "pane:$PANE" "queue:$QUEUE" "swift-test:$TEST"; do
+  name=${spec%%:*}; path=${spec#*:}
+  if [[ -f "$path" ]]; then
+    printf 'INFO source-presente=oui contrôle=source-%s chemin=%s\n' "$name" "$path"
+  else
+    printf 'INDISPONIBLE contrôle=source-%s chemin=%s (graphe non applicable)\n' "$name" "$path"
   fi
 done
 
@@ -28,16 +31,18 @@ trap 'rm -rf "$work"' EXIT
 case "$MODE" in
   wire) ;;
   mutant-queue) EXPECTED=server-no-secondary-queue; printf '\nprivate final class ControlJobBoard {}\n' >>"$work/server.swift" ;;
-  mutant-runner) EXPECTED=transcribe-submitter; perl -0pi -e 's/await submitter\(/await runner.submit(/g' "$work/server.swift" ;;
-  mutant-status) EXPECTED=status-provider; perl -0pi -e 's/statusProvider\(\)/phantomQueue.status()/g' "$work/server.swift" ;;
+  mutant-runner) EXPECTED=transcribe-injected; perl -0pi -e 's/await submitter\(/await runner.submit(/g' "$work/server.swift" ;;
+  mutant-status) EXPECTED=status-injected; perl -0pi -e 's/statusProvider\(\)/phantomQueue.status()/g' "$work/server.swift" ;;
   *) printf 'usage: %s [wire|mutant-queue|mutant-runner|mutant-status]\n' "$0" >&2; exit 64 ;;
 esac
 
 fail=0
 matched=0
 total=0
+failed_controls=""
 pass() { printf 'VERT contrôle=%s\n' "$1"; }
-red() { fail=1; printf 'ROUGE contrôle=%s détail=%s\n' "$1" "$2"; }
+red() { fail=1; failed_controls="$failed_controls $1"; printf 'ROUGE contrôle=%s détail=%s\n' "$1" "$2"; }
+unavailable() { total=$((total + 1)); printf 'INDISPONIBLE contrôle=%s détail=%s\n' "$1" "$2"; }
 check() { # name, condition already evaluated by caller
   total=$((total + 1))
   if [[ "$2" -eq 0 ]]; then
@@ -80,8 +85,16 @@ if [[ -f "$SERVER" ]]; then
   [[ -n "$status" && "$status" != *'TranscriptQueue('* ]]; check status-no-queue "$?" "status constructs a secondary queue"
 
   clean=$(printf '%s' "$server" | perl -0777 -pe 's{/\*.*?\*/}{}gs; s{//[^\n]*}{}g')
-  [[ "$clean" != *'ControlJobBoard'* && "$clean" != *'enchainer'* && "$clean" != *'dernierTravail'* && "$clean" != *'Task<ControlJobOutcome'* ]]; check server-no-secondary "$?" "server contains a secondary queue/chain"
+  [[ "$clean" != *'ControlJobBoard'* && "$clean" != *'enchainer'* && "$clean" != *'dernierTravail'* && "$clean" != *'Task<ControlJobOutcome'* ]]; check server-no-secondary-queue "$?" "server contains a secondary queue/chain"
   [[ "$clean" != *'TranscriptQueue('* ]]; check server-no-queue-construction "$?" "server constructs a queue"
+else
+  unavailable initialiseur-submitteur 'TranscriptControlServer.swift absent'
+  unavailable initialiseur-status 'TranscriptControlServer.swift absent'
+  unavailable transcribe-injected 'TranscriptControlServer.swift absent'
+  unavailable status-injected 'TranscriptControlServer.swift absent'
+  unavailable status-no-queue 'TranscriptControlServer.swift absent'
+  unavailable server-no-secondary-queue 'TranscriptControlServer.swift absent'
+  unavailable server-no-queue-construction 'TranscriptControlServer.swift absent'
 fi
 if [[ -f "$PANE" ]]; then
   enqueue=$(method_with '(?:file|queue)\s*\.enqueue\s*\(' "$pane" || true)
@@ -90,6 +103,10 @@ if [[ -f "$PANE" ]]; then
   [[ -n "$status_use" ]]; check pane-status "$?" "pane does not expose queue status"
   count=$(printf '%s' "$pane" | perl -ne '$n+=()=/TranscriptQueue\s*\{/g; END{print $n+0}')
   [[ "$count" -eq 1 ]]; check pane-one-queue "$?" "TranscriptsPaneModel queue constructions=$count (expected exactly 1)"
+else
+  unavailable pane-submit 'TranscriptsPaneModel.swift absent'
+  unavailable pane-status 'TranscriptsPaneModel.swift absent'
+  unavailable pane-one-queue 'TranscriptsPaneModel.swift absent'
 fi
 
 # The filtered Swift suite is the behavioural contract.  Report its own N/M summary; a return code
@@ -109,8 +126,15 @@ fi
 printf 'CONTRÔLE=N/M=%d/%d\n' "$matched" "$total"
 
 if [[ "$fail" -ne 0 ]]; then
-  [[ -z "$EXPECTED" ]] || printf 'MUTANT capturé contrôle=%s\n' "$EXPECTED"
-  exit 1
+  if [[ -z "$EXPECTED" ]]; then
+    exit 1
+  fi
+  if [[ " $failed_controls " == *" $EXPECTED "* ]]; then
+    printf 'MUTANT capturé contrôle=%s\n' "$EXPECTED"
+    exit 1
+  fi
+  printf 'MUTANT NON capturé contrôle=%s (aucun rouge exact)\n' "$EXPECTED"
+  exit 3
 fi
 [[ -z "$EXPECTED" ]] || { printf 'MUTANT NON capturé contrôle=%s\n' "$EXPECTED"; exit 3; }
 printf 'VERT contrôle=10-S\n'
