@@ -448,8 +448,8 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
         XCTAssertEqual(resultats.1.id, second.id, "aucun résultat d'un autre travail — \(contrat)")
         assertContratDansSource(
             "MurmureCore/Sources/MurmureCore/TranscriptQueue.swift",
-            #"TranscriptQueueOutcome|Checkpoints|CheckedContinuation"#,
-            "les résultats sont conservés et rendus au bon identifiant")
+            #"func\s+wait\s*\(\s*for\s+id\s*:\s*String"#,
+            "les attentes sont rendues par identifiant")
     }
 
     func testCriterion3FailureIsTerminalForItsWaitThenTheNextEntryStarts() async throws {
@@ -516,36 +516,14 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
     }
 
     func testCriterion5StatusIsExactlyIdleRunningOrWaitingAndNeverLeaksSourceOrTranscript() throws {
-        let file = try String(
-            contentsOf: racine(for: "MurmureCore/Sources/MurmureCore/TranscriptQueue.swift"),
-            encoding: .utf8)
-        let serveur = try String(
-            contentsOf: racine(for: "Murmure/TranscriptControlServer.swift"), encoding: .utf8)
-
-        let formesAttendues = [
-            "idle",
-            "running <source>, <count> waiting",
-            "idle, <count> waiting",
-        ]
-        for forme in formesAttendues {
-            XCTAssertTrue(
-                file.contains(forme) || serveur.contains(forme),
-                "la forme exacte \(forme) doit exister — \(contrat)")
-        }
-        XCTAssertTrue(
-            file.range(of: #"(?:public\s+)?var\s+status\s*:\s*String"#,
-                options: .regularExpression) != nil,
-            "le statut commun est calculé par la file — \(contrat)")
-        XCTAssertTrue(
-            serveur.range(of: #"statusProvider\s*\(\s*\)"#,
-                options: .regularExpression) != nil,
-            "status appelle le provider injecté — \(contrat)")
-        let statusCalls = serveur.matches(of: #"statusProvider\s*\(\s*\)"#).count
-        XCTAssertGreaterThanOrEqual(statusCalls, 1, "le socket ne fabrique aucun statut — \(contrat)")
-        XCTAssertFalse(
-            serveur.range(of: #"logger\.(?:debug|info|notice|warning|error).*?(?:source|transcript|segment)"#,
-                options: [.regularExpression, .caseInsensitive]) != nil,
-            "status ne journalise ni source ni transcript — \(contrat)")
+        let queue = try String(contentsOf: racine(for: "MurmureCore/Sources/MurmureCore/TranscriptQueue.swift"), encoding: .utf8)
+        let server = try String(contentsOf: racine(for: "Murmure/TranscriptControlServer.swift"), encoding: .utf8)
+        XCTAssertTrue(queue.contains(#"return "idle""#), "la file produit idle — \(contrat)")
+        XCTAssertTrue(queue.contains(#"running \(element.source), \(waiting.count) waiting"#), "la file produit running exact — \(contrat)")
+        XCTAssertTrue(queue.contains(#"idle, \(waiting.count) waiting"#), "la file produit waiting exact — \(contrat)")
+        XCTAssertTrue(queue.contains("var status"), "le statut commun est calculé par la file — \(contrat)")
+        XCTAssertTrue(server.contains("statusProvider()"), "status appelle le provider injecté — \(contrat)")
+        XCTAssertFalse(server.range(of: #"logger\.(?:debug|info|notice|warning|error).*?(?:source|transcript|segment)"#, options: [.regularExpression, .caseInsensitive]) != nil, "status ne journalise ni source ni transcript — \(contrat)")
     }
 
     func testCriterion6TheCommonQueueNeverRunsDuplicateOrParallelWork() async throws {
