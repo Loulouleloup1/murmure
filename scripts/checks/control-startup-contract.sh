@@ -164,8 +164,43 @@ fi
 # capturé sur une base où il n'a rien changé).
 build_corpus() {
   mkdir -p "$work/corpus"
+  # RECURSIF, et c'est le point : `project.yml:37-40` liste `path: Murmure` ENTIER, seule
+  # exclusion `Resources`. Un `.swift` dans un sous-dossier de `Murmure/` compile donc dans la
+  # cible, et un glob non récif (`cp Murmure/*.swift`) le laissait hors du corpus : mesuré, un
+  # second moteur ET une seconde file dans `Murmure/Views/` laissaient `one-engine-construction`
+  # et `one-queue-construction` verts (26/26). La structure est PRÉSERVÉE pour que le rapport
+  # dise QUEL fichier, et `Resources` est exclu comme le fait la cible.
+  #
+  # Les six noms de travail sont SAUTÉS dans la copie de l'arbre : ils sont réécrits juste après
+  # par les copies de travail (surcharges ET mutations), et les garder en double ferait compter un
+  # même fichier deux fois — un rouge de comptage, pas un rouge de câblage.
   if [[ -d "$TEST_ROOT/Murmure" ]]; then
-    cp "$TEST_ROOT/Murmure"/*.swift "$work/corpus/" 2>/dev/null || true
+    local rel dest
+    while IFS= read -r rel; do
+      case "${rel##*/}" in
+        Resources) continue ;;
+        TranscriptControlServer.swift|AppDelegate.swift|MurmureApp.swift| \
+        TranscriptsPaneModel.swift|DictationController.swift|WhisperKitEngine.swift) continue ;;
+      esac
+      dest="$work/corpus/$rel"
+      mkdir -p "$(dirname "$dest")"
+      cp "$TEST_ROOT/Murmure/$rel" "$dest" 2>/dev/null || true
+    done < <(cd "$TEST_ROOT/Murmure" && find . -name '*.swift' -type f \
+              -not -path './Resources/*' 2>/dev/null | sed 's|^\./||' | sort)
+  fi
+  # Un ARBRE SUPPLÉMENTAIRE, pour qu'un mutant puisse injecter une construction dans un
+  # SOUS-DOSSIER de `Murmure/` — le site que le corpus plat ne voyait pas. Comme
+  # `MURMURE_STARTUP_ROOT`, c'est un localisateur de SOURCES : il ne peut qu'AJOUTER des fichiers,
+  # jamais en retirer, donc il ne peut pas rendre un contrôle vert par ce qu'il cache.
+  if [[ -n "${MURMURE_STARTUP_CORPUS:-}" && -d "${MURMURE_STARTUP_CORPUS}" ]]; then
+    local rel dest
+    while IFS= read -r rel; do
+      dest="$work/corpus/$rel"
+      mkdir -p "$(dirname "$dest")"
+      cp "${MURMURE_STARTUP_CORPUS}/$rel" "$dest" 2>/dev/null || true
+    done < <(cd "${MURMURE_STARTUP_CORPUS}" && find . -name '*.swift' -type f 2>/dev/null \
+              | sed 's|^\./||' | sort)
+    printf 'INFO corpus_supplementaire=%s\n' "${MURMURE_STARTUP_CORPUS}"
   fi
   cp "$work/server.swift"    "$work/corpus/TranscriptControlServer.swift"  2>/dev/null || true
   cp "$work/delegate.swift"  "$work/corpus/AppDelegate.swift"              2>/dev/null || true
@@ -186,6 +221,43 @@ mutate() { # <file> <perl-args...>: applies the edit in place, 0 if the file cha
   [[ "$before" != "$after" ]]
 }
 
+# Les deux fichiers ROGUES des mutants de sous-dossier. Ils sont écrits ici, et non générés par
+# le mutant, pour que leur contenu soit LISIBLE et stable : un mutant dont la charge utile est
+# reconstruite à chaque run ne prouve que sa propre génération. Les deux sont BIEN TYPÉS comme le
+# sont les constructions réelles (`DictationController.swift:358` pour le moteur), donc
+# l'assemblage muté reste COMPILABLE — un mutant qui ne compile pas ne prouve rien du contrôle.
+write_rogue_engine() { # <destination>
+  cat >"$1" <<'ROGUE_ENGINE'
+import Foundation
+import MurmureCore
+
+/// Second moteur, dans un sous-dossier de `Murmure/` : la seconde instance que le critère 1
+/// interdit. Bien typé comme la construction réelle de `DictationController.swift:358`, et
+/// `import MurmureCore` compris comme le font les fichiers réels : l'assemblage muté reste
+/// COMPILABLE — un mutant qui ne compile pas ne prouve rien du contrôle.
+enum RogueEngineFactory {
+    static func make() -> WhisperKitEngine {
+        WhisperKitEngine(progress: DecodeProgressBox()) { _ in }
+    }
+}
+ROGUE_ENGINE
+}
+write_rogue_queue() { # <destination>
+  cat >"$1" <<'ROGUE_QUEUE'
+import Foundation
+import MurmureCore
+
+/// Seconde file, dans un sous-dossier de `Murmure/` : le mutant obligatoire « seconde
+/// construction moteur/file », au site que le corpus plat ne voyait pas. Même forme que la
+/// construction réelle de `TranscriptsPaneModel.swift:82`, `import MurmureCore` compris.
+enum RogueQueueFactory {
+    static func make() -> TranscriptQueue {
+        TranscriptQueue { entry in _ = entry }
+    }
+}
+ROGUE_QUEUE
+}
+
 # The graph family, re-run in this same process on whichever files the MURMURE_STARTUP_* locators
 # name. Swift and the Finder path are not re-run: they depend on a whole build, not on one file.
 run_graph() { # <label> -> prints the red controls of that assembly
@@ -195,6 +267,7 @@ run_graph() { # <label> -> prints the red controls of that assembly
         MURMURE_STARTUP_SERVER="$work/server.swift" \
         MURMURE_STARTUP_DELEGATE="$work/delegate.swift" \
         MURMURE_STARTUP_APP="$work/app.swift" \
+        MURMURE_STARTUP_CORPUS="${MURMURE_STARTUP_CORPUS:-}" \
         "$SELF" wire graph 2>&1)
   while IFS= read -r line; do
     [[ "$line" == ROUGE\ contrôle=* ]] || continue
@@ -246,6 +319,57 @@ case "$MODE" in
     if mutate "$work/pane.swift" -0pi -e 's/dedicatingComputeUnits: false/dedicatingComputeUnits: true/'; then
       MUTATED=1
     fi ;;
+  mutant-dedicated-compute-multiligne) EXPECTED=video-compute-not-dedicated
+    # Le MÊME défaut, écrit sur PLUSIEURS LIGNES. C'est la forme que le mutant précédent ne peut
+    # pas atteindre : il substitue `false`→`true` EN PLACE, donc forcément sur une seule ligne.
+    # Le contrôle, lui, lisait l'argument par un `sed` LIGNE À LIGNE et renvoyait la chaîne vide
+    # sur cette forme — puis déclarait l'absence d'argument « conforme » (mesuré : 26/26, F1 de la
+    # revue round 2). Swift valide (`swiftc -parse` rc=0) et le dépôt écrit couramment ainsi
+    # (509 lignes de plus de 100 caractères dans `Murmure/*.swift`), donc la forme multi-lignes
+    # n'est pas une hypothèse : c'est ce que le contrôle doit savoir lire.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/pane.swift" -0pi \
+        -e 's/loadedModelForVideo\(dedicatingComputeUnits: false\)/loadedModelForVideo(\n            dedicatingComputeUnits: true)/'; then
+      MUTATED=1
+    fi ;;
+  mutant-sous-dossier-moteur|mutant-sous-dossier-file)
+    # Une construction dans un SOUS-DOSSIER de `Murmure/`. `project.yml:37-40` liste `path:
+    # Murmure` ENTIER (seule exclusion `Resources`), donc `Murmure/Views/Rogue*.swift` compile
+    # dans la cible — et le corpus était plat (`cp Murmure/*.swift`), invisible à ce site
+    # (mesuré : 26/26 avec les deux contrôles verts, F2 de la revue round 2). Les mutants
+    # existants tombaient, mais sur le site qu'ils choisissent (`MurmureApp.swift`, 1er niveau) :
+    # ils ne prouvaient rien du sous-dossier.
+    case "$MODE" in
+      mutant-sous-dossier-moteur) EXPECTED=one-engine-construction ;;
+      *)                         EXPECTED=one-queue-construction ;;
+    esac
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    mkdir -p "$work/corpus_rogue/Views"
+    if [[ "$MODE" == mutant-sous-dossier-moteur ]]; then
+      write_rogue_engine "$work/corpus_rogue/Views/RogueEngine.swift"
+    else
+      write_rogue_queue "$work/corpus_rogue/Views/RogueQueue.swift"
+    fi
+    # Localisateur de SOURCES : le graphe relit le fichier injecté. Il ne peut qu'ajouter.
+    MURMURE_STARTUP_CORPUS="$work/corpus_rogue"
+    MUTATED=1 ;;
+  mutant-second-entry-point) EXPECTED=delegate-handover-idempotent
+    # `configureControlServer` EXACTEMENT conforme, plus un SECOND point d'entrée
+    # (`reconfigureControlServer`) que le menu appelle, qui fait `stop()` puis reconstruit et
+    # redémarre un serveur neuf. Les mutants existants ne le voyaient pas : ils mutaient le CORPS
+    # de la méthode nommée, et le contrôle ne jugeait que ce corps (mesuré : VERT
+    # contrôle=delegate-handover-idempotent, 26/26 — F3 de la revue round 2). C'est le critère 2
+    # qui parle d'une seconde CONFIGURATION, donc de tous les chemins qui configurent.
+    #
+    # Les `start()`/`stop()` ci-dessous sont du TEXTE INJECTÉ dans une copie de travail, jamais
+    # exécutés : ce mode ne fait que relire le graphe (`wire graph`), il ne construit pas et n'ouvre
+    # rien. C'est pourquoi un `grep '\.start()'` sur ce script trouve ce motif — il fait partie de
+    # la charge utile du mutant, au même titre que `.start()` apparaît dans le commentaire l. 7.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/delegate.swift" -0pi \
+        -e 's/^(\s*)func applicationDidFinishLaunching\(/$1func reconfigureControlServer(\n$1    submitteur: \@escaping \@Sendable (String) async -> ControlJobHandle,\n$1    fournisseurStatut: \@escaping \@Sendable () async -> String\n$1) {\n$1    controlServer?.stop()\n$1    controlServer = TranscriptControlServer(submitteur: submitteur, fournisseurStatut: fournisseurStatut)\n$1    controlServer?.start()\n$1}\n\n$1func applicationDidFinishLaunching(/m'; then
+      MUTATED=1
+    fi ;;
   mutant-non-idempotent) EXPECTED=delegate-handover-idempotent
     # Un handover qui reconstruit un serveur à CHAQUE configuration, avec un simple
     # `if controlServer == nil { log.info(…) }` qui ne retourne pas : le défaut exact du critère 2,
@@ -281,7 +405,7 @@ case "$MODE" in
        || mutate "$work/app.swift" -0pi -e 's/transcriptsModel\.queueStatus\(\)/"idle" (nothing)/'; then
       MUTATED=1
     fi ;;
-  *) printf 'usage: %s [finder|wire|mutant-no-start|mutant-second-engine|mutant-second-queue|mutant-dedicated-compute|mutant-non-idempotent|mutant-unguarded-construction|mutant-harness-start|mutant-ghost-status]\n' "$0" >&2; exit 64 ;;
+  *) printf 'usage: %s [finder|wire|mutant-no-start|mutant-second-engine|mutant-second-queue|mutant-dedicated-compute|mutant-dedicated-compute-multiligne|mutant-sous-dossier-moteur|mutant-sous-dossier-file|mutant-second-entry-point|mutant-non-idempotent|mutant-unguarded-construction|mutant-harness-start|mutant-ghost-status]\n' "$0" >&2; exit 64 ;;
 esac
 if [[ -n "$EXPECTED" && -z "${MUTATED:-}" ]]; then
   printf 'MUTANT INAPPLICABLE mode=%s : la mutation n’a rien changé dans la copie\n' "$MODE"
@@ -355,9 +479,25 @@ sig_for() {
 cat >"$work/corpus_scan.pl" <<'CORPUS_SCAN_PL'
 use strict; use warnings;
 my $dir = $ARGV[0];
-opendir(my $dh, $dir) or exit 2;
-my @files = sort grep { /\.swift$/ } readdir $dh;
-closedir $dh;
+# Le corpus est RÉCURSIONNEL : `project.yml:37-40` liste `path: Murmure` entier, seule exclusion
+# `Resources`, donc un `.swift` sous un sous-dossier de `Murmure/` compile dans la CIBLE. Un
+# parcours non récif laissait un second moteur dans `Murmure/Views/` invisible au comptage
+# (mesuré : `one-engine-construction` et `one-queue-construction` verts, 26/26 — F2 de la revue
+# round 2). Les chemins sont rapportés RELATIFS à la racine du corpus, donc le rapport dit QUEL
+# fichier porte la construction.
+my @files;
+sub walk {
+  my ($d, $prefix) = @_;
+  opendir(my $dh, $d) or return;
+  for my $e (sort grep { $_ ne '.' && $_ ne '..' } readdir $dh) {
+    my $full = "$d/$e";
+    if (-d $full) { walk($full, "$prefix$e/") }
+    elsif ($e =~ /\.swift$/) { push @files, "$prefix$e" }
+  }
+  closedir $dh;
+}
+walk($dir, '');
+exit 2 unless @files;
 sub strip { my $t = shift; $t =~ s{/\*.*?\*/}{}gs; $t =~ s{//[^\n]*}{}g; $t }
 my %sites;   # type -> [ [fichier, offset], ... ]
 my %warmup_body_span;
@@ -441,18 +581,41 @@ STATUS_PATHS_PL
 status_paths() { perl "$work/status_paths.pl"; }
 has_any() { local hay=$1 needle; shift; for needle in "$@"; do [[ "$hay" == *"$needle"* ]] && return 0; done; return 1; }
 
-# IDEMPOTENCE du handover,proofed STRUCTURELLEMENT. Exige, dans le corps de la méthode :
-#   (a) une comparaison de la propriété `controlServer` à `nil` (le serveur, pas un paramètre) ;
+# IDEMPOTENCE du handover, proofed STRUCTURELLEMENT, sur le DELEGATE ENTIER. Exige :
+#   (a) une comparaison de la propriété `controlServer` à `nil` (le serveur, pas un paramètre),
+#       dans le corps de `configureControlServer` ;
 #   (b) une SORTIE ANTICIPÉE sur le chemin « déjà configuré » : `guard … else { return }`, ou
-#       `if controlServer == nil { … } else { return }` ;
-#   (c) AUCUNE construction `TranscriptControlServer(` en dehors de la branche qui crée.
+#       `else { return }`, dans ce même corps ;
+#   (c) AUCUNE construction `TranscriptControlServer(` en dehors de la branche qui crée — ET
+#       aucune construction HORS du corps de `configureControlServer`, dans tout le delegate.
+# (c) est ce qui ferme la portée : le contrôle ne jugeait que le corps de la méthode nommée, donc
+# un SECOND point d'entrée (`reconfigureControlServer`, appelé par le menu) qui faisait `stop()`
+# puis reconstruisait et redémarrait un serveur neuf laissait les cinq contrôles `delegate-*`
+# verts (mesuré : VERT contrôle=delegate-handover-idempotent, 26/26 — F3 de la revue round 2).
+# C'est le critère 2 qui parle de « une seconde CONFIGURATION », donc de tous les chemins qui
+# configurent, pas d'un seul nom de méthode.
 # Un handover non idempotent qui reconstruit un serveur à chaque appel viole (b) — son `if … { log }`
 # ne retourne pas — et (c) le vérifie séparément. Sort 0 = idempotent, 1 = défaut, 2 = indécidable.
 cat >"$work/handover_idem.pl" <<'HANDOVER_IDEM_PL'
 use strict; use warnings;
 local $/; my $x = <STDIN> // '';
 $x =~ s{/\*.*?\*/}{}gs; $x =~ s{//[^\n]*}{}g;
-# Every `TranscriptControlServer(` CONSTRUCTION offset, and the spans of the branches.
+
+# Le corps de `configureControlServer` : [début, fin] des ACCOLADES de sa définition. Sans lui on
+# ne peut pas distinguer « le handover » de « le delegate », qui est la portée du critère 2.
+my ($cfg_o, $cfg_e);
+if ($x =~ /^[ \t]*(?:(?:public|private|internal|fileprivate|open|override|class|static|final|mutating)[ \t]+)*func[ \t]+configureControlServer\b[^{]*\{/m) {
+  my $o = index($x, '{', $-[0]); my $d = 0; my $e = -1;
+  for my $p ($o .. length($x) - 1) {
+    my $c = substr($x, $p, 1); $d++ if $c eq '{'; $d-- if $c eq '}';
+    if (!$d) { $e = $p; last }
+  }
+  ($cfg_o, $cfg_e) = ($o, $e) if $e > 0;
+}
+if (!defined $cfg_o) { print STDERR "handover: configureControlServer introuvable ou illisible\n"; exit 2 }
+
+# Every `TranscriptControlServer(` CONSTRUCTION offset in the WHOLE delegate, and the spans of the
+# branches. Une construction hors du corps de `configureControlServer` est le défaut (c).
 my @constr;
 while ($x =~ /\bTranscriptControlServer\s*\(/g) { push @constr, $-[0] }
 exit 2 unless @constr;                     # no construction at all -> nothing to guard
@@ -491,9 +654,11 @@ while ($x =~ /\bif\b([^{]*?)\{/gs) {
     push @guards, [$e + 1, $eo + 1, $eo, $ee] if $ee > 0;
   }
 }
-# (a) a guard whose CONDITION — the text BETWEEN `guard` and `else` — compares the server property.
+# (a) a guard whose CONDITION — the text BETWEEN `guard` and `else` — compares the server property,
+#     AND whose whole span is inside `configureControlServer`.
 my $cond_guard = 0;
 for my $g (@guards) {
+  next unless $g->[0] > $cfg_o && $g->[0] < $cfg_e;
   my $cond = substr($x, $g->[0], $g->[1] - $g->[0]);
   $cond_guard = 1 if $cond =~ /controlServer\s*(?:==|!=)\s*nil/;
 }
@@ -502,34 +667,70 @@ for my $g (@guards) {
 my $early = 0;
 for my $g (@guards) {
   next if $g->[3] < 0;
+  next unless $g->[0] > $cfg_o && $g->[0] < $cfg_e;
   my $else_body = substr($x, $g->[2] + 1, $g->[3] - $g->[2] - 1);
   $early = 1 if $else_body =~ /^\s*return\b/s;
 }
 # (c) every construction inside the nil-branch, or after a guard that is BOTH on the property AND
-#     early-returning. Without that conjonction, ` constructions_gardees=1` sortait vert même
-#     sans aucune garde (mesuré sur le mutant non idempotent) : un contrôle ne doit pas être vert
-#     par défaut.
+#     early-returning — and inside `configureControlServer` in ALL cases. Without that conjonction,
+# ` constructions_gardees=1` sortait vert même sans aucune garde (mesuré sur le mutant non
+# idempotent) : un contrôle ne doit pas être vert par défaut.
 my $enclosed = 1;
 my $early_guard_end = -1;
 for my $g (@guards) {
   next if $g->[3] < 0;
+  next unless $g->[0] > $cfg_o && $g->[0] < $cfg_e;
   my $else_body = substr($x, $g->[2] + 1, $g->[3] - $g->[2] - 1);
   my $cond = substr($x, $g->[0], $g->[1] - $g->[0]);
   next unless $else_body =~ /^\s*return\b/s;
   next unless $cond =~ /controlServer\s*(?:==|!=)\s*nil/;
   $early_guard_end = $g->[3] if $g->[3] > $early_guard_end;
 }
+my $hors_corps = 0;
 for my $c (@constr) {
   # Sans garde properties-correcte, AUCUNE construction n'est « gardée » : `(c)` ne doit pas être
   # vert par défaut (mesuré : il l'était, `$early_guard_end` valant -1 et tout offset étant > -1).
+  my $dans_corps = ($c > $cfg_o && $c < $cfg_e) ? 1 : 0;
+  $hors_corps++ unless $dans_corps;
   my $inside = ($early_guard_end >= 0 && $c > $early_guard_end) ? 1 : 0;
   for my $br (@create_branches) { $inside = 1 if $c > $br->[2] && $c < $br->[3] }
   $enclosed = 0 unless $inside;
 }
 print STDERR "handover: constructions=" . scalar(@constr)
+  . " hors_configureControlServer=$hors_corps"
   . " garde_condition=$cond_guard sortie_anticipee=$early constructions_gardees=$enclosed\n";
-exit(($cond_guard && $early && $enclosed) ? 0 : 1);
+exit(($cond_guard && $early && $enclosed && $hors_corps == 0) ? 0 : 1);
 HANDOVER_IDEM_PL
+
+# L'ARGUMENT de `loadedModelForVideo`, lu sur le texte ENTIER. Le `sed` ligne à ligne d'avant
+# renvoyait une chaîne VIDE sur un appel multi-lignes — et le shell traitait cette absence comme
+# « défaut conforme », donc `dedicatingComputeUnits: true` passait (mesuré, 26/26). Ici :
+#   * le motif porte `\s*` après le nom, donc l'appel est trouvé quelle que soit sa mise en page ;
+#   * les parenthèses de l'ARGUMENT sont ÉQUILIBRÉES, pas capturées par `[^)]*` ;
+#   * le PREMIER appel est lu, comme le faisait le `head -1` d'avant ;
+#   * sortie : le texte de l'argument normalisé (espaces réduits), `""` si l'appel n'a pas
+#     d'argument, `AUCUN_APPEL` si l'appel est absent, `IMBALANCE` s'il est illisible, et un
+#     échec de lecture (`ERREUR` côté shell) si le fichier Perl n'a pas pu s'exécuter.
+# Un retour illisible est une VALEUR, jamais un vide confiant : le shell le traite en rouge.
+cat >"$work/video_arg.pl" <<'VIDEO_ARG_PL'
+use strict; use warnings;
+local $/; my $x = <STDIN>;
+$x = '' unless defined $x;
+$x =~ s{/\*.*?\*/}{}gs; $x =~ s{//[^\n]*}{}g;
+unless ($x =~ /\bloadedModelForVideo\s*\(/) { print 'AUCUN_APPEL'; exit 0 }
+my $o = index($x, '(', $-[0]);
+my $d = 0; my $e = -1;
+for my $p ($o .. length($x) - 1) {
+  my $c = substr($x, $p, 1);
+  $d++ if $c eq '('; $d-- if $c eq ')';
+  if (!$d) { $e = $p; last }
+}
+if ($e < 0) { print 'IMBALANCE'; exit 0 }
+my $args = substr($x, $o + 1, $e - $o - 1);
+$args =~ s/\s+/ /g; $args =~ s/^ //; $args =~ s/ $//;
+print $args;   # peut être vide : l'appel sans argument prend la valeur par défaut
+exit 0;
+VIDEO_ARG_PL
 
 server=$(clean_of <"$work/server.swift")
 delegate=$(clean_of <"$work/delegate.swift")
@@ -558,15 +759,18 @@ if [[ -n "$delegate_file" ]]; then
   handover=$(body_for 'func configureControlServer' "$delegate" || true)
   [[ -n "$handover" ]]; check delegate-configure-handover "$?" \
     "le delegate ne reçoit pas les dépendances par une méthode de configuration nommée"
-  # IDEMPOTENCE —structurelle, pas lexicale. Un `if controlServer == nil { log.info(…) }` qui ne
-  # retourne PAS fait passer un grep `== nil` alors qu'un `TranscriptControlServer(…)` non gardé
-  # construit un second serveur à chaque configuration : c'est exactement le défaut du critère 2,
-  # et une version antérieure de ce contrôle le laissait passer (mesuré, 24/24). Le contrôle exige
-  # donc, dans le corps de la méthode : une comparaison sur la PROPRIÉTÉ `controlServer`, une SORTIE
-  # ANTICIPÉE (`guard … else { return }`, ou un `else { return }`), et toute construction de serveur
-  # du côté de la branche qui crée.
-  printf '%s' "$handover" | perl "$work/handover_idem.pl"; check delegate-handover-idempotent "$?" \
-    "configureControlServer n'est pas idempotent : une seconde configuration créerait un second serveur"
+  # IDEMPOTENCE —structurelle, pas lexicale, et sur le DELEGATE ENTIER. Un `if controlServer ==
+  # nil { log.info(…) }` qui ne retourne PAS fait passer un grep `== nil` alors qu'un
+  # `TranscriptControlServer(…)` non gardé construit un second serveur à chaque configuration :
+  # c'est exactement le défaut du critère 2, et une version antérieure de ce contrôle le laissait
+  # passer (mesuré, 24/24). Le contrôle exige donc, dans le corps de `configureControlServer` : une
+  # comparaison sur la PROPRIÉTÉ `controlServer`, une SORTIE ANTICIPÉE (`guard … else { return }`,
+  # ou un `else { return }`), et — sur TOUT le delegate — AUCUNE construction de serveur hors de
+  # cette branche et hors de ce corps. La dernière clause est ce qui interdit un second point
+  # d'entrée qui reconstruit (mesuré : `reconfigureControlServer` laissait ce contrôle VERT,
+  # 26/26 — F3 de la revue round 2) ; c'est elle qui donne au contrôle sa portée de critère.
+  printf '%s' "$delegate" | perl "$work/handover_idem.pl"; check delegate-handover-idempotent "$?" \
+    "le delegate n'est pas idempotent : une seconde configuration créerait un second serveur"
   # The server is a PROPERTY of the delegate, not something it builds per call.
   printf '%s' "$delegate" | grep -qE 'var[[:space:]]+[A-Za-z_]*[Ss]erver[^\n]*:[[:space:]]*TranscriptControlServer\?'; \
     check delegate-owns-server "$?" "le delegate ne possède pas le serveur comme propriété"
@@ -615,9 +819,16 @@ if [[ -n "$pane_file" && -n "$dictation_file" ]]; then
   printf 'SCAN >> %s | %s\n' "$eng_line" "$que_line"
   eng_app=$(sed -n 's/.* app=\([0-9]*\) .*/\1/p' <<<"$eng_line")
   que_app=$(sed -n 's/.* app=\([0-9]*\) .*/\1/p' <<<"$que_line")
+  # L'attribution à un fichier se fait sur une ENTRÉE EXACTE de la liste `files=`, jamais sur un
+  # `*DictationController.swift=1*` : les chemins sont maintenant relatifs et `Views/X.swift`
+  # produirait la même sous-chaîne qu'un `X.swift` à la racine. `grep -cx` compare la ligne
+  # entière, donc un fichier homonyme dans un sous-dossier ne peut pas se faire passer pour
+  # l'original — et un second moteur dans ce sous-dossier se voit justement parce qu'il compte.
+  eng_dict=$(sed -n 's/.* files=//p' <<<"$eng_line" | tr ',' '\n' | grep -cx 'DictationController.swift=1' || true)
+  que_pane=$(sed -n 's/.* files=//p' <<<"$que_line" | tr ',' '\n' | grep -cx 'TranscriptsPaneModel.swift=1' || true)
   # The app's single engine is the dictation's, and it is only that one.
-  [[ "${eng_app:-0}" -eq 1 && "$eng_line" == *"DictationController.swift=1"* ]]; check one-engine-construction "$?" \
-    "constructions de WhisperKitEngine dans l'app=$eng_app ($eng_line) — 1 attendue, dans la dictée"
+  [[ "${eng_app:-0}" -eq 1 && "${eng_dict:-0}" -eq 1 ]]; check one-engine-construction "$?" \
+    "constructions de WhisperKitEngine dans l'app=$eng_app (dictation=$eng_dict) — 1 attendue, dans la dictée ($eng_line)"
   # The warm-up exclusion stays an exclusion: its engine lives in `ModelWarmup`, which only
   # `Launch.main` calls, and only behind the `--prepare-model` flag.
   warm_body=$(body_for 'enum ModelWarmup' "$(clean_of <"$work/corpus/ModelWarmup.swift" 2>/dev/null || printf '')" || true)
@@ -638,23 +849,41 @@ if [[ -n "$pane_file" && -n "$dictation_file" ]]; then
   # And the video reuses the RECEIVED engine: the call is made on `engine`, the injected property.
   printf '%s' "$pane" | grep -qE 'engine\.loadedModelForVideo\('; check video-uses-shared-engine "$?" \
     "la vidéo n'appelle pas loadedModelForVideo sur le moteur reçu"
-  # L'argument est LU, pas seulement la forme de l'appel. Un appel SANS argument prend la valeur
-  # par défaut de `loadedModelForVideo(dedicatingComputeUnits: Bool = false)`
-  # (`WhisperKitEngine.swift:331`) et reste donc conforme : le contrôle ne rougit que sur une valeur
-  # EXPLICITE qui dédiaise, et il n'exige donc pas une écriture particulière du DEV.
-  video_arg=$(sed -n 's/.*loadedModelForVideo(\([^)]*\)).*/\1/p' <<<"$pane" | head -1)
-  if [[ -z "$video_arg" ]]; then
-    video_policy=0; video_why="aucun argument → défaut dedicatingComputeUnits: false"
-  elif has_any "$video_arg" 'dedicatingComputeUnits: false' 'dedicatingComputeUnits:false'; then
-    video_policy=0; video_why="dédicatingComputeUnits: false (moteur partagé)"
-  else
-    video_policy=1; video_why="dédicatingComputeUnits EXPLICITE et non false"
-  fi
+  # L'argument est LU sur le TEXTE DÉCOMMENTÉ COMPLET, pas ligne par ligne. Un `sed` par ligne
+  # (`s/.*loadedModelForVideo(\([^)]*\)).*/\1/p`) renvoyait la chaîne VIDE sur un appel écrit en
+  # plusieurs lignes — cas réel : le dépôt compte 509 lignes > 100 caractères dans `Murmure/*.swift`
+  # — et le script déclarait alors l'absence d'argument « conforme » : mesuré, un
+  # `dedicatingComputeUnits: true` sur un appel multi-lignes passait 26/26 (F1 de la revue round 2).
+  # `mutant-dedicated-compute` ne le voyait pas non plus : il substitue `false`→`true` EN PLACE,
+  # donc forcément sur une ligne. Le motif porte `\s`, l'extraction équilibre les parenthèses, et
+  # un argument ILLISIBLE est ROUGE — jamais un « défaut conforme » par défaut de lecture.
+  #
+  # Un appel SANS argument reste conforme : il prend la valeur par défaut de
+  # `loadedModelForVideo(dedicatingComputeUnits: Bool = false)` (`WhisperKitEngine.swift:331`).
+  # Le contrat n'exige donc pas une écriture particulière au DEV.
+  video_arg=$(printf '%s' "$pane" | perl "$work/video_arg.pl" 2>/dev/null || printf 'ERREUR')
+  case "$video_arg" in
+    ERREUR)
+      video_policy=1; video_why="lecture impossible de l'appel (texte inattendu) — un argument illisible n'est pas un argument conforme" ;;
+    AUCUN_APPEL)
+      video_policy=1; video_why="aucun appel à loadedModelForVideo à lire" ;;
+    IMBALANCE)
+      video_policy=1; video_why="parenthèses non équilibrées : l'argument ne peut pas être lu" ;;
+    "")
+      video_policy=0; video_why="aucun argument → défaut dedicatingComputeUnits: false" ;;
+    *)
+      if has_any "$video_arg" 'dedicatingComputeUnits: false' 'dedicatingComputeUnits:false' \
+                             'dedicatingComputeUnits : false'; then
+        video_policy=0; video_why="dédicatingComputeUnits: false (moteur partagé)"
+      else
+        video_policy=1; video_why="dédicatingComputeUnits EXPLICITE et non false"
+      fi ;;
+  esac
   check video-compute-not-dedicated "$video_policy" \
     "loadedModelForVideo est appelé avec « ${video_arg:-aucun argument} » : $video_why"
   # One queue: the pane's, and only that one — counted over the corpus too.
-  [[ "${que_app:-0}" -eq 1 && "$que_line" == *"TranscriptsPaneModel.swift=1"* ]]; check one-queue-construction "$?" \
-    "constructions de TranscriptQueue dans l'app=$que_app ($que_line) — exactement 1, dans le panneau"
+  [[ "${que_app:-0}" -eq 1 && "${que_pane:-0}" -eq 1 ]]; check one-queue-construction "$?" \
+    "constructions de TranscriptQueue dans l'app=$que_app (panneau=$que_pane) — exactement 1, dans le panneau ($que_line)"
   printf '%s' "$server" | perl -ne '$n+=()=/TranscriptQueue\s*[({]/g; exit($n>0)'; check server-no-queue "$?" \
     "le serveur construit une file"
 else
