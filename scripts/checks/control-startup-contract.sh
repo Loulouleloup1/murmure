@@ -489,6 +489,32 @@ case "$MODE" in
         -e 's/^(\s*)func applicationWillTerminate\(/$1func applicationDidBecomeActive(_ notification: Notification) {\n$1    controlServer?.start()\n$1}\n\n$1func applicationWillTerminate(/m'; then
       MUTATED=1
     fi ;;
+  mutant-guarded-second-start) EXPECTED=one-control-server-start
+    # F1 BLOQUANT DE LA REVUE ROUND 5, rejoué TEL QUEL. La différence avec
+    # `mutant-second-start` est le `if` — et c'est exactement ce que l'ancien contrôle ignorait :
+    # il demandait qu'un site hors lancement soit sous un en-tête mentionnant le drapeau, donc un
+    # `if applicationLaunched` suffisait. Or ce drapeau est un VERROU À SENS UNIQUE (`:42` `= false`,
+    # `:63` `= true` au lancement, jamais remis à `false`) : la garde est VIDE, elle est vraie à
+    # chaque retour dans l'app, et le serveur refait `unlink` puis `bind` sur son propre socket.
+    # Revue : `swiftc -parse` rc=0, `CONTRÔLE=28/28`, `VERT one-control-server-start`. Le contrôle
+    # corrigeé le prend sur le LIEU (`hors_handover=1`), pas sur la garde.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/delegate.swift" -0pi \
+        -e 's/^(\s*)func applicationWillTerminate\(/$1func applicationDidBecomeActive(_ notification: Notification) {\n$1    if applicationLaunched { controlServer?.start() }\n$1}\n\n$1func applicationWillTerminate(/m'; then
+      MUTATED=1
+    fi ;;
+  mutant-dead-launch-start) EXPECTED=one-control-server-start
+    # F2 NON BLOQUANT DE LA REVUE ROUND 5, traité dans le même passage (même cause : le contrôle
+    # raisonnait sur des OFFSETS, pas sur des CHEMINS). Le `start()` du chemin FINDER est placé
+    # sous `if !applicationLaunched`, alors que le drapeau vient d'être mis à `true` DEUX LIGNES
+    # plus haut : branche MORTE, le serveur ne démarre jamais par le Finder. Revue : 28/28 VERT.
+    # Le contrôle corrigé compte `morts=1` : dans le corps du lancement, tester un drapeau qui
+    # vient d'être mis à `true` rend la branche soit morte, soit vide.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/delegate.swift" -0pi \
+        -e 's/^(\s*)controlServer\?\.start\(\)\s*$/$1if !applicationLaunched { controlServer?.start() }/m'; then
+      MUTATED=1
+    fi ;;
   mutant-harness-start) EXPECTED=finder-launched-by-launchservices
     # Le harnais qui pilote `start()` au lieu du Finder. Ce n'est pas un drapeau : un processus
     # ÉTRANGER sert réellement le socket du contrat (voir `run_finder`), donc le socket EXISTE et
@@ -505,7 +531,7 @@ case "$MODE" in
        || mutate "$work/app.swift" -0pi -e 's/transcriptsModel\.queueStatus\(\)/"idle" (nothing)/'; then
       MUTATED=1
     fi ;;
-  *) printf 'usage: %s [finder|wire|mutant-no-start|mutant-second-engine|mutant-second-queue|mutant-dedicated-compute|mutant-dedicated-compute-multiligne|mutant-default-dedicated|mutant-sous-dossier-moteur|mutant-sous-dossier-file|mutant-sous-dossier-video|mutant-second-control-server|mutant-second-entry-point|mutant-non-idempotent|mutant-unguarded-construction|mutant-unguarded-start|mutant-second-start|mutant-harness-start|mutant-ghost-status]\n' "$0" >&2; exit 64 ;;
+  *) printf 'usage: %s [finder|wire|mutant-no-start|mutant-second-engine|mutant-second-queue|mutant-dedicated-compute|mutant-dedicated-compute-multiligne|mutant-default-dedicated|mutant-sous-dossier-moteur|mutant-sous-dossier-file|mutant-sous-dossier-video|mutant-second-control-server|mutant-second-entry-point|mutant-non-idempotent|mutant-unguarded-construction|mutant-unguarded-start|mutant-second-start|mutant-guarded-second-start|mutant-dead-launch-start|mutant-harness-start|mutant-ghost-status]\n' "$0" >&2; exit 64 ;;
 esac
 if [[ -n "$EXPECTED" && -z "${MUTATED:-}" ]]; then
   printf 'MUTANT INAPPLICABLE mode=%s : la mutation n’a rien changé dans la copie\n' "$MODE"
@@ -824,11 +850,30 @@ HANDOVER_IDEM_PL
 #   * handover AVANT : le drapeau est faux → pas de start ici ; `applicationDidFinishLaunching`
 #     démarre.   * handover APRÈS : le `start()` du lancement portait sur un serveur `nil`
 #     (no-op) ; le handover démarre.   Jamais deux.
+#
+# L'exclusion est donc portée par le LIEU, pas par la garde — c'est la correction du finding
+# bloquant de la revue round 5. Le contrôle ne demandait qu'un `start()` hors
+# `applicationDidFinishLaunching` SOUS un en-tête mentionnant le drapeau ; or
+# `applicationLaunched` est un VERROU À SENS UNIQUE (`= false`, `= true` au lancement, jamais
+# remis à `false`), donc une garde écrite avec lui est VIDE : elle est vraie à chaque événement
+# ultérieur. Sonde de la revue, COMPILEE (`swiftc -parse` rc=0), delegate de référence + :
+#   func applicationDidBecomeActive(_ n: Notification) { if applicationLaunched { controlServer?.start() } }
+# → mesuré `CONTRÔLE=28/28`, `VERT one-control-server-start`. Avec la garde en PLUS.
+# `applicationDidBecomeActive` est un delegate AppKit appelé à chaque retour dans l'app : le
+# serveur s'y `unlink` puis `bind` sur SON PROPRE socket. Le critère 2 dit « démarré EXACTEMENT
+# une fois », pas « … ou deux si quelqu'un a pensé à écrire un `if` ».
 # On exige donc, sur le delegate ENTIER : exactement un site `start()` dans
 # `applicationDidFinishLaunching` (le chemin Finder), au moins un site ailleurs — sans lui, un
-# handover arrivé APRÈS le lancement ne démarrerait jamais — et TOUS les autres sites gardés par un
-# drapeau de lancement. Un site non gardé est un second démarrage garanti au premier retour dans
-# l'app : le serveur vole son propre socket à lui-même.
+# handover arrivé APRÈS le lancement ne démarrerait jamais — et TOUS les autres sites DANS le
+# corps de `configureControlServer` (le seul endroit où le critère 2 autorise un second appel) ET
+# gardés par un drapeau de lancement.
+#
+# Le site du chemin FINDER doit de plus être EXÉCUTABLE : dans `applicationDidFinishLaunching`, le
+# drapeau vient d'être mis à `true`, donc le retester sous le site donne une branche MORTE
+# (`if !applicationLaunched { start() }` → le serveur ne démarre jamais par le Finder) ou une
+# garde VIDE (`if applicationLaunched { … }`). Les deux sont la même violation ; c'est le finding
+# NON BLOQUANT de la revue round 5, mesuré 28/28 VERT, et il est traité dans le même passage
+# parce que c'est la même cause : raisonner sur des OFFSETS plutôt que sur des CHEMINS.
 #
 # LIMITE DÉCLARÉE, pour ne pas surjouer : ce contrôle ne détecte pas un drapeau de garde qui ne
 # serait jamais mis à `true` — le handover deviendrait mort et le serveur ne démarrerait jamais.
@@ -885,7 +930,20 @@ for my $p (@props) {
 if (!@sites) { print STDERR "start_once: aucun start() sur le serveur du delegate\n"; exit 2 }
 @sites = sort { $a <=> $b } @sites;
 
-# 5. Les en-têtes conditionnels du delegate : le texte du site est-il sous une condition de
+# 5. Le corps de `configureControlServer` : le SEUL endroit où le critère 2 autorise un second
+#    appel. On le cherche exactement comme `applicationDidFinishLaunching`, parce que c'est la
+#    même question — « ce site est-il dans le chemin de handover ? ».
+my ($cfg_o, $cfg_e);
+if ($x =~ /^[ \t]*(?:(?:public|private|internal|fileprivate|open|override|class|static|final|mutating)[ \t]+)*func[ \t]+configureControlServer\b[^{]*\{/m) {
+  my $o = index($x, '{', $-[0]); my $d = 0; my $e = -1;
+  for my $p ($o .. length($x) - 1) {
+    my $c = substr($x, $p, 1); $d++ if $c eq '{'; $d-- if $c eq '}';
+    if (!$d) { $e = $p; last }
+  }
+  ($cfg_o, $cfg_e) = ($o, $e) if $e > 0;
+}
+
+# 6. Les en-têtes conditionnels du delegate : le texte du site est-il sous une condition de
 #    LANCEMENT (`if <drapeau> { … }`) ou derrière une sortie anticipée par ce drapeau
 #    (`guard <drapeau> else { return }`) ? Les DEUX écritures sont admises : un DEV ne doit pas
 #    se voir rouge pour avoir choisi la seconde.
@@ -900,10 +958,27 @@ while ($x =~ /\b(?:if|guard)\b([^{;]*?)\{/gs) {
   next if $e < 0;
   push @head, [$st, $e, $cond, $ob];
 }
-my $launch = 0; my @other;
-for my $s (@sites) { if ($s > $lo && $s < $hi) { $launch++ } else { push @other, $s } }
+my $launch = 0; my @other; my @launch_sites;
+for my $s (@sites) { if ($s > $lo && $s < $hi) { $launch++; push @launch_sites, $s } else { push @other, $s } }
+
+# 6a. OÙ un second `start()` a le droit d'être. Le critère 2 autorise le second appel AU HANDOVER,
+#     et nulle part ailleurs : `applicationDidBecomeActive` est un delegate AppKit appelé à
+#     chaque retour dans l'app, et `start()` y refait `unlink` puis `bind` sur le socket que le
+#     serveur tient lui-même. Un site HORS du corps de `configureControlServer` est donc un
+#     second démarrage, quelle que soit la garde qui l'entoure — c'est ce que la revue round 5 a
+#     mesuré enCompilation (`swiftc -parse` rc=0) avec la garde du drapeau à sens unique
+#     EN PLUS : `CONTRÔLE=28/28`, `VERT one-control-server-start`. La garde n'était pas la
+#     question ; le LIEU est la question.
+my $hors_handover = 0;
+for my $s (@other) {
+  $hors_handover++ unless (defined $cfg_o && $s > $cfg_o && $s < $cfg_e);
+}
+
+# 6b. Un site de handover doit en outre être GARDE, sinon un handover arrivé APRÈS le lancement
+#     redémarre un serveur déjà démarré (S10 de la revue round 4).
 my $unguarded = 0;
 for my $s (@other) {
+  next if !(defined $cfg_o && $s > $cfg_o && $s < $cfg_e);
   my $ok = 0;
   for my $h (@head) {
     next unless $s > $h->[0] && $s < $h->[1];
@@ -926,12 +1001,28 @@ for my $s (@other) {
   }
   $unguarded++ unless $ok;
 }
+
+# 6c. Le site du chemin FINDER doit être EXÉCUTABLE. Dans `applicationDidFinishLaunching`, le
+#     drapeau de lancement vient d'être mis à `true` : le tester à nouveau donne soit une branche
+#     MORTE (`if !applicationLaunched { start() }` — le serveur ne démarre jamais par le Finder),
+#     soit une garde VACUE (`if applicationLaunched { start() }`), et les deux sont la même
+#     violation du critère 2. Le contrôle ne raisonnait que sur des OFFSETS (F2 non bloquant de
+#     la revue round 5, mesuré : 28/28 VERT) ; ici il regarde la CONDITION qui enveloppe le site.
+my $morts = 0;
+for my $s (@launch_sites) {
+  for my $h (@head) {
+    next unless $h->[0] > $lo && $s > $h->[0] && $s < $h->[1];
+    for my $f (keys %flag) { $morts++ if $h->[2] =~ /\b\Q$f\E\b/ }
+  }
+}
 print STDERR "start_once: sites=" . scalar(@sites) . " dans_applicationDidFinishLaunching=$launch"
-  . " autres=" . scalar(@other) . " non_gardes=$unguarded"
+  . " autres=" . scalar(@other) . " hors_handover=$hors_handover"
+  . " non_gardes=$unguarded" . " morts=$morts"
   . " drapeaux=" . join(',', sort keys %flag) . "\n";
-# Un seul site de lancement, au moins un site de handover (sinon un handover arrivé APRÈS le
-# lancement ne démarre jamais le serveur), et aucun site de handover non gardé.
-exit(($launch == 1 && @other >= 1 && $unguarded == 0) ? 0 : 1);
+# Un seul site de lancement EXÉCUTABLE, au moins un site de handover (sinon un handover arrivé
+# APRÈS le lancement ne démarre jamais le serveur), et AUCUN site de second démarrage ailleurs
+# que dans le handover.
+exit(($launch == 1 && @other >= 1 && $unguarded == 0 && $hors_handover == 0 && $morts == 0) ? 0 : 1);
 START_ONCE_PL
 
 # L'ARGUMENT de `loadedModelForVideo`, lu sur le texte ENTIER, sur TOUS les fichiers du corpus.
