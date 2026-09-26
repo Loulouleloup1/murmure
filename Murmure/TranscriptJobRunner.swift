@@ -134,9 +134,42 @@ actor TranscriptJobRunner {
     /// l'exécution qui tourne.
     private var running: TranscriptionStop?
 
-    init(configuration: Configuration, transcriber: VideoTranscriber) {
+    // MARK: - La priorité dictée / vidéo (lot 12)
+    //
+    // **Le mécanisme est un paramètre, jamais une bifurcation** : la boucle ne teste pas un cas de
+    // politique, elle lit les **valeurs** que `TranscriptPriority` expose (`admission`,
+    // `dedicatesComputeUnits`) par la seule question qu'elle pose — « dois-je céder ? ».
+    //
+    // Le défaut est **(1b) le statu quo** : décision de Louis du 2026-09-21, « une dictée ne doit
+    // jamais attendre un verrou pris par la vidéo ». Aucune politique n'a été retenue par la
+    // campagne du lot 0 — le point de bascule entre (1b) et (3) est de l'ordre de 1,2 s, plus petit
+    // que la dispersion naturelle du corpus réel — et la mesure qui décide est **reportée au lot 8**,
+    // où le moteur vidéo tourne dans le processus de l'application.
+    private let policy: TranscriptPriority.Policy
+
+    /// Le signal « une dictée est en cours », injecté (voir `DictationSignal`).
+    ///
+    /// C'est **la seule entrée** de la machine : sans lui, aucune politique à frontière ne pourrait
+    /// savoir qu'une voix réclame la machine, et la boucle vidéo n'aurait rien à consulter.
+    private let dictation: DictationSignal
+
+    /// La machine de priorité de **l'exécution en cours**, recréée par `run` comme le frein l'est
+    /// (voir ``running``) : son état est monotone dans une exécution (`writtenUnits` ne recule pas)
+    /// et la garder d'une exécution à l'autre ferait porter à une relance les unités d'un travail
+    /// que la bibliothèque vient peut-être de retirer du disque.
+    private var priority: TranscriptPriority
+
+    init(
+        configuration: Configuration,
+        transcriber: VideoTranscriber,
+        policy: TranscriptPriority.Policy = TranscriptPriority.defaultPolicy,
+        dictation: DictationSignal = .shared
+    ) {
         self.configuration = configuration
         self.transcriber = transcriber
+        self.policy = policy
+        self.dictation = dictation
+        self.priority = TranscriptPriority(policy: policy)
     }
 
     /// Demande l'arrêt propre du travail en cours : l'unité en cours est interrompue (frein au
@@ -269,7 +302,16 @@ actor TranscriptJobRunner {
         let resolved = try await resolveLanguage(
             explicit: language, resume: resume, firstUnit: slices.first?.url)
 
-        // MARK: 7. Les unités
+        // MARK: 7. Les unités — sous la priorité dictée / vidéo (lot 12)
+        //
+        // La machine est **recréée par exécution**, comme le frein : son état est celui de
+        // ce travail-là, et rien d'autre. Le travail vidéo **commence** au sens de la machine
+        // ici même : c'est à partir de ce point qu'il tourne, donc qu'il peut être suspendu.
+        // Le déclarer plus tôt (acquisition, décodage, découpe) en ferait un travail « en
+        // cours » pendant des minutes où il ne consomme pas un neurone, et une dictée paierait
+        // une suspension pour rien.
+        priority = TranscriptPriority(policy: policy)
+        priority.videoBegan()
         var transcribed = previousUnits(from: resume)
 
         while let index = state.nextUnitIndex {
@@ -288,6 +330,18 @@ actor TranscriptJobRunner {
                     units: transcribed, completedAt: nil)
                 try write(state, to: work.progressURL)
                 return .stopped(document.document)
+            }
+
+            // ── La frontière de priorité (lot 12) ────────────────────────────────────────────
+            //
+            // **Une seule question, posée là où la vidéo peut céder** : la frontière d'unité, le
+            // seul endroit où la boucle peut s'arrêter sans couper un morceau en deux. La réponse
+            // vient de la **politique** et du signal de dictée injecté ; sous le défaut câblé
+            // (1b), elle est toujours non et la boucle ne paie qu'une lecture.
+            if await frontier(ofUnit: index) {
+                // La vidéo a cédé : suspendue, la dictée a fini, elle vient de reprendre — et
+                // elle **rejoue cette unité**, qui n'a jamais été écrite.
+                continue
             }
 
             let slice = slices[index]
@@ -381,6 +435,56 @@ actor TranscriptJobRunner {
         // succès vérifié — deux fichiers relus sur disque, pas le seul retour d'écriture.
         work.remove()
         return .complete(final.document)
+    }
+
+    /// La **frontière de priorité** : la seule question que la boucle vidéo pose au sujet de la
+    /// dictée, posée à l'endroit où la vidéo peut céder sans couper un morceau en deux.
+    ///
+    /// Elle ne décide pas de la mécanique : elle lit la **valeur** d'admission de la politique
+    /// (`shouldYield`), jamais son cas — d'où l'absence de `switch` sur la politique dans cette
+    /// fonction (plan §7.1 règle 5 : le mécanisme est un paramètre). La seule chose qui dépend de la
+    /// politique est la **construction du moteur** (instance partagée ou dédiée).
+    ///
+    /// - Parameter index: l'unité qui **allait partir**. C'est elle qu'une préemption (1a)
+    ///   interrompt : annoncée en cours d'unité, elle devient l'unité à rejouer, et elle ne sera
+    ///   rejouée qu'**une fois** — le point de reprise n'a pas bougé.
+    /// - Returns: `true` quand l'appelant doit **rejouer** l'unité `index` (la vidéo a cédé avant
+    ///   de l'écrire).
+    private func frontier(ofUnit index: Int) async -> Bool {
+        guard dictation.isDictating else {
+            // Aucune dictée : si la machine en tenait une, elle vient de finir — et c'est ici,
+            // seule entrée de la machine, qu'elle l'apprend. Sans dictée servie, c'est un
+            // non-événement (la comparaison coûte une lecture de drapeau).
+            priority.dictationEnded()
+            return false
+        }
+
+        // L'unité entre en traitement **avant** la question : c'est elle qu'une préemption
+        // interrompt, donc la seule qui pourra être rejouée.
+        priority.unitBegan(index)
+        priority.dictationBegan()
+
+        // La question de la boucle vidéo. Elle lit la **valeur** d'admission de la politique
+        // (`shouldYield`), jamais son cas.
+        let cede = priority.shouldYield(dictationPending: dictation.isDictating)
+        // La frontière est annoncée **dans tous les cas** : c'est là qu'une dictée en attente est
+        // admise — sous (1a) en suspendant la vidéo, sous (3) en la laissant tourner.
+        priority.frontierReached()
+        guard cede else { return false }
+
+        // (1a) seulement : la vidéo se suspend et la voix a la machine. On attend la fin de la
+        // dictée, puis on **reprend dans la même exécution** — le frein n'est pas armé, c'est ce
+        // qui distingue une suspension d'un arrêt. `waitUntilIdle` est annulable : un travail vidéo
+        // annulé ne reste pas suspendu sur une attente qui ne finit pas.
+        let politique = priority.policy.rawValue
+        logger.info("""
+            priority: video yielding to dictation — unit \(index, privacy: .public) not written \
+            and will be replayed, policy \(politique, privacy: .public)
+            """)
+        await dictation.waitUntilIdle()
+        priority.dictationEnded()
+        priority.videoResumed()
+        return true
     }
 
     // MARK: - Les étapes qui ne décident pas
