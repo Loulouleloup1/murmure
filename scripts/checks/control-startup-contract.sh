@@ -150,6 +150,16 @@ if [[ -n "${MURMURE_STARTUP_APP:-}" && -f "${MURMURE_STARTUP_APP:-}" ]]; then
   cp "$(canon "$MURMURE_STARTUP_APP")" "$work/app.swift"
   printf 'INFO source=app-surchargé chemin=%s\n' "$(canon "$MURMURE_STARTUP_APP")"
 fi
+# Le MÊME localisateur pour le MOTEUR. Il existe parce que la DÉCLARATION de
+# `loadedModelForVideo(dedicatingComputeUnits:)` est dans `WhisperKitEngine.swift` : le contrôle
+# de la vidéo LIT ce défaut, donc un mutant doit pouvoir le porter sur une copie de travail sans
+# que le graphe relise le fichier d'origine — sinon `mutant-default-dedicated` (la sonde S9 de la
+# revue round 4) muterait une copie que personne ne relit, et serait déclaré capturé ou
+# inapplicable selon le hasard.
+if [[ -n "${MURMURE_STARTUP_ENGINE:-}" && -f "${MURMURE_STARTUP_ENGINE:-}" ]]; then
+  cp "$(canon "$MURMURE_STARTUP_ENGINE")" "$work/engine.swift"
+  printf 'INFO source=engine-surchargé chemin=%s\n' "$(canon "$MURMURE_STARTUP_ENGINE")"
+fi
 
 # Le CORPUS de comptage : TOUT `Murmure/` de l'arbre sous test, puis les six copies de travail —
 # qui incluent les surcharges ET les mutations — écrasant leur version d'origine. C'est la seule
@@ -287,6 +297,7 @@ run_graph() { # <label> -> prints the red controls of that assembly
         MURMURE_STARTUP_SERVER="$work/server.swift" \
         MURMURE_STARTUP_DELEGATE="$work/delegate.swift" \
         MURMURE_STARTUP_APP="$work/app.swift" \
+        MURMURE_STARTUP_ENGINE="$work/engine.swift" \
         MURMURE_STARTUP_CORPUS="${MURMURE_STARTUP_CORPUS:-}" \
         "$SELF" wire graph 2>&1)
   while IFS= read -r line; do
@@ -438,6 +449,46 @@ case "$MODE" in
         -e 's/^(\s*)guard controlServer == nil else \{ return \}$/$1_ = TranscriptControlServer(submitteur: submitteur, fournisseurStatut: fournisseurStatut)\n$1guard controlServer == nil else { return }/m'; then
       MUTATED=1
     fi ;;
+  mutant-default-dedicated) EXPECTED=video-compute-not-dedicated
+    # S9 DE LA REVUE ROUND 4 (non bloquant pour elle, BLOQUANT pour la preuve) : l'appel perd son
+    # argument ET le défaut de la déclaration passe à `true`. La vidéo réclame alors un moteur
+    # dédié — la seconde instance que le critère 1 interdit — et le contrôle restait VERT, 27/27,
+    # parce qu'il AFFIRMAIT le défaut au lieu de le LIRE. Il est vrai que `WhisperKitEngine.swift`
+    # est figé ; il est faux que le contrôle le vérifiait. Les DEUX mutations sont donc dans ce
+    # mutant : c'est leur ENSEMBLE qui rendait la branche « appel sans argument » verte, et c'est
+    # l'ensemble qu'il faut pouvoir casser.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/engine.swift" -0pi \
+        -e 's/dedicatingComputeUnits: Bool = false/dedicatingComputeUnits: Bool = true/' \
+       && mutate "$work/pane.swift" -0pi \
+        -e 's/loadedModelForVideo\(dedicatingComputeUnits: false\)/loadedModelForVideo()/'; then
+      MUTATED=1
+    fi ;;
+  mutant-unguarded-start) EXPECTED=one-control-server-start
+    # S10 DE LA REVUE ROUND 4, rejoué tel quel : la garde `if applicationLaunched` du handover
+    # devient un APPEL NU. Le delegate reste conforme à tous les autres contrôles — comparison sur
+    # la propriété, sortie anticipée, construction unique, `start()` présent dans
+    # `applicationDidFinishLaunching` — et le critère 2 est rompu : un handover arrivé APRÈS le
+    # lancement redémarre un serveur déjà démarré, et `start()` refait `unlink` puis `bind`.
+    # Mesuré par la revue sur un assemblage COMPILÉ : `BUILD SUCCEEDED`, CONTRÔLE=27/27, les six
+    # contrôles du critère 2 verts. C'est le témoin que le contrôle qui manquait mesurait le
+    # DÉMARRAGE et pas la CONSTRUCTION.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/delegate.swift" -0pi \
+        -e 's/^(\s*)if applicationLaunched \{ controlServer\?\.start\(\) \}$/$1controlServer?.start()/m'; then
+      MUTATED=1
+    fi ;;
+  mutant-second-start) EXPECTED=one-control-server-start
+    # S6 DE LA REVUE ROUND 4 : un second `start()` dans `applicationDidBecomeActive`, donc à
+    # chaque retour dans l'app le serveur se réécrit — `unlink` puis `bind` sur le socket qu'il
+    # tient lui-même. Le nombre de CONSTRUCTIONS ne bouge pas (1), `delegate-starts-server` reste
+    # vert, et le handover reste idempotent : c'est bien le DÉMARRAGE qui n'est pas unique, ce
+    # qu'aucun contrôle ne voyait. Mesuré par la revue : `BUILD SUCCEEDED`, 27/27.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/delegate.swift" -0pi \
+        -e 's/^(\s*)func applicationWillTerminate\(/$1func applicationDidBecomeActive(_ notification: Notification) {\n$1    controlServer?.start()\n$1}\n\n$1func applicationWillTerminate(/m'; then
+      MUTATED=1
+    fi ;;
   mutant-harness-start) EXPECTED=finder-launched-by-launchservices
     # Le harnais qui pilote `start()` au lieu du Finder. Ce n'est pas un drapeau : un processus
     # ÉTRANGER sert réellement le socket du contrat (voir `run_finder`), donc le socket EXISTE et
@@ -454,7 +505,7 @@ case "$MODE" in
        || mutate "$work/app.swift" -0pi -e 's/transcriptsModel\.queueStatus\(\)/"idle" (nothing)/'; then
       MUTATED=1
     fi ;;
-  *) printf 'usage: %s [finder|wire|mutant-no-start|mutant-second-engine|mutant-second-queue|mutant-dedicated-compute|mutant-dedicated-compute-multiligne|mutant-sous-dossier-moteur|mutant-sous-dossier-file|mutant-sous-dossier-video|mutant-second-control-server|mutant-second-entry-point|mutant-non-idempotent|mutant-unguarded-construction|mutant-harness-start|mutant-ghost-status]\n' "$0" >&2; exit 64 ;;
+  *) printf 'usage: %s [finder|wire|mutant-no-start|mutant-second-engine|mutant-second-queue|mutant-dedicated-compute|mutant-dedicated-compute-multiligne|mutant-default-dedicated|mutant-sous-dossier-moteur|mutant-sous-dossier-file|mutant-sous-dossier-video|mutant-second-control-server|mutant-second-entry-point|mutant-non-idempotent|mutant-unguarded-construction|mutant-unguarded-start|mutant-second-start|mutant-harness-start|mutant-ghost-status]\n' "$0" >&2; exit 64 ;;
 esac
 if [[ -n "$EXPECTED" && -z "${MUTATED:-}" ]]; then
   printf 'MUTANT INAPPLICABLE mode=%s : la mutation n’a rien changé dans la copie\n' "$MODE"
@@ -760,6 +811,129 @@ print STDERR "handover: constructions=" . scalar(@constr)
 exit(($cond_guard && $early && $enclosed && $hors_corps == 0) ? 0 : 1);
 HANDOVER_IDEM_PL
 
+# LE DÉMARRAGE, « EXACTEMENT UNE FOIS » — ce que le critère 2 dit et ce qu'aucun contrôle ne
+# mesurait. `one-control-server-construction` compte les CONSTRUCTIONS ; or `start()` n'est pas
+# idempotent (`lierEtEcouter()` fait `unlink` PUIS `bind`), donc c'est le DÉMARRAGE qui doit être
+# unique, pas la construction. Mesuré par la revue round 4 sur un assemblage COMPILÉ : deux
+# sondes, `BUILD SUCCEEDED` et CONTRÔLE=27/27 avec les six contrôles du critère 2 verts —
+#   S10 : la garde `if applicationLaunched` du handover devient un appel nu ;
+#   S6  : un second `start()` dans `applicationDidBecomeActive`.
+# Le chemin qui rend le démarrage unique dans la référence est EXCLUSIF : le `start()` du
+# handover est gardé par un drapeau mis à `true` DANS `applicationDidFinishLaunching`, donc
+# « handover avant lancement » et « handover après lancement » ne peuvent pas se cumuler.
+#   * handover AVANT : le drapeau est faux → pas de start ici ; `applicationDidFinishLaunching`
+#     démarre.   * handover APRÈS : le `start()` du lancement portait sur un serveur `nil`
+#     (no-op) ; le handover démarre.   Jamais deux.
+# On exige donc, sur le delegate ENTIER : exactement un site `start()` dans
+# `applicationDidFinishLaunching` (le chemin Finder), au moins un site ailleurs — sans lui, un
+# handover arrivé APRÈS le lancement ne démarrerait jamais — et TOUS les autres sites gardés par un
+# drapeau de lancement. Un site non gardé est un second démarrage garanti au premier retour dans
+# l'app : le serveur vole son propre socket à lui-même.
+#
+# LIMITE DÉCLARÉE, pour ne pas surjouer : ce contrôle ne détecte pas un drapeau de garde qui ne
+# serait jamais mis à `true` — le handover deviendrait mort et le serveur ne démarrerait jamais.
+# Ce cas-là appartient à la gate d'EXECUTION, qui CONSTATE le socket absent dans la fenêtre du
+# §2.5 : c'est une observation du monde, pas une lecture de source, et c'est la seule des deux
+# qui voie l'ordre réel des deux événements.
+#
+# La portée s'arrête au delegate PAR CONSTRUCTION, pas par commodité : le serveur n'est construit
+# qu'une fois dans l'app (`one-control-server-construction`), et le handover ne transmet que le
+# submitteur et le status provider — jamais le serveur. Aucun autre type ne peut donc garder un
+# second pointeur vers CE serveur. Sort 0 = démarré exactement une fois, 1 = défaut, 2 = indécidable.
+cat >"$work/start_once.pl" <<'START_ONCE_PL'
+use strict; use warnings;
+local $/; my $x = <STDIN> // '';
+$x =~ s{/\*.*?\*/}{}gs; $x =~ s{//[^\n]*}{}g;
+exit 2 unless length $x;
+
+# 1. Les propriétés du delegate qui SONT des serveurs de contrôle. On ne devine pas le nom :
+# `start()` n'est compté que sur un récepteur dont le TYPE est `TranscriptControlServer?`, donc
+# un `recorder.start()` ou un `engine.start()` du delegate n'entre pas dans le décompte.
+my @props;
+while ($x =~ /\bvar\s+([A-Za-z_]\w*)\s*:\s*TranscriptControlServer\?/g) { push @props, $1 }
+if (!@props) { print STDERR "start_once: aucune propriété TranscriptControlServer? dans le delegate\n"; exit 2 }
+
+# 2. Le corps de `applicationDidFinishLaunching` : c'est le CHEMIN FINDER, celui que la gate
+#    d'exécution ouvre par LaunchServices. Sans ce corps, « démarré une fois » n'a pas de sens.
+my ($lo, $hi);
+if ($x =~ /^[ \t]*(?:(?:public|private|internal|fileprivate|open|override|class|static|final|mutating)[ \t]+)*func[ \t]+applicationDidFinishLaunching\b[^\n{(]*[(<][^{]*\{/m) {
+  my $o = index($x, '{', $-[0]); my $d = 0; my $e = -1;
+  for my $p ($o .. length($x) - 1) {
+    my $c = substr($x, $p, 1); $d++ if $c eq '{'; $d-- if $c eq '}';
+    if (!$d) { $e = $p; last }
+  }
+  ($lo, $hi) = ($o, $e) if $e > 0;
+}
+if (!defined $lo) { print STDERR "start_once: applicationDidFinishLaunching introuvable ou illisible\n"; exit 2 }
+
+# 3. Les DRAPEAUX de lancement : un booléen mis à `true` DANS le corps ci-dessus. C'est ce qui
+#    rend les deux sites exclusifs, donc c'est ce qu'on cherche.
+my %flag;
+# Le corps est COPIÉ dans un lexique avant le `/g` : faire correspondre `/g` sur un `substr()`
+# en LVALUE (`while (substr($x, …) =~ /…/g)`) est une boucle infinie — le motif est évalué
+# sur une cible dont `pos` est sans cesse réinitialisé (mesuré : le perl ne rendait pas, et le
+# contrat entier pendait avec lui, sans message). Le lexique rend la boucle finie.
+my $launch_body = substr($x, $lo, $hi - $lo);
+while ($launch_body =~ /([A-Za-z_]\w*)\s*=\s*true\b/g) { $flag{$1} = 1 }
+
+# 4. Les sites `start()` du delegate, sur les récepteurs typés ci-dessus.
+my @sites;
+for my $p (@props) {
+  pos($x) = 0;
+  while ($x =~ /\b\Q$p\E\s*\??\s*\.\s*start\s*\(\s*\)/g) { push @sites, $-[0] }
+}
+if (!@sites) { print STDERR "start_once: aucun start() sur le serveur du delegate\n"; exit 2 }
+@sites = sort { $a <=> $b } @sites;
+
+# 5. Les en-têtes conditionnels du delegate : le texte du site est-il sous une condition de
+#    LANCEMENT (`if <drapeau> { … }`) ou derrière une sortie anticipée par ce drapeau
+#    (`guard <drapeau> else { return }`) ? Les DEUX écritures sont admises : un DEV ne doit pas
+#    se voir rouge pour avoir choisi la seconde.
+my @head;
+while ($x =~ /\b(?:if|guard)\b([^{;]*?)\{/gs) {
+  my $st = $-[0]; my $cond = $1; my $ob = $+[0] - 1;
+  my $d = 0; my $e = -1;
+  for my $p ($ob .. length($x) - 1) {
+    my $c = substr($x, $p, 1); $d++ if $c eq '{'; $d-- if $c eq '}';
+    if (!$d) { $e = $p; last }
+  }
+  next if $e < 0;
+  push @head, [$st, $e, $cond, $ob];
+}
+my $launch = 0; my @other;
+for my $s (@sites) { if ($s > $lo && $s < $hi) { $launch++ } else { push @other, $s } }
+my $unguarded = 0;
+for my $s (@other) {
+  my $ok = 0;
+  for my $h (@head) {
+    next unless $s > $h->[0] && $s < $h->[1];
+    for my $f (keys %flag) { $ok = 1 if $h->[2] =~ /\b\Q$f\E\b/ }
+  }
+  if (!$ok) {
+    # `guard <drapeau> else { return }` terminé juste avant le site, sans autre en-tête entre
+    # les deux : le site est encore sous la garde, écrit à l'envers.
+    for my $h (@head) {
+      next if $h->[1] > $s;
+      my $txt = substr($x, $h->[0], $h->[1] - $h->[0]);
+      next unless $txt =~ /else\s*\{\s*return\b/s;
+      my $hit = 0;
+      for my $f (keys %flag) { $hit = 1 if $txt =~ /\b\Q$f\E\b/ }
+      next unless $hit;
+      my $intercale = 0;
+      for my $g (@head) { $intercale = 1 if $g->[0] > $h->[1] && $g->[0] < $s }
+      $ok = 1 unless $intercale;
+    }
+  }
+  $unguarded++ unless $ok;
+}
+print STDERR "start_once: sites=" . scalar(@sites) . " dans_applicationDidFinishLaunching=$launch"
+  . " autres=" . scalar(@other) . " non_gardes=$unguarded"
+  . " drapeaux=" . join(',', sort keys %flag) . "\n";
+# Un seul site de lancement, au moins un site de handover (sinon un handover arrivé APRÈS le
+# lancement ne démarre jamais le serveur), et aucun site de handover non gardé.
+exit(($launch == 1 && @other >= 1 && $unguarded == 0) ? 0 : 1);
+START_ONCE_PL
+
 # L'ARGUMENT de `loadedModelForVideo`, lu sur le texte ENTIER, sur TOUS les fichiers du corpus.
 # Le `sed` ligne à ligne d'avant renvoyait une chaîne VIDE sur un appel multi-lignes — et le shell
 # traitait cette absence comme « défaut conforme », donc `dedicatingComputeUnits: true` passait
@@ -797,6 +971,29 @@ for my $f (@files) {
   open(my $fh, '<', "$dir/$f") or next;
   my $raw = do { local $/; <$fh> }; close $fh;
   $raw =~ s{/\*.*?\*/}{}gs; $raw =~ s{//[^\n]*}{}g;
+  # The DEFAULT of the parameter, read from the DECLARATION. A call site with no argument is
+  # conformant ONLY because the default is `false` — and until now the contract ASSERED that
+  # default instead of reading it, so it was true merely because `WhisperKitEngine.swift` is
+  # frozen (the round-4 review's non-blocking F2, measured as mutant S9: the call loses its
+  # argument AND the default becomes `true` — a dedicated engine, the second instance criterion 1
+  # forbids — and the control stayed green, 27/27). An unverified claim about someone else's file
+  # is not a control: the default is read HERE, and an unreadable one is RED, never a silent pass.
+  pos($raw) = 0;
+  while ($raw =~ /\bfunc\s+loadedModelForVideo\s*\(/g) {
+    my $o = index($raw, '(', $-[0]);
+    my $d = 0; my $e = -1;
+    for my $p ($o .. length($raw) - 1) {
+      my $c = substr($raw, $p, 1); $d++ if $c eq '('; $d-- if $c eq ')';
+      if (!$d) { $e = $p; last }
+    }
+    last if $e < 0;
+    my $sig = substr($raw, $o + 1, $e - $o - 1);
+    $sig =~ s/\s+/ /g;
+    if ($sig =~ /dedicatingComputeUnits\s*:\s*Bool\s*=\s*(\S+?)\s*$/) { print "DEF default=$1\n" }
+    elsif ($sig =~ /dedicatingComputeUnits\s*:\s*Bool\b/)         { print "DEF default=AUCUN\n" }
+    else                                                          { print "DEF default=ILLISIBLE\n" }
+    last;
+  }
   pos($raw) = 0;
   while ($raw =~ /\bloadedModelForVideo\s*\(/g) {
     my $st = $-[0];
@@ -864,9 +1061,23 @@ if [[ -n "$delegate_file" ]]; then
   # The server is a PROPERTY of the delegate, not something it builds per call.
   printf '%s' "$delegate" | grep -qE 'var[[:space:]]+[A-Za-z_]*[Ss]erver[^\n]*:[[:space:]]*TranscriptControlServer\?'; \
     check delegate-owns-server "$?" "le delegate ne possède pas le serveur comme propriété"
+  # LE DÉMARRAGE, exactement une fois — le mot du critère 2 que les contrôles voisins ne
+  # mesuraient pas. `delegate-starts-server` vérifie la PRÉSENCE d'un `start()` dans
+  # `applicationDidFinishLaunching`, et `one-control-server-construction` compte les
+  # CONSTRUCTIONS ; ni l'un ni l'autre ne voit un serveur démarré deux fois, alors que
+  # `start()` n'est pas idempotent (`lierEtEcouter()` : `unlink` PUIS `bind` — le second
+  # démarrage vole le socket au premier, et le `stop()` du premier supprime le nom du socket
+  # du second). Mesuré par la revue round 4 sur un assemblage COMPILÉ : la garde
+  # `if applicationLaunched` du handover transformée en appel nu, et un second `start()` dans
+  # `applicationDidBecomeActive`, donnaient tous deux `BUILD SUCCEEDED` et CONTRÔLE=27/27 avec
+  # les SIX contrôles du critère 2 verts. Aucun des 13 mutants ne pouvait l'attraper : il n'y
+  # avait rien à attraper.
+  start_reason=$(printf '%s' "$delegate" | perl "$work/start_once.pl" 2>&1); start_rc=$?
+  [[ "$start_rc" -eq 0 ]]; check one-control-server-start "$start_rc" \
+    "le serveur n'est pas démarré exactement une fois : ${start_reason:-lecture impossible}"
 else
   for c in delegate-starts-server delegate-stops-server delegate-configure-handover \
-           delegate-handover-idempotent delegate-owns-server; do
+           delegate-handover-idempotent delegate-owns-server one-control-server-start; do
     check "$c" 1 "$DELEGATE_REL absent de l'assemblage"
   done
 fi
@@ -963,6 +1174,16 @@ if [[ -n "$pane_file" && -n "$dictation_file" ]]; then
   # d'appel rendrait le contrôle rouge sur du code correct.
   video_lines=$(scan_video || true)
   printf 'VIDEO >> %s\n' "$(tr '\n' '|' <<<"$video_lines")"
+  # Le DÉFAUT de la DÉCLARATION, lu et non supposé. Un appel SANS argument n'est conforme que si
+  # ce défaut vaut `false`; le contrat l'affirmait sans le vérifier, donc il était vrai parce que
+  # `WhisperKitEngine.swift` est FIGÉ, pas parce que le contrôle le mesurait (F2 non bloquant de
+  # la revue round 4, mesuré en S9 : l'appel perd son argument ET le défaut passe à `true`, la
+  # vidéo réclame alors un moteur dédié — la seconde instance du critère 1 — et le contrôle
+  # restant vert, 27/27). Un défaut ILLISIBLE ou absent est ROUGE : on ne peut pas valider au
+  # doigt une politique qu'on n'a pas lue.
+  video_default=$(sed -n 's/^DEF default=//p' <<<"$video_lines" | head -1)
+  [[ -n "$video_default" ]] || video_default=ABSENT
+  printf 'VIDEO default_declaration=%s\n' "$video_default"
   video_policy=0; video_why=""
   # AUCUN site deappel : le contrôle rouge, on ne peut pas lire une politique qui n'est pas écrite.
   if [[ -z "$video_lines" ]]; then
@@ -970,17 +1191,24 @@ if [[ -n "$pane_file" && -n "$dictation_file" ]]; then
   else
     while IFS= read -r vl; do
       [[ -n "$vl" ]] || continue
+      case "$vl" in
+        DEF\ *) continue ;;
+      esac
       vfile=${vl#*file=}; vfile=${vfile%% *}
       varg=${vl##*arg=}
       case "$varg" in
         IMBALANCE)
           video_policy=1; video_why="$vfile : parenthèses non équilibrées, l'argument ne peut pas être lu — un argument illisible n'est pas un argument conforme" ;;
         AUCUN)
-          video_why="${video_why:+$video_why ; }$vfile : appel sans argument → défaut dedicatingComputeUnits: false" ;;
+          if [[ "$video_default" == false ]]; then
+            video_why="${video_why:+$video_why ; }$vfile : appel sans argument → défaut lu de la déclaration = false"
+          else
+            video_policy=1; video_why="$vfile : appel sans argument, et le défaut de la déclaration est « $video_default » (false attendu, lu et non supposé)"
+          fi ;;
         *dedicatingComputeUnits:false*|*'dedicatingComputeUnits: false'*|*'dedicatingComputeUnits : false'*)
           video_why="${video_why:+$video_why ; }$vfile : dedicatingComputeUnits: false (moteur partagé)" ;;
         *)
-          video_policy=1; video_why="${video_why:+$video_why ; }$vfile : dedicatingComputeUnits EXPLICITE et non false" ;;
+          video_policy=1; video_why="$vfile : dedicatingComputeUnits EXPLICITE et non false" ;;
       esac
     done <<<"$video_lines"
   fi
