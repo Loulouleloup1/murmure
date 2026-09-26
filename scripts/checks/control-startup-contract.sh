@@ -257,6 +257,26 @@ enum RogueQueueFactory {
 }
 ROGUE_QUEUE
 }
+# Second VIDEO PATH, elsewhere in `Murmure/` than the pane, asking for a DEDICATED engine. This is
+# the F2 the round-3 review measured at 26/26: the control read the argument on `$pane` only, so a
+# second video path in `Murmure/Views/` could claim `dedicatingComputeUnits: true` — the second
+# instance criterion 1 forbids — with every control green. It is written here, VISIBLE and stable,
+# and well typed as the real call site (`TranscriptsPaneModel.swift:708`): a mutant that does not
+# compile proves nothing of the control.
+write_rogue_video() { # <destination>
+  cat >"$1" <<'ROGUE_VIDEO'
+import Foundation
+
+/// Second video path, in a subdirectory of `Murmure/`, asking for a DEDICATED engine — the
+/// second instance the criterion 1 forbids, reached from a path the pane-only read never saw.
+/// Well typed as `TranscriptsPaneModel.swift:708`, so the mutated assembly still COMPILES.
+enum RogueVideoFactory {
+    static func model(for engine: WhisperKitEngine) async throws -> LoadedModel {
+        try await engine.loadedModelForVideo(dedicatingComputeUnits: true)
+    }
+}
+ROGUE_VIDEO
+}
 
 # The graph family, re-run in this same process on whichever files the MURMURE_STARTUP_* locators
 # name. Swift and the Finder path are not re-run: they depend on a whole build, not on one file.
@@ -353,6 +373,35 @@ case "$MODE" in
     # Localisateur de SOURCES : le graphe relit le fichier injecté. Il ne peut qu'ajouter.
     MURMURE_STARTUP_CORPUS="$work/corpus_rogue"
     MUTATED=1 ;;
+  mutant-sous-dossier-video) EXPECTED=video-compute-not-dedicated
+    # Un SECOND chemin vidéo, dans un sous-dossier de `Murmure/`, qui réclame un moteur DÉDIÉ. Le
+    # contrôle du round 3 lisait l'argument sur le SEUL panneau : cette injection le laissait VERT
+    # (mesuré 26/26 par la revue), alors que c'est exactement la seconde instance que le critère 1
+    # interdit. Bien typé comme `TranscriptsPaneModel.swift:708`, l'assemblage muté compile.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    mkdir -p "$work/corpus_rogue/Views"
+    write_rogue_video "$work/corpus_rogue/Views/RogueVideo.swift"
+    # Localisateur de SOURCES : le graphe relit le fichier injecté. Il ne peut qu'ajouter.
+    MURMURE_STARTUP_CORPUS="$work/corpus_rogue"
+    MUTATED=1 ;;
+  mutant-second-control-server) EXPECTED=one-control-server-construction
+    # Un SECOND serveur de contrôle, BIEN TYPÉ, construit ET DÉMARRÉ dans MurmureApp — le site que
+    # les mutants `mutant-second-engine`/`mutant-second-queue` choisissent déjà. Aucun contrôle ne
+    # comptait les serveurs dans l'app : mesuré par la revue round 3, ce mutant laissait 26/26 avec
+    # les trois contrôles du critère 2 verts, sur un assemblage COMPILÉ (`BUILD SUCCEEDED`).
+    # Ce n'est pas un strawman : `start()` fait `unlink` puis `bind`, donc le second serveur vole
+    # le socket au premier au lieu d'échouer.
+    #
+    # La construction passe par une BOÎTE de référence : un `private var` dans le `struct App` ne
+    # compile pas (`cannot assign to property: 'self' is immutable` — l'injection de la revue a
+    # buté dessus, mesuré par un vrai build). `final class` + `let` compile dans un struct.
+    # Le `submitteur` rend `.failed(String)` : `ControlJobOutcome` ne demande qu'un `String`, donc
+    # l'injection n'a pas à construire un `TranscriptDocument` (dont l'initialiseur a onze
+    # paramètres) — le mutant reste BIEN TYPÉ, donc l'assemblage compile.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/app.swift" -0pi -e 's/^(\s*)\@NSApplicationDelegateAdaptor\(AppDelegate\.self\) private var appDelegate$/$1\@NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate\n\n$1\/\/\/ RogueControlServerBox : le second serveur, construit ET démarré hors du delegate.\n$1private final class RogueControlServerBox {\n$1    static let shared = RogueControlServerBox()\n$1    let server: TranscriptControlServer\n$1    private init() {\n$1        server = TranscriptControlServer(\n$1            submitteur: { _ in ControlJobHandle(libelle: "", attendu: { .failed("rogue") }) },\n$1            fournisseurStatut: { "idle" })\n$1        server.start()\n$1    }\n$1}/m'; then
+      MUTATED=1
+    fi ;;
   mutant-second-entry-point) EXPECTED=delegate-handover-idempotent
     # `configureControlServer` EXACTEMENT conforme, plus un SECOND point d'entrée
     # (`reconfigureControlServer`) que le menu appelle, qui fait `stop()` puis reconstruit et
@@ -405,7 +454,7 @@ case "$MODE" in
        || mutate "$work/app.swift" -0pi -e 's/transcriptsModel\.queueStatus\(\)/"idle" (nothing)/'; then
       MUTATED=1
     fi ;;
-  *) printf 'usage: %s [finder|wire|mutant-no-start|mutant-second-engine|mutant-second-queue|mutant-dedicated-compute|mutant-dedicated-compute-multiligne|mutant-sous-dossier-moteur|mutant-sous-dossier-file|mutant-second-entry-point|mutant-non-idempotent|mutant-unguarded-construction|mutant-harness-start|mutant-ghost-status]\n' "$0" >&2; exit 64 ;;
+  *) printf 'usage: %s [finder|wire|mutant-no-start|mutant-second-engine|mutant-second-queue|mutant-dedicated-compute|mutant-dedicated-compute-multiligne|mutant-sous-dossier-moteur|mutant-sous-dossier-file|mutant-sous-dossier-video|mutant-second-control-server|mutant-second-entry-point|mutant-non-idempotent|mutant-unguarded-construction|mutant-harness-start|mutant-ghost-status]\n' "$0" >&2; exit 64 ;;
 esac
 if [[ -n "$EXPECTED" && -z "${MUTATED:-}" ]]; then
   printf 'MUTANT INAPPLICABLE mode=%s : la mutation n’a rien changé dans la copie\n' "$MODE"
@@ -486,6 +535,15 @@ my $dir = $ARGV[0];
 # round 2). Les chemins sont rapportés RELATIFS à la racine du corpus, donc le rapport dit QUEL
 # fichier porte la construction.
 my @files;
+# Les trois types dont le critère 1 et le critère 2 exigent « exactement une construction dans
+# l'app ». `TranscriptControlServer` y figure depuis le round 4 : le critère 2 dit « le serveur est
+# démarré EXACTEMENT une fois », et rien ne comptait les serveurs dans l'app — un second serveur
+# bien typé, construit ET démarré dans `MurmureApp.swift`, laissait le contrat à 26/26 avec les
+# contrôles du critère 2 verts (mesuré par la revue round 3, sur un assemblage COMPILÉ). Le
+# comptage est donc le même que pour le moteur et la file : le CORPUS récursif, pas un nom de
+# fichier. Le serveur n'a pas d'exception warm-up, mais le partage du mécanisme ne crée pas
+# d'exception : c'est le même site, la même déclaration, le même corpus.
+my @TYPES = qw(WhisperKitEngine TranscriptQueue TranscriptControlServer);
 sub walk {
   my ($d, $prefix) = @_;
   opendir(my $dh, $d) or return;
@@ -514,7 +572,7 @@ for my $f (@files) {
     }
     $warmup_body_span{$f} = [$o, $e] if $e > 0;
   }
-  for my $type (qw(WhisperKitEngine TranscriptQueue)) {
+  for my $type (@TYPES) {
     pos($t) = 0;
     while ($t =~ /\b\Q$type\E\s*[({]/g) {
       my $st = $-[0];
@@ -525,7 +583,7 @@ for my $f (@files) {
     }
   }
 }
-for my $type (qw(WhisperKitEngine TranscriptQueue)) {
+for my $type (@TYPES) {
   my ($app, $warm) = (0, 0); my %byfile;
   for my $s (@{ $sites{$type} || [] }) {
     my ($f, $off) = @$s;
@@ -702,35 +760,67 @@ print STDERR "handover: constructions=" . scalar(@constr)
 exit(($cond_guard && $early && $enclosed && $hors_corps == 0) ? 0 : 1);
 HANDOVER_IDEM_PL
 
-# L'ARGUMENT de `loadedModelForVideo`, lu sur le texte ENTIER. Le `sed` ligne à ligne d'avant
-# renvoyait une chaîne VIDE sur un appel multi-lignes — et le shell traitait cette absence comme
-# « défaut conforme », donc `dedicatingComputeUnits: true` passait (mesuré, 26/26). Ici :
+# L'ARGUMENT de `loadedModelForVideo`, lu sur le texte ENTIER, sur TOUS les fichiers du corpus.
+# Le `sed` ligne à ligne d'avant renvoyait une chaîne VIDE sur un appel multi-lignes — et le shell
+# traitait cette absence comme « défaut conforme », donc `dedicatingComputeUnits: true` passait
+# (mesuré, 26/26) ; et une version plus récente lisait le SEUL panneau, si bien qu'un second chemin
+# vidéo ailleurs dans `Murmure/` passait aussi (mesuré 26/26, revue round 3). Ici :
 #   * le motif porte `\s*` après le nom, donc l'appel est trouvé quelle que soit sa mise en page ;
 #   * les parenthèses de l'ARGUMENT sont ÉQUILIBRÉES, pas capturées par `[^)]*` ;
-#   * le PREMIER appel est lu, comme le faisait le `head -1` d'avant ;
-#   * sortie : le texte de l'argument normalisé (espaces réduits), `""` si l'appel n'a pas
-#     d'argument, `AUCUN_APPEL` si l'appel est absent, `IMBALANCE` s'il est illisible, et un
-#     échec de lecture (`ERREUR` côté shell) si le fichier Perl n'a pas pu s'exécuter.
+#   * TOUS les sites d'appel du corpus sont lus, chacun avec son fichier ;
+#   * la DÉCLARATION de `WhisperKitEngine.swift:331` est exclue par son `func` — la lire comme un
+#     appel rendrait le contrôle rouge sur du code correct ;
+#   * sortie : `VIDEO file=<chemin> arg=<texte normalisé>`, `AUCUN` si l'appel est sans argument
+#     (il prend alors la valeur par défaut `false`), `IMBALANCE` s'il est illisible.
 # Un retour illisible est une VALEUR, jamais un vide confiant : le shell le traite en rouge.
-cat >"$work/video_arg.pl" <<'VIDEO_ARG_PL'
+cat >"$work/video_scan.pl" <<'VIDEO_SCAN_PL'
 use strict; use warnings;
-local $/; my $x = <STDIN>;
-$x = '' unless defined $x;
-$x =~ s{/\*.*?\*/}{}gs; $x =~ s{//[^\n]*}{}g;
-unless ($x =~ /\bloadedModelForVideo\s*\(/) { print 'AUCUN_APPEL'; exit 0 }
-my $o = index($x, '(', $-[0]);
-my $d = 0; my $e = -1;
-for my $p ($o .. length($x) - 1) {
-  my $c = substr($x, $p, 1);
-  $d++ if $c eq '('; $d-- if $c eq ')';
-  if (!$d) { $e = $p; last }
+my $dir = $ARGV[0];
+my @files;
+sub walk {
+  my ($d, $prefix) = @_;
+  opendir(my $dh, $d) or return;
+  for my $e (sort grep { $_ ne '.' && $_ ne '..' } readdir $dh) {
+    my $full = "$d/$e";
+    if (-d $full) { walk($full, "$prefix$e/") }
+    elsif ($e =~ /\.swift$/) { push @files, "$prefix$e" }
+  }
+  closedir $dh;
 }
-if ($e < 0) { print 'IMBALANCE'; exit 0 }
-my $args = substr($x, $o + 1, $e - $o - 1);
-$args =~ s/\s+/ /g; $args =~ s/^ //; $args =~ s/ $//;
-print $args;   # peut être vide : l'appel sans argument prend la valeur par défaut
+walk($dir, '');
+exit 2 unless @files;
+# EVERY `loadedModelForVideo` CALL in the corpus, not only the pane's. Criterion 1 is about the
+# POLICY — no video path may ask for a dedicated engine — and reading only `TranscriptsPaneModel`
+# left a second video path anywhere else in `Murmure/` free to ask for one (measured 26/26 by the
+# round-3 review). The corpus is the same recursive scope the construction counts use.
+for my $f (@files) {
+  open(my $fh, '<', "$dir/$f") or next;
+  my $raw = do { local $/; <$fh> }; close $fh;
+  $raw =~ s{/\*.*?\*/}{}gs; $raw =~ s{//[^\n]*}{}g;
+  pos($raw) = 0;
+  while ($raw =~ /\bloadedModelForVideo\s*\(/g) {
+    my $st = $-[0];
+    # The DECLARATION in `WhisperKitEngine.swift` is not a call: it carries the default value the
+    # criterion relies on, and reading it as a call site would make the control red on correct code.
+    my $head = substr($raw, ($st > 60 ? $st - 60 : 0), ($st > 60 ? 60 : $st));
+    next if $head =~ /\bfunc\s+$/;
+    my $o = index($raw, '(', $st);
+    my $d = 0; my $e = -1;
+    for my $p ($o .. length($raw) - 1) {
+      my $c = substr($raw, $p, 1);
+      $d++ if $c eq '('; $d-- if $c eq ')';
+      if (!$d) { $e = $p; last }
+    }
+    if ($e < 0) { print "VIDEO file=$f arg=IMBALANCE\n"; next }
+    my $args = substr($raw, $o + 1, $e - $o - 1);
+    $args =~ s/\s+/ /g; $args =~ s/^ //; $args =~ s/ $//;
+    $args = 'AUCUN' if $args eq '';
+    print "VIDEO file=$f arg=$args\n";
+  }
+}
 exit 0;
-VIDEO_ARG_PL
+VIDEO_SCAN_PL
+scan_video() { build_corpus >/dev/null; perl "$work/video_scan.pl" "$work/corpus"; }
 
 server=$(clean_of <"$work/server.swift")
 delegate=$(clean_of <"$work/delegate.swift")
@@ -816,9 +906,12 @@ if [[ -n "$pane_file" && -n "$dictation_file" ]]; then
   scan=$(scan_corpus || true)
   eng_line=$(grep -E '^SCAN type=WhisperKitEngine ' <<<"$scan" || true)
   que_line=$(grep -E '^SCAN type=TranscriptQueue ' <<<"$scan" || true)
+  srv_line=$(grep -E '^SCAN type=TranscriptControlServer ' <<<"$scan" || true)
   printf 'SCAN >> %s | %s\n' "$eng_line" "$que_line"
+  printf 'SCAN >> %s\n' "$srv_line"
   eng_app=$(sed -n 's/.* app=\([0-9]*\) .*/\1/p' <<<"$eng_line")
   que_app=$(sed -n 's/.* app=\([0-9]*\) .*/\1/p' <<<"$que_line")
+  srv_app=$(sed -n 's/.* app=\([0-9]*\) .*/\1/p' <<<"$srv_line")
   # L'attribution à un fichier se fait sur une ENTRÉE EXACTE de la liste `files=`, jamais sur un
   # `*DictationController.swift=1*` : les chemins sont maintenant relatifs et `Views/X.swift`
   # produirait la même sous-chaîne qu'un `X.swift` à la racine. `grep -cx` compare la ligne
@@ -861,34 +954,61 @@ if [[ -n "$pane_file" && -n "$dictation_file" ]]; then
   # Un appel SANS argument reste conforme : il prend la valeur par défaut de
   # `loadedModelForVideo(dedicatingComputeUnits: Bool = false)` (`WhisperKitEngine.swift:331`).
   # Le contrat n'exige donc pas une écriture particulière au DEV.
-  video_arg=$(printf '%s' "$pane" | perl "$work/video_arg.pl" 2>/dev/null || printf 'ERREUR')
-  case "$video_arg" in
-    ERREUR)
-      video_policy=1; video_why="lecture impossible de l'appel (texte inattendu) — un argument illisible n'est pas un argument conforme" ;;
-    AUCUN_APPEL)
-      video_policy=1; video_why="aucun appel à loadedModelForVideo à lire" ;;
-    IMBALANCE)
-      video_policy=1; video_why="parenthèses non équilibrées : l'argument ne peut pas être lu" ;;
-    "")
-      video_policy=0; video_why="aucun argument → défaut dedicatingComputeUnits: false" ;;
-    *)
-      if has_any "$video_arg" 'dedicatingComputeUnits: false' 'dedicatingComputeUnits:false' \
-                             'dedicatingComputeUnits : false'; then
-        video_policy=0; video_why="dédicatingComputeUnits: false (moteur partagé)"
-      else
-        video_policy=1; video_why="dédicatingComputeUnits EXPLICITE et non false"
-      fi ;;
-  esac
+  #
+  # ET il est lu sur TOUT le corpus, pas sur le seul panneau. Le critère 1 porte sur la POLITIQUE
+  # d'instance — « aucun chemin vidéo ne réclame un moteur dédié » — donc un second chemin vidéo
+  # ailleurs dans `Murmure/` doit être lu aussi : mesuré par la revue round 3, un
+  # `dedicatingComputeUnits: true` dans `Murmure/Views/` laissait ce contrôle VERT (26/26). La
+  # DÉCLARATION de `WhisperKitEngine.swift:331` est exclue par son `func` — la lire comme un site
+  # d'appel rendrait le contrôle rouge sur du code correct.
+  video_lines=$(scan_video || true)
+  printf 'VIDEO >> %s\n' "$(tr '\n' '|' <<<"$video_lines")"
+  video_policy=0; video_why=""
+  # AUCUN site deappel : le contrôle rouge, on ne peut pas lire une politique qui n'est pas écrite.
+  if [[ -z "$video_lines" ]]; then
+    video_policy=1; video_why="aucun appel à loadedModelForVideo dans Murmure/ — la politique de la vidéo n'est pas écrite" ;
+  else
+    while IFS= read -r vl; do
+      [[ -n "$vl" ]] || continue
+      vfile=${vl#*file=}; vfile=${vfile%% *}
+      varg=${vl##*arg=}
+      case "$varg" in
+        IMBALANCE)
+          video_policy=1; video_why="$vfile : parenthèses non équilibrées, l'argument ne peut pas être lu — un argument illisible n'est pas un argument conforme" ;;
+        AUCUN)
+          video_why="${video_why:+$video_why ; }$vfile : appel sans argument → défaut dedicatingComputeUnits: false" ;;
+        *dedicatingComputeUnits:false*|*'dedicatingComputeUnits: false'*|*'dedicatingComputeUnits : false'*)
+          video_why="${video_why:+$video_why ; }$vfile : dedicatingComputeUnits: false (moteur partagé)" ;;
+        *)
+          video_policy=1; video_why="${video_why:+$video_why ; }$vfile : dedicatingComputeUnits EXPLICITE et non false" ;;
+      esac
+    done <<<"$video_lines"
+  fi
   check video-compute-not-dedicated "$video_policy" \
-    "loadedModelForVideo est appelé avec « ${video_arg:-aucun argument} » : $video_why"
+    "sites de lecture=$video_why"
   # One queue: the pane's, and only that one — counted over the corpus too.
   [[ "${que_app:-0}" -eq 1 && "${que_pane:-0}" -eq 1 ]]; check one-queue-construction "$?" \
     "constructions de TranscriptQueue dans l'app=$que_app (panneau=$que_pane) — exactement 1, dans le panneau ($que_line)"
+  # ONE server in the app, and it is the delegate's. Criterion 2 (plan l. 1269) : « le serveur est
+  # démarré EXACTEMENT une fois ». C'est le contrôle qui porte ce « exactement une fois » SANS
+  # restriction de site : avant lui, le comptage des serveurs n'existait nulle part (le delegate
+  # entier pour l'idempotence, `$pane`/`$server` pour le moteur et la file) — mesuré par la revue
+  # round 3, un second serveur BIEN TYPÉ, construit ET démarré dans `MurmureApp.swift`, laissait
+  # 26/26 avec les trois contrôles du critère 2 verts, sur un assemblage COMPILÉ.
+  #
+  # Ce n'est pas un strawman. `start()` n'est pas idempotent : `lierEtEcouter()` fait `unlink` PUIS
+  # `bind`, donc un second serveur ne échoue pas — il VOLE le socket au premier, et le `stop()` du
+  # premier supprime alors le nom du socket du second. Le symptôme est « le socket disparaît après
+  # une action de l'app », la classe de bug que le critère 2 interdit.
+  srv_delegate=$(sed -n 's/.* files=//p' <<<"$srv_line" | tr ',' '\n' | grep -cx 'AppDelegate.swift=1' || true)
+  [[ "${srv_app:-0}" -eq 1 && "${srv_delegate:-0}" -eq 1 ]]; check one-control-server-construction "$?" \
+    "constructions de TranscriptControlServer dans l'app=${srv_app:-0} (delegate=${srv_delegate:-0}) — exactement 1, dans le delegate ($srv_line)"
   printf '%s' "$server" | perl -ne '$n+=()=/TranscriptQueue\s*[({]/g; exit($n>0)'; check server-no-queue "$?" \
     "le serveur construit une file"
 else
   for c in one-engine-construction one-engine-warmup-is-bootstrap video-uses-shared-engine \
-           video-compute-not-dedicated one-queue-construction server-no-queue; do
+           video-compute-not-dedicated one-queue-construction one-control-server-construction \
+           server-no-queue; do
     check "$c" 1 "sources du moteur ou du panneau absentes de l'assemblage"
   done
 fi
