@@ -595,6 +595,372 @@ final class TranscriptQueueSharedContractTests: XCTestCase {
     }
 }
 
+// MARK: - Lot 10-S-R : le `done` porte la tige du fichier que son travail a écrit
+
+/// Le transport de la tige, vu du seul endroit où il est observable : **l'élément `done` de la
+/// file**, et la bibliothèque qui doit pouvoir relire ce que cette tige désigne.
+///
+/// Ce que ces cas protègent, et qui n'était pas protégé avant :
+/// - **un `done` est porteur de sa tige** : `TranscriptQueueEntry.documentID` vaut la tige du
+///   **fichier écrit**, et cette tige se relit par `library.transcript(id:)`. Le disque est la
+///   vérité (critère 14), donc une tige que personne ne peut relire n'est pas une tige ;
+/// - **la tige transportée est celle du fichier, jamais l'identité** de la source. Les deux
+///   donnent deux fichiers différents quand la même source est transcrite deux fois
+///   (`tige-2026-09-20-1a2b3c4d` et `tige-2026-09-20-1a2b3c4d-2`) : un élément qui porterait
+///   l'identité désignerait, une fois sur deux, le **mauvais** fichier — celui de l'autre
+///   transcription, au texte différent ;
+/// - **une tige n'est annoncée que lorsqu'un fichier existe** : un travail qui jette et une
+///   annulation n'ont écrit aucun transcript, donc leur `documentID` reste vide (règle 6 du
+///   contrat gelé, et la même honnêteté pour l'échec).
+///
+/// **Pourquoi le travail écrit pour de vrai, et relit par la bibliothèque.** `TranscriptLibrary.write`
+/// **re-dote** le document de la tige qu'**elle** a choisie (`ecrit.id = tige`) : le document
+/// construit en mémoire porte donc un `id` que la bibliothèque ne reconnaîtra jamais, et
+/// `transcript(id:)` le rend `nil`. Un travail qui rendrait le document d'avant écriture ferait
+/// rougir ce contrat **sur une base parfaitement correcte** : c'est ce qui a fait échouer une
+/// sonde précédente. Le travail rend donc ce que la bibliothèque **relit**, jamais ce
+/// qu'elle a reçu, et jamais un `JSONDecoder` de test qui n'aurait pas sa configuration de dates.
+///
+/// **Chaque cas négatif est couplé, dans le même test, à un contrôle positif** qui exerce
+/// l'implémentation : « une tige vide » serait aussi vrai d'une file qui n'écrit jamais de tige,
+/// donc l'affirmation seule ne prouverait rien. Le témoin positif, dans chaque cas, est un autre
+/// travail du **même** `drain()` dont la tige est non vide **et relisible par la bibliothèque**.
+///
+/// Aucun de ces cas n'indexe un tableau issu de la file : un index hors bornes ferait tomber tout
+/// le binaire de tests et masquerait les autres résultats.
+final class TranscriptQueueTigeDuFichierTests: XCTestCase {
+    private let contrat = "contrat 10-S-R : le done ne porte pas la tige du fichier écrit"
+
+    private var espace: URL!
+    private var base: URL!
+
+    override func setUpWithError() throws {
+        espace = try Self.bacASable("TranscriptQueueTigeDuFichierTests")
+        base = espace.appendingPathComponent("Transcripts", isDirectory: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: espace)
+    }
+
+    // MARK: - Cas de comportement
+
+    /// **Un travail qui rend un document donne un élément `done` porteur de la tige de ce
+    /// document, et cette tige est lisible par `library.transcript(id:)`.**
+    ///
+    /// C'est le cas central, et il est volontairement écrit en deux temps : d'abord la tige est
+    /// comparée à **ce que la bibliothèque a réellement écrit** (l'URL rendue par `write`, dont le
+    /// nom de fichier est la tige par construction), puis elle est **relue** par la bibliothèque.
+    /// Une assertion qui ne ferait que comparer deux chaînes du même calcul ne prouverait que la
+    /// cohérence du calcul, pas le transport.
+    func testADoneEntryCarriesTheStemOfTheFileItsJobWroteAndTheLibraryReadsItBack() async throws {
+        let disque = DisqueDeTest(base: base)
+        let identite = "dQw4w9WgXcQ"
+        let fichier = TranscriptQueue { _ in
+            try disque.ecrireEtRelire(documentEcrit(identite: identite, titre: "Première transcription"))
+        }
+
+        await fichier.enqueue(source: lienVideo(1))
+        await fichier.drain()
+
+        let entrees = await fichier.entries
+        let fini = entrees.first { $0.state == .done }
+        let tige = fini?.documentID ?? ""
+        let ecrits = disque.tigesEcrites
+
+        XCTAssertEqual(fini?.source, lienVideo(1), "le travail rendu est bien celui de ce lien — \(contrat)")
+        XCTAssertEqual(ecrits.count, 1, "le travail a écrit un fichier, et un seul — \(contrat)")
+        XCTAssertFalse(
+            tige.isEmpty, "un `done` sans tige est un fichier que personne ne peut relire — \(contrat)")
+        XCTAssertEqual(
+            tige, ecrits.first ?? "",
+            "la tige du `done` est celle du fichier écrit, pas un calcul parallèle — \(contrat)")
+
+        let relu = disque.library.transcript(id: tige)
+        XCTAssertNotNil(
+            relu, "la tige du `done` doit désigner un fichier que la bibliothèque relit — \(contrat)")
+        XCTAssertEqual(
+            relu?.id, tige,
+            "l'invariant du schéma tient : l'id du document relu EST sa tige — \(contrat)")
+        XCTAssertEqual(
+            relu?.title, "Première transcription",
+            "c'est bien le fichier de ce travail qui est relu — \(contrat)")
+
+        // Le témoin de la ligne suivante : l'identité de la source ne désigne **aucun** fichier.
+        // C'est ce qui rend l'égalité « tige = identité » fausse **et observable**, plutôt que
+        // simplement discouraged.
+        XCTAssertNil(
+            disque.library.transcript(id: identite),
+            "l'identité de la source ne désigne aucun fichier : la transporter serait une impasse")
+        XCTAssertNotEqual(tige, identite, "la tige n'est pas l'identité de la source — \(contrat)")
+    }
+
+    /// **Un travail qui jette ne donne pas de tige** — et le travail suivant, dans le **même**
+    /// `drain()`, en donne une qui est relisible. Sans ce témoin positif, « `documentID` vide »
+    /// serait aussi vrai d'une file qui n'écrit jamais de tige.
+    func testAThrowingJobCarriesNoStemWhileTheNextDoneEntryCarriesItsOwn() async throws {
+        let disque = DisqueDeTest(base: base)
+        let identite = "XyZ0123456_"
+        let fichier = TranscriptQueue { entree in
+            if entree.source == lienVideo(1) {
+                throw EchecDuTravail(message: "yt-dlp exited with status 403")
+            }
+            return try disque.ecrireEtRelire(documentEcrit(identite: identite, titre: "Seconde transcription"))
+        }
+
+        await fichier.enqueue(source: lienVideo(1))
+        await fichier.enqueue(source: lienVideo(2))
+        await fichier.drain()
+
+        let entrees = await fichier.entries
+        let echoue = entrees.first { $0.source == lienVideo(1) }
+        let fini = entrees.first { $0.source == lienVideo(2) }
+
+        XCTAssertEqual(echoue?.state, .failed, "le travail qui jette est en échec — \(contrat)")
+        XCTAssertEqual(
+            echoue?.error, "yt-dlp exited with status 403",
+            "la raison de l'échec est conservée telle que le travail l'a donnée — \(contrat)")
+        XCTAssertEqual(
+            echoue?.documentID, "",
+            "un travail qui jette n'a écrit aucun transcript : aucune tige ne peut être annoncée")
+
+        // Contrôle positif, dans le même drainage : la file sait porter une tige quand il y en a une.
+        let tigeDuSuivant = fini?.documentID ?? ""
+        XCTAssertEqual(fini?.state, .done, "le travail suivant aboutit — \(contrat)")
+        XCTAssertFalse(
+            tigeDuSuivant.isEmpty,
+            "témoin positif : le travail suivant porte une tige — \(contrat)")
+        XCTAssertEqual(
+            tigeDuSuivant, disque.tigesEcrites.first ?? "",
+            "c'est la tige du fichier que CE travail a écrit — \(contrat)")
+        XCTAssertNotNil(
+            disque.library.transcript(id: tigeDuSuivant),
+            "témoin positif : cette tige se relit dans la bibliothèque — \(contrat)")
+    }
+
+    /// **Une annulation ne donne pas de tige** (règle 6 du contrat gelé) — et le travail suivant,
+    /// annulé ou non, en donne une relisible. L'annulation est **réelle** : `cancelCurrent()`
+    /// annule la tâche, le travail observe `Task.isCancelled` et ne rend pas de document.
+    func testACancelledJobCarriesNoStemWhileTheFollowingDoneEntryCarriesItsOwn() async throws {
+        let disque = DisqueDeTest(base: base)
+        let journal = JournalDesTravaux()
+        let demarre = Porte()
+        let finDuPremier = Porte()
+        let fichier = TranscriptQueue { entree in
+            journal.entrer("debut \(entree.source)")
+            if entree.source == lienVideo(1) {
+                demarre.ouvrir()
+                await finDuPremier.attendre()
+                journal.sortir()
+                if Task.isCancelled { throw CancellationError() }
+                return try disque.ecrireEtRelire(
+                    documentEcrit(identite: "wXyZ9876543", titre: "Jamais transcrite"))
+            }
+            journal.sortir()
+            return try disque.ecrireEtRelire(
+                documentEcrit(identite: "0aBcDeFgHiJ", titre: "Après annulation"))
+        }
+
+        await fichier.enqueue(source: lienVideo(1))
+        await fichier.enqueue(source: lienVideo(2))
+        let drainage = Task { await fichier.drain() }
+        let premierDemarre = await attendreCondition("le premier lien doit être traité") {
+            journal.contenu.contains("debut \(lienVideo(1))")
+        }
+        XCTAssertTrue(premierDemarre, "le premier lien doit être traité — \(contrat)")
+
+        await fichier.cancelCurrent()
+        finDuPremier.ouvrir()
+        await drainage.value
+
+        let entrees = await fichier.entries
+        let annule = entrees.first { $0.source == lienVideo(1) }
+        let suivant = entrees.first { $0.source == lienVideo(2) }
+
+        XCTAssertEqual(annule?.state, .failed, "une annulation est un `failed` — \(contrat)")
+        XCTAssertNil(
+            annule?.error, "une annulation n'a pas de raison : c'est un arrêt de Louis — \(contrat)")
+        XCTAssertEqual(
+            annule?.documentID, "",
+            "un travail annulé n'a écrit aucun transcript : annoncer une tige serait un mensonge")
+        XCTAssertEqual(
+            disque.tigesEcrites.count, 1,
+            "seul le travail non annulé a écrit un fichier — \(contrat)")
+
+        // Contrôle positif, dans le même drainage.
+        let tigeDuSuivant = suivant?.documentID ?? ""
+        XCTAssertEqual(suivant?.state, .done, "le suivant n'est pas arrêté par l'annulation — \(contrat)")
+        XCTAssertFalse(
+            tigeDuSuivant.isEmpty, "témoin positif : le suivant porte une tige — \(contrat)")
+        XCTAssertNotNil(
+            disque.library.transcript(id: tigeDuSuivant),
+            "témoin positif : cette tige se relit dans la bibliothèque — \(contrat)")
+    }
+
+    /// **Le `documentID` rapporté est la tige du fichier écrit, jamais l'identité** — et cette
+    /// assertion **échoue** si on lui donne l'identité.
+    ///
+    /// La forme qui rend la différence observable : **deux écritures de la même source**, avec le
+    /// **même titre, la même date et la même identité** — donc la bibliothèque leur donne **deux
+    /// tiges distinctes** : la tige de base, puis la même tige suffixée `-2` (règle 3 des
+    /// collisions, `TranscriptLibrary.write`). Les deux fichiers ne se distinguent alors que par
+    /// leur **contenu**, pas par leur nom.
+    ///
+    /// C'est ce dosage qui sépare les trois possibilités :
+    /// - si `drain()` écrit **l'identité**, les deux `documentID` valent la même chose et ne
+    ///   désignent **aucun** fichier ;
+    /// - si `drain()` **re-dérive** la tige au lieu de transporter celle du document rendu, il
+    ///   retrouve le **nom** de la première écriture pour les deux — et le second `done` pointe
+    ///   alors le **mauvais fichier**, dont le texte le prouve ;
+    /// - si `drain()` transporte la tige, la seconde vaut le nom **suffixé**, et `transcript(id:)`
+    ///   rend à chaque fois le document au **bon** texte.
+    ///
+    /// **Pourquoi le même titre est indispensable.** Avec deux titres différents, les deux tiges
+    /// diffèrent déjà par le slug et aucune collision n'a lieu : une re-dérivation calculerait le
+    /// bon nom par hasard, et le cas serait **vert sur une base fausse** — c'est mesuré, sur la
+    /// première rédaction de ce cas. C'est le `-2` qui rend le second nom **indéductible** du
+    /// premier.
+    func testTwoWritesOfTheSameSourceReportTwoDistinctStemsAndEachIsTheOneItWrote() async throws {
+        let disque = DisqueDeTest(base: base)
+        let identite = "mNopQrStUvW"
+        let titre = "Même source, deux fois"
+        let fichier = TranscriptQueue { entree in
+            let texte = entree.source == lienVideo(1) ? "le premier transcript" : "le second transcript"
+            return try disque.ecrireEtRelire(documentEcrit(identite: identite, titre: titre, texte: texte))
+        }
+
+        await fichier.enqueue(source: lienVideo(1))
+        await fichier.enqueue(source: lienVideo(2))
+        await fichier.drain()
+
+        let entrees = await fichier.entries
+        let premier = entrees.first { $0.source == lienVideo(1) }?.documentID ?? ""
+        let second = entrees.first { $0.source == lienVideo(2) }?.documentID ?? ""
+        let ecrits = disque.tigesEcrites
+
+        XCTAssertEqual(ecrits.count, 2, "les deux travaux ont écrit un fichier chacune — \(contrat)")
+        XCTAssertNotEqual(
+            premier, second,
+            "deux écritures de la même source donnent deux tiges distinctes, la seconde suffixée — \(contrat)")
+        XCTAssertTrue(
+            second.hasSuffix("-2"),
+            "la seconde écriture est suffixée par la bibliothèque : « \(second) » — \(contrat)")
+        XCTAssertEqual(
+            [premier, second], ecrits,
+            "chaque `done` rapporte la tige du fichier que SON travail a écrit, dans l'ordre — \(contrat)")
+        XCTAssertNotEqual(premier, identite, "la tige n'est pas l'identité de la source — \(contrat)")
+        XCTAssertNotEqual(second, identite, "la tige n'est pas l'identité de la source — \(contrat)")
+
+        // Le contenu est le seul juge : les deux fichiers portent le même titre, donc seul le
+        // segment les distingue. Une re-dérivation de la tige ferait lire « le premier
+        // transcript » deux fois — c'est ce que ces deux assertions distinguent.
+        let texteDuPremier = disque.library.transcript(id: premier)?.segments.first?.text
+        let texteDuSecond = disque.library.transcript(id: second)?.segments.first?.text
+        XCTAssertEqual(
+            texteDuPremier, "le premier transcript",
+            "la première tige relit le PREMIER fichier : le bon, pas celui de l'autre travail — \(contrat)")
+        XCTAssertEqual(
+            texteDuSecond, "le second transcript",
+            "la seconde tige relit le SECOND fichier : une re-dérivation la ferait pointer sur le premier — \(contrat)")
+    }
+
+    // MARK: - Outils
+
+    /// Le seul endroit du fichier qui nomme un dossier : tout vit sous `NSTemporaryDirectory()`.
+    /// Ni `Application Support/Murmure/Transcripts`, ni `Documents` — ces cas n'écrivent que dans
+    /// une base injectée, comme la bibliothèque l'est dans l'application.
+    private static func bacASable(_ nom: String) throws -> URL {
+        let temporaire = URL(fileURLWithPath: NSTemporaryDirectory()).resolvingSymlinksInPath()
+        let racine = temporaire.appendingPathComponent("\(nom)-\(UUID().uuidString)", isDirectory: true)
+        precondition(
+            racine.resolvingSymlinksInPath().path.hasPrefix(temporaire.path),
+            "un test de tige ne travaille que sous NSTemporaryDirectory()")
+        try FileManager.default.createDirectory(at: racine, withIntermediateDirectories: true)
+        return racine
+    }
+}
+
+/// Le disque d'un cas de tige : une bibliothèque isolée, et le **journal des tiges réellement
+/// écrites**. C'est ce journal qui donne au test autre chose que ses propres calculs à comparer.
+///
+/// `@unchecked Sendable` assumé et justifié : `TranscriptLibrary` est une valeur **immuable**
+/// (`let base: URL`) et le seul accès au dossier passe par elle ; le verrou protège le tableau
+/// des écritures, que deux tâches peuvent alimenter.
+private final class DisqueDeTest: @unchecked Sendable {
+    private let verrou = NSLock()
+    private var ecritures: [String] = []
+    let library: TranscriptLibrary
+
+    init(base: URL) {
+        library = TranscriptLibrary(base: base)
+    }
+
+    /// Écrit par la bibliothèque, puis **relu par elle** : c'est la seule forme qui prouve la tige.
+    ///
+    /// La relecture passe par ``TranscriptLibrary/transcript(id:)``, jamais par un `JSONDecoder`
+    /// écrit ici : le décodeur de la bibliothèque porte sa stratégie de dates ISO-8601, et c'est
+    /// elle qui refuse un fichier dont l'`id` n'est pas sa tige — donc c'est elle, et personne
+    /// d'autre, qui peut dire si une tige est **la** tige d'un fichier.
+    ///
+    /// - Throws: `EchecDuTravail` si la bibliothèque ne relit pas ce qu'elle vient d'écrire —
+    ///   impossible sur une base correcte, donc le travail échoue et l'entrée est `failed` : le
+    ///   cas rouge alors sur son **nom**, jamais sur une panique qui tuerait le binaire.
+    func ecrireEtRelire(_ document: TranscriptDocument) throws -> TranscriptDocument {
+        let url = try library.write(document)
+        let tige = url.deletingPathExtension().lastPathComponent
+        guard let relu = library.transcript(id: tige) else {
+            throw EchecDuTravail(
+                message: "la bibliothèque ne relit pas le fichier qu'elle vient d'écrire : \(tige)")
+        }
+        verrou.lock()
+        ecritures.append(tige)
+        verrou.unlock()
+        return relu
+    }
+
+    /// Les tiges des fichiers écrits, dans l'ordre des écritures : le témoin de terrain contre
+    /// lequel chaque `documentID` rapporté est comparé.
+    var tigesEcrites: [String] {
+        verrou.lock()
+        defer { verrou.unlock() }
+        return ecritures
+    }
+}
+
+/// Le document qu'un travail de ce cas écrit vraiment : un `id` **avant** écriture, qui n'est la
+/// tige de rien — c'est la bibliothèque qui le redéfinira —, une identité de source canonique, et
+/// un texte de segment qui sert de juge quand deux fichiers portent le même nom de départ.
+private func documentEcrit(
+    identite: String, titre: String, texte: String = "Bonjour"
+) -> TranscriptDocument {
+    let date = midiDeTest()
+    return TranscriptDocument(
+        id: "avant-ecriture-\(identite)",
+        title: titre,
+        source: TranscriptSource(kind: .file, path: "/tmp/\(identite).mp4", identity: identite),
+        duration: 12,
+        language: "fr",
+        languageWasForced: false,
+        model: "large-v3-turbo",
+        createdAt: date,
+        completedAt: date,
+        status: .complete,
+        segments: [TranscriptSegment(start: 0, end: 12, text: texte)],
+        coverage: TranscriptDocument.Coverage(coveredSeconds: 12, ratio: 1),
+        boundaries: [])
+}
+
+/// Midi, dans le calendrier et le fuseau courants : la tige porte le jour **local**, et midi ne
+/// peut pas basculer d'un jour à l'autre par un décalage horaire.
+private func midiDeTest() -> Date {
+    var composants = DateComponents()
+    composants.year = 2026
+    composants.month = 9
+    composants.day = 20
+    composants.hour = 12
+    return Calendar(identifier: .gregorian).date(from: composants) ?? Date(timeIntervalSince1970: 0)
+}
+
 private final class JournalPartage: @unchecked Sendable {
     private let lock = NSLock()
     private var events: [String] = []
