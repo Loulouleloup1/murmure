@@ -98,7 +98,32 @@ short_home=$(mktemp -d "/tmp/m11s.XXXXXX")
 # `kill 0` — ce que `${APP_PID:-0}` donnerait quand aucun processus n'a été lancé — tue le GROUPE
 # DE PROCESSUS ENTIER, le script et le terminal qui l'a lancé compris : un run qui s'achève
 # correctement se faisait SIGTERM lui-même (mesuré). Le piège ne tue donc que s'il a un PID réel.
-trap '[[ -n "${HARNESS_PID:-}" ]] && kill "$HARNESS_PID" 2>/dev/null; [[ -n "${APP_PID:-}" && "$APP_PID" -gt 1 ]] && kill "$APP_PID" 2>/dev/null; rm -rf "$work" "$short_home"' EXIT
+# DEFECT MESURE : ce piège ne tuait RIEN. Il lisait APP_PID, jamais assigné — le pid de l'app
+# vit dans `app_pid`, en minuscules, et était `local` à run_finder(), donc invisible d'ici.
+# Résultat mesuré : 12 instances Murmure orphelines PPID=1, 461 Mo, adoptées par launchd,
+# 12 icônes dans la barre des tâches. Un SIGTERM seul ne suffit pas : ces processus y
+# résistent (il a fallu SIGKILL), donc la terminaison est escaladée. La garde `-gt 1` reste
+# indispensable : un PID vide ou 0 enverrait le signal au groupe du terminal appelant.
+murmure_cleanup() {
+  local p
+  for p in ${APP_PID:-} ${HARNESS_PID:-}; do
+    [[ -n "$p" && "$p" -gt 1 ]] || continue
+    kill -TERM "$p" 2>/dev/null
+  done
+  # Ces processus RÉSISTENT au SIGTERM : on leur laisse 3 s, puis SIGKILL. Sans escalade,
+  # le trap les laisse orphelins (PPID=1) et la fuite se reproduit à chaque gate.
+  for p in ${APP_PID:-} ${HARNESS_PID:-}; do
+    [[ -n "$p" && "$p" -gt 1 ]] || continue
+    kill -0 "$p" 2>/dev/null || continue
+    for _ in 1 2 3 4 5 6; do
+      kill -0 "$p" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null
+  done
+  rm -rf "$work" "$short_home"
+}
+trap murmure_cleanup EXIT
 
 APP_REL=Murmure/TranscriptControlServer.swift
 DELEGATE_REL=Murmure/AppDelegate.swift
@@ -1556,6 +1581,10 @@ run_finder() { # the real Finder path; prints its evidence, sets FINDER_* reason
     sleep 0.5
   done
   printf 'FINDER processus_bundle pid=%s (attendu sous %s)\n' "${app_pid:-aucun}" "$app_real"
+  # Le piège EXIT se déclenche en fin de script, hors de cette fonction : un `local` serait
+  # perdu à ce moment-là. On exporte donc le pid résolu vers la variable que le piège lit.
+  # C'est cette unique affectation qui fait que le piège tue réellement l'app qu'il a ouverte.
+  APP_PID="${app_pid:-}"
   [[ "${open_rc:-1}" -eq 0 && "$app_proc" -eq 1 ]]; check finder-launched-by-launchservices "$?" \
     "le bundle n'a pas été ouvert par LaunchServices (open rc=${open_rc:-non exécuté}, processus du bundle vivant=$app_proc) : rien ne prouve le chemin Finder réel"
 
