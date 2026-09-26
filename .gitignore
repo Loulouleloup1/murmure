@@ -56,10 +56,6 @@ benchmark/run_v3*.log
 # Agent worktrees -- transient, created by the harness, never part of the project.
 .claude/
 
-# Run journals of the canonical gate (scripts/codex/verify.sh): per-run JSONL +
-# step logs, regenerated on every invocation. The script itself IS tracked.
-.codex/
-
 # Two tools fight over this file, so neither state is committable. Measured in a fresh clone:
 # `xcodebuild` writes FOUR pins into it (dynamicnotchkit, whisperkit, swift-argument-parser and
 # grdb.swift -- it resolves the whole app graph and, with the .xcodeproj gitignored, has nowhere

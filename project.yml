@@ -28,7 +28,18 @@ targets:
   Murmure:
     type: application
     platform: macOS
-    sources: [Murmure]
+    # `Murmure/Resources` est listé à part, sans quoi le binaire n'arriverait pas
+    # dans le bundle : c'est là que vit le `ffmpeg` LGPL construit à la main par
+    # `scripts/build-ffmpeg-lgpl.sh` (plan §2.6, lot 5), que l'acquisition
+    # (lot 6) et le décodage (lot 7) exécutent depuis le bundle. La première
+    # entrée l'exclut explicitement — un chemin listé deux fois produirait deux
+    # copies du même fichier dans la même phase, et la compilation s'arrêterait.
+    sources:
+      - path: Murmure
+        excludes:
+          - "Resources"
+      - path: Murmure/Resources
+        buildPhase: resources
     dependencies:
       - package: MurmureCore
       - package: WhisperKit
@@ -39,6 +50,74 @@ targets:
       # either way, and declaring it is what makes the version visible in the generated project.
       - package: GRDB
         product: GRDB
+      # Le CLI, construit **avant** l'application parce que la phase ci-dessous le copie. `link`
+      # et `embed` sont faux : un exécutable ne se lie pas dans une application, on le **copie**
+      # dans son bundle (plan §2.5 : « dans le bundle, donc signé et notarisé avec
+      # l'application »).
+      #
+      # Le nom de la **cible** (`murmure-cli`) n'est pas celui du **produit** (`murmure`) : deux
+      # cibles dont les noms ne diffèrent que par la casse partagent leurs répertoires
+      # d'intermédiaires sur un volume insensible à la casse (APFS, tout Mac par défaut), et la
+      # liste des fichiers Swift de la cible CLI devenait celle de l'application — construction
+      # arrêtée sur `GeneratedAssetSymbols.swift`, absent de la cible CLI. Le produit, lui, garde
+      # son nom : `murmure` est ce que nomment cette phase, `scripts/install.sh`, le panneau Avancé
+      # et le plan §2.5. Son **emplacement** dans le bundle, en revanche, n'est plus `Contents/MacOS/`
+      # mais `Contents/Helpers/` — voir la phase post-build ci-dessous, où la raison est écrite.
+      - target: murmure-cli
+        link: false
+        embed: false
+    # `Contents/Helpers/murmure` : la copie qui fait du CLI un binaire de l'application, signé avec
+    # elle. La phase tourne après la compilation de `murmure` et avant la signature du bundle, donc
+    # le binaire copié est couvert par la signature de l'application. `install -m 0755` plutôt que
+    # `cp` : le mode d'un binaire distribué ne dépend pas du mode du produit intermédiaire.
+    #
+    # POURQUOI `Helpers` ET PAS `MacOS`. Sur tout Mac le volume est insensible à la casse (APFS par
+    # défaut) : `Contents/MacOS/murmure` et `Contents/MacOS/Murmure` y sont **le même fichier**. La
+    # phase copiait donc le CLI **par-dessus l'exécutable de l'application** — mesuré : le bundle ne
+    # portait plus qu'un fichier, qui était le CLI — et `xcodebuild` rendait `** BUILD SUCCEEDED **`
+    # quand même : la bêta se serait installée sur un bundle corrompu en silence. `Contents/Helpers/`
+    # est le dossier que le bundle réserve aux outils auxiliaires ; aucun nom n'y recouvre un autre.
+    #
+    # LA GARDE, ET POURQUOI ELLE A TROIS ASSERTIONS. Écrire est le seul geste qui détruit ici, donc
+    # la construction doit **échouer** plutôt que recouvrir un chemin du bundle :
+    #   1. les chemins **déclarés** du bundle ne sont jamais égaux casse ignorée
+    #      (`scripts/checks/bundle-code-paths.sh`) — c'est la seule assertion qui ne dépend pas du
+    #      volume de construction, et c'est pour cela que le défaut a pu traverser les
+    #      constructions précédentes : sur un volume sensible à la casse, la copie ne détruit rien ;
+    #   2. avant la copie, la destination n'est pas déjà l'exécutable de l'application (`-ef`, le
+    #      test d'inode : sur un volume insensible à la casse il est vrai dès que les deux noms se
+    #      confondent) ;
+    #   3. après la copie, l'exécutable de l'application est toujours là, les deux chemins sont
+    #      exécutables, et ce ne sont pas les mêmes fichiers.
+    #
+    # L'installation dans `/usr/local/bin/murmure` **n'est pas** faite ici, et ne doit pas l'être :
+    # elle est optionnelle et manuelle, depuis le panneau Avancé (motif MacWhisper, plan §2.5).
+    postBuildScripts:
+      - name: Copy the murmure CLI into Contents/Helpers
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          source="${BUILT_PRODUCTS_DIR}/murmure"
+          app_executable="${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/${EXECUTABLE_NAME}"
+          destination="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers/murmure"
+          if [ ! -x "$source" ]; then
+            echo "error: the murmure CLI was not built (${source} is missing)"
+            exit 1
+          fi
+          bash "${SRCROOT}/scripts/checks/bundle-code-paths.sh" \
+            "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/${EXECUTABLE_NAME}" \
+            "${destination}" \
+            "${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/ffmpeg"
+          if [ "$destination" -ef "$app_executable" ]; then
+            echo "error: « ${destination} » is the application's own executable — on a case-insensitive volume the copy would overwrite it"
+            exit 1
+          fi
+          mkdir -p "$(dirname "$destination")"
+          install -m 0755 "$source" "$destination"
+          if [ ! -x "$app_executable" ] || [ ! -x "$destination" ] || [ "$destination" -ef "$app_executable" ]; then
+            echo "error: after the CLI copy the bundle no longer carries two distinct executables — application « ${app_executable} », CLI « ${destination} »"
+            exit 1
+          fi
     settings:
       base:
         ENABLE_APP_SANDBOX: NO
@@ -52,3 +131,54 @@ targets:
       properties:
         LSUIElement: true
         NSMicrophoneUsageDescription: "Murmure records your voice to transcribe it locally."
+        # Plan §2.7 (local half), decision R1. **Cette déclaration est ici et pas dans
+        # `Murmure/Info.plist`** : `info:` fait de ce fichier un livrable GÉNÉRÉ -- mesuré, une
+        # déclaration écrite à la main dans le plist a disparu à la première génération
+        # (`xcodegen generate`), donc elle aurait aussi disparu à l'installation
+        # (`scripts/install.sh` génère avant de construire).
+        #
+        # Un FICHIER local déposé sur l'icône de Murmure, et « Ouvrir avec > Murmure » pour les
+        # films et l'audio, passent par cette déclaration : AppKit les remet à
+        # `AppDelegate.application(_:open:)`. `public.audiovisual-content` est l'ombrelle sous
+        # laquelle les deux autres types se rangent, donc un conteneur qu'aucun des deux ne
+        # revendique est quand même proposé.
+        #
+        # **Aucun `http`/`https`, aucun `CFBundleURLTypes`** (R1, tranché au tour 7) : les déclarer
+        # inscrirait Murmure comme gestionnaire candidat de TOUS les liens web de la machine. Le
+        # dépôt d'une URL passe par la cible de dépôt de l'onglet Transcripts et par l'invite de
+        # collage du menu. `LSHandlerRank: Alternate` redit la même chose pour les fichiers : un
+        # candidat de « Ouvrir avec », jamais le défaut que personne n'a choisi.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Movie or audio
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.movie
+              - public.audio
+              - public.audiovisual-content
+  # Le CLI `murmure` (plan §2.5, §4 lot 11) : le **même** code que la cible exécutable du paquet
+  # `MurmureCore/Package.swift` (`MurmureCore/Sources/murmure/main.swift`), construit ici pour être
+  # copié dans le bundle de l'application par la phase post-build ci-dessus — donc signé et
+  # notarisé avec elle, et sans installation système.
+  #
+  # La cible s'appelle `murmure-cli` et son produit `murmure` : un nom de cible qui, comparé sans
+  # tenir compte de la casse, égale celui de la cible application (`Murmure`) fait partager à deux
+  # cibles leurs répertoires d'intermédiaires — voir le commentaire de la dépendance ci-dessus.
+  #
+  # `type: tool` et non `bundle`: un binaire posé dans `Contents/Helpers/`, au format des outils en
+  # ligne de commande ; le produit s'appelle `murmure`, ce qui est aussi le nom sous lequel le
+  # panneau Avancé l'installe (optionnellement) dans `/usr/local/bin`.
+  murmure-cli:
+    type: tool
+    platform: macOS
+    sources:
+      - path: MurmureCore/Sources/murmure
+    dependencies:
+      - package: MurmureCore
+      - package: GRDB
+        product: GRDB
+    settings:
+      base:
+        ENABLE_APP_SANDBOX: NO
+        CODE_SIGN_IDENTITY: "-"
+        PRODUCT_NAME: murmure

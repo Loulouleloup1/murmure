@@ -32,6 +32,10 @@ actor WhisperKitEngine {
         case modelDownloadStalled(TimeInterval)
         case modelLoadFailed(Error)
         case transcriptionFailed(Error)
+        /// La politique (2) demande une **seconde instance** à unités de calcul séparées, et le
+        /// modèle n'est pas sur le disque de cette machine : on le dit, plutôt que de déclencher un
+        /// téléchargement de 1,6 Go comme effet de bord d'une transcription vidéo (plan §2.2).
+        case modelNotOnDisk(String)
 
         var errorDescription: String? {
             switch self {
@@ -49,6 +53,12 @@ actor WhisperKitEngine {
                 "Could not load the transcription model: \(error.localizedDescription)"
             case .transcriptionFailed(let error):
                 "Could not transcribe the recording: \(error.localizedDescription)"
+            case .modelNotOnDisk(let reference):
+                """
+                The transcription model \(reference) is not on this Mac, and a video engine on \
+                its own compute units loads it from disk rather than downloading it: run one \
+                dictation first, then start the transcription again.
+                """
             }
         }
     }
@@ -286,6 +296,60 @@ actor WhisperKitEngine {
     /// which modes somebody goes on to create.
     func prepare() async throws {
         _ = try await loadedKit(for: SpeechModelReference.shippedDefault)
+    }
+
+    /// Le modèle du moteur vidéo (plan §4 lot 8 : « exposer l'instance/`LoadedModel` au moteur
+    /// vidéo, **sans** changer la dictée » ; §2.2 et §4 lot 12 pour le choix entre les deux
+    /// constructions).
+    ///
+    /// **Instance partagée, ou seconde instance : c'est un paramètre, et c'est la politique qui le
+    /// porte** (§2.2). `dedicatingComputeUnits` est exactement
+    /// ``TranscriptPriority/Policy/dedicatesComputeUnits`` — la machine de priorité ne construit
+    /// rien, elle dit ce qu'elle exige ; la construction est ici, à un seul endroit.
+    ///
+    /// **Instance partagée (défaut, et seule construction câblée aujourd'hui).** **Le même
+    /// `loadedKit(for:)` que la dictée** : si le modèle est déjà chargé, le moteur vidéo reçoit
+    /// l'instance en place — pas de second chargement, pas de second modèle résident, et la
+    /// spécialisation ANE payée une fois par installation est réutilisée (critère 13). Le seul cas
+    /// où ceci charge quelque chose est celui d'une transcription vidéo lancée avant toute dictée ;
+    /// c'est alors le modèle livré par défaut qui est résolu, comme `prepare()`.
+    ///
+    /// **Seconde instance (politique 2, non jugée par le lot 0).** Une instance à **ses propres
+    /// unités de calcul** : `ModelComputeOptions` est per-instance dans WhisperKit
+    /// (`Core/Models.swift:92-118`), donc `.cpuAndGPU` pour l'encodeur et le décodeur laisse l'ANE
+    /// à la dictée — c'est le sens de « la dictée reste absolue », et c'est le seul levier matériel
+    /// qui existe (aucune priorité ANE n'est exposée par Apple). Le coût mesuré à chaud est
+    /// ≈ +200 Mo (lot 0, §3), jamais 1,7 Go : le « 1,7 Go » du plan était un pic **à froid**.
+    ///
+    /// Elle est chargée depuis le dossier de modèle **déjà sur disque**, et ne passe donc ni par le
+    /// réseau ni par le cache d'instances de la dictation : une machine qui n'a jamais téléchargé
+    /// le modèle obtient ``Failure/modelNotOnDisk(_:)`` — nommé et actionnable — plutôt qu'un
+    /// téléchargement de 1,6 Go déclenché en silence par une transcription vidéo.
+    ///
+    /// **Aucune de ces deux constructions ne change la dictée** : elles ne réordonnent aucun appel
+    /// existant et ne sont appelées par aucun chemin de dictée.
+    func loadedModelForVideo(dedicatingComputeUnits: Bool = false) async throws -> LoadedModel {
+        guard dedicatingComputeUnits else {
+            return try await loadedKit(for: SpeechModelReference.shippedDefault).model
+        }
+
+        let modelStore = try Storage.directory(subfolder: "models")
+        let reference = SpeechModelReference.shippedDefault
+        guard let folder = Self.cachedModelFolder(in: modelStore, reference: reference) else {
+            logger.error("""
+                video engine on dedicated compute units refused: \
+                \(reference.string, privacy: .public) is not on disk
+                """)
+            throw Failure.modelNotOnDisk(reference.string)
+        }
+        return try await Self.loadKit(
+            from: folder,
+            variant: reference.variant,
+            downloadBase: modelStore,
+            // Ce qui sépare les deux instances : la dictée garde ses défauts (encodeur sur l'ANE),
+            // le moteur vidéo prend le CPU et le GPU pour les deux étages qu'il utilise.
+            computeOptions: ModelComputeOptions(
+                audioEncoderCompute: .cpuAndGPU, textDecoderCompute: .cpuAndGPU))
     }
 
     /// Downloads a speech model the Models pane's "add a model" flow chose, into the same store
@@ -546,13 +610,15 @@ actor WhisperKitEngine {
     }
 
     private static func loadKit(
-        from folder: URL, variant: String, downloadBase: URL
+        from folder: URL, variant: String, downloadBase: URL,
+        computeOptions: ModelComputeOptions? = nil
     ) async throws -> LoadedModel {
         let start = Date()
         let kit = try await WhisperKit(
             model: variant,
             downloadBase: downloadBase,
             modelFolder: folder.path,
+            computeOptions: computeOptions,
             verbose: false
         )
         logger.info("""
@@ -760,11 +826,22 @@ actor WhisperKitEngine {
 /// WhisperKit fans a single transcription out over `DecodingOptions.concurrentWorkerCount`
 /// (16 on macOS) workers sharing one instance, so its own design already assumes concurrent use.
 ///
+/// **`internal` rather than `private`, and that is the whole of lot 8's seam.** The video engine
+/// (``VideoTranscriber``) transcribes through the SAME loaded instance the dictation uses -- it is
+/// the decision of tour 7 that no second model is created, and the argument of tour 6 that the
+/// per-install ANE specialisation (811 s measured on a separate binary) is paid once. Exposing
+/// this type is what makes that reachable without the video engine being able to load a model of
+/// its own; nothing about the dictation path changes.
+///
 /// `transcribe` is a method here rather than a `kit` property so that the call happens on this
 /// side of the boundary: reading `kit` from the actor and calling into it there would push a
-/// non-`Sendable` value back out of the actor and reintroduce the same diagnostic.
-private final class LoadedModel: @unchecked Sendable {
-    private let kit: WhisperKit
+/// non-`Sendable` value back out of the actor and reintroduce the same diagnostic. The video
+/// engine breaks that rule deliberately and narrowly, for one reason: its transcription has to be
+/// driven with `AudioInputOptions(audioLoadingMode: .incremental)`, which is a parameter of the
+/// WhisperKit entry point itself (plan §2.1 -- memory bounded independently of the unit's size),
+/// and `LoadedModel.transcribe(audio:)` takes an array, i.e. `.fullFile`.
+final class LoadedModel: @unchecked Sendable {
+    let kit: WhisperKit
 
     init(_ kit: WhisperKit) {
         self.kit = kit
@@ -794,6 +871,18 @@ private final class LoadedModel: @unchecked Sendable {
         let results = try await kit.transcribe(audioArray: audio, decodeOptions: options)
         box.finish()
         return results
+    }
+
+    /// La langue détectée sur **le début** d'un audio (les 30 premières secondes :
+    /// `WhisperKit.swift:560-567`), pour le chemin sans option du critère 12.
+    ///
+    /// Prend des échantillons parce que c'est la seule forme que WhisperKit expose
+    /// (`detectLangauge(audioArray:)`, `WhisperKit.swift:540`) — l'appelant lui donne donc l'audio
+    /// d'**une unité**, jamais celui de la source entière : la détection n'a besoin que de ses
+    /// premières secondes, et charger 4 h de flottants pour en lire 30 s serait exactement le
+    /// piège n°1 du plan.
+    func detectLanguage(audioSamples: [Float]) async throws -> String {
+        try await kit.detectLangauge(audioArray: audioSamples).language
     }
 
     /// `initialPrompt`, tokenized the way `benchmark/vocabprobe/Sources/vocabprobe/main.swift:152`

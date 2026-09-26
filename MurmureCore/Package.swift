@@ -19,6 +19,13 @@ let package = Package(
     ],
     targets: [
         .target(name: "MurmureCore", dependencies: [.product(name: "GRDB", package: "GRDB.swift")]),
+        // Le binaire du CLI (plan §2.5, §4 lot 11) : une cible exécutable dans le même paquet, donc
+        // le CLI partage le protocole et la résolution du cœur au lieu de les réimporter, et
+        // `swift build --product murmure` suffit à le construire -- c'est ce que
+        // `scripts/checks/cli-end-to-end.sh` exerce. La copie dans
+        // `Murmure.app/Contents/Helpers/murmure` est le fait de `project.yml`, pas de ce fichier
+        // (le binaire y est signé et notarisé avec l'application).
+        .executableTarget(name: "murmure", dependencies: ["MurmureCore"]),
         // The test target links GRDB directly so `HistoryStoreTests` can open the same file on a
         // second connection and read `sqlite_master`, the raw `startedAt` text and the FTS index
         // itself. Asserting the schema through a hole cut in `HistoryStore` would mean shipping
