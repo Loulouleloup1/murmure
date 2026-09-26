@@ -515,6 +515,22 @@ case "$MODE" in
         -e 's/^(\s*)controlServer\?\.start\(\)\s*$/$1if !applicationLaunched { controlServer?.start() }/m'; then
       MUTATED=1
     fi ;;
+  mutant-accessor-start) EXPECTED=one-control-server-start
+    # F1 BLOQUANT DE LA REVUE ROUND 6, rejoué TEL QUEL (S13). La différence avec
+    # `mutant-guarded-second-start` n'est pas la garde, c'est le RÉCEPTEUR : le serveur passe par
+    # un ACCESSEUR (`serveur()?.start()`). L'ancien code collectait les sites par NOM de propriété
+    # (`\b\Q$p\E\s*\??\s*\.\s*start\s*\(\s*\)`), donc ce `start()` n'était jamais collecté : il
+    # n'entrait ni dans `@other`, ni dans `hors_handover`, ni dans `unguarded`, ni dans `morts` — le
+    # contrôle ne le voyait donc pas et ne pouvait pas le juger. Revue : `swiftc -parse` rc=0,
+    # `CONTRÔLE=28/28`, `VERT one-control-server-start`. Ce n'est pas un strawman : rendre le
+    # serveur par un accesseur est un idiome Swift ordinaire, et l'objet du critère 2 est le
+    # DÉMARRAGE, pas la façon dont le récepteur s'écrit. Aucun mutant précédent ne pouvait
+    # l'atteindre : tous substituaient un `start()` SUR la propriété, donc toujours visible.
+    baseline_red=" "; run_graph "ASSEMBLAGE DE RÉFÉRENCE"
+    if mutate "$work/delegate.swift" -0pi \
+        -e 's/^(\s*)func applicationWillTerminate\(/$1private func serveur() -> TranscriptControlServer? { controlServer }\n\n$1func applicationDidBecomeActive(_ notification: Notification) {\n$1    if applicationLaunched { serveur()?.start() }\n$1}\n\n$1func applicationWillTerminate(/m'; then
+      MUTATED=1
+    fi ;;
   mutant-harness-start) EXPECTED=finder-launched-by-launchservices
     # Le harnais qui pilote `start()` au lieu du Finder. Ce n'est pas un drapeau : un processus
     # ÉTRANGER sert réellement le socket du contrat (voir `run_finder`), donc le socket EXISTE et
@@ -531,7 +547,7 @@ case "$MODE" in
        || mutate "$work/app.swift" -0pi -e 's/transcriptsModel\.queueStatus\(\)/"idle" (nothing)/'; then
       MUTATED=1
     fi ;;
-  *) printf 'usage: %s [finder|wire|mutant-no-start|mutant-second-engine|mutant-second-queue|mutant-dedicated-compute|mutant-dedicated-compute-multiligne|mutant-default-dedicated|mutant-sous-dossier-moteur|mutant-sous-dossier-file|mutant-sous-dossier-video|mutant-second-control-server|mutant-second-entry-point|mutant-non-idempotent|mutant-unguarded-construction|mutant-unguarded-start|mutant-second-start|mutant-guarded-second-start|mutant-dead-launch-start|mutant-harness-start|mutant-ghost-status]\n' "$0" >&2; exit 64 ;;
+  *) printf 'usage: %s [finder|wire|mutant-no-start|mutant-second-engine|mutant-second-queue|mutant-dedicated-compute|mutant-dedicated-compute-multiligne|mutant-default-dedicated|mutant-sous-dossier-moteur|mutant-sous-dossier-file|mutant-sous-dossier-video|mutant-second-control-server|mutant-second-entry-point|mutant-non-idempotent|mutant-unguarded-construction|mutant-unguarded-start|mutant-second-start|mutant-guarded-second-start|mutant-dead-launch-start|mutant-accessor-start|mutant-harness-start|mutant-ghost-status]\n' "$0" >&2; exit 64 ;;
 esac
 if [[ -n "$EXPECTED" && -z "${MUTATED:-}" ]]; then
   printf 'MUTANT INAPPLICABLE mode=%s : la mutation n’a rien changé dans la copie\n' "$MODE"
@@ -891,12 +907,68 @@ local $/; my $x = <STDIN> // '';
 $x =~ s{/\*.*?\*/}{}gs; $x =~ s{//[^\n]*}{}g;
 exit 2 unless length $x;
 
-# 1. Les propriétés du delegate qui SONT des serveurs de contrôle. On ne devine pas le nom :
-# `start()` n'est compté que sur un récepteur dont le TYPE est `TranscriptControlServer?`, donc
-# un `recorder.start()` ou un `engine.start()` du delegate n'entre pas dans le décompte.
-my @props;
-while ($x =~ /\bvar\s+([A-Za-z_]\w*)\s*:\s*TranscriptControlServer\?/g) { push @props, $1 }
-if (!@props) { print STDERR "start_once: aucune propriété TranscriptControlServer? dans le delegate\n"; exit 2 }
+# 1. Les TYPES que le delegate déclare pour ses propres récepteurs. On ne devine pas le nom :
+#    `start()` n'est compté que sur un récepteur dont le TYPE resuelto est `TranscriptControlServer`,
+#    donc un `recorder.start()` ou un `engine.start()` du delegate n'entre pas dans le décompte.
+#    La table couvre les PROPRIÉTÉS (`var x: T`, `let x: T`) ET les FONCTIONS qui rendent le
+#    serveur (`func serveur() -> TranscriptControlServer?`) : c'est ce second cas qui manquait
+#    (F1 BLOQUANT de la revue round 6, mesuré 28/28 VERT), parce que le récepteur n'était plus
+#    littéralement la propriété et que l'ancien code collectait les sites par NOM de propriété.
+my %decl;
+while ($x =~ /\b(?:var|let)\s+([A-Za-z_]\w*)\s*:\s*([A-Za-z_][\w.]*)/g) { $decl{$1} //= $2 }
+while ($x =~ /\bfunc\s+([A-Za-z_]\w*)\s*(?:<[^>(]*>)?\s*\([^)]*\)\s*(?:async\s*)?(?:throws\s*)?->\s*([A-Za-z_][\w.]*)/gs) {
+  $decl{$1} //= $2
+}
+my @props = grep { $decl{$_} =~ /^TranscriptControlServer\??$/ } keys %decl;
+if (!@props) { print STDERR "start_once: aucun récepteur TranscriptControlServer déclaré dans le delegate\n"; exit 2 }
+
+# Le récepteur d'un site `start()`, lu EN ARRIÈRE depuis le point. Renvoie (base,chemin_complet) :
+# la base est l'identifiant dont le type est cherché (`self.` retiré), le chemin sert au rapport.
+sub receiver_at {
+  my ($p) = @_;
+  my $q = $p - 1;
+  $q-- while $q >= 0 && substr($x, $q, 1) =~ /\s/;
+  $q-- if $q >= 0 && substr($x, $q, 1) eq '?';
+  $q-- while $q >= 0 && substr($x, $q, 1) =~ /\s/;
+  my $end;
+  if ($q >= 0 && substr($x, $q, 1) eq ')') {   # un APPEL : le récepteur est `f(…)`
+    my $d = 0;
+    while ($q >= 0) {
+      my $c = substr($x, $q, 1);
+      if    ($c eq ')') { $d++ }
+      elsif ($c eq '(') { $d--; if (!$d) { $q--; last } }
+      $q--;
+    }
+    $q-- while $q >= 0 && substr($x, $q, 1) =~ /\s/;
+    $end = $q + 1;
+    $q-- while $q >= 0 && substr($x, $q, 1) =~ /[A-Za-z0-9_]/;
+  } else {
+    $end = $q + 1;
+    $q-- while $q >= 0 && substr($x, $q, 1) =~ /[A-Za-z0-9_]/;
+  }
+  my $base = substr($x, $q + 1, $end - $q - 1);
+  my $dotted = 0;
+  while ($q >= 0 && substr($x, $q, 1) =~ /\s/) { $q-- }
+  if ($q >= 0 && substr($x, $q, 1) eq '.') {   # `self.x` s'ignore, `a.b` ne se résout pas
+    my $e2 = $q;
+    $q--;
+    $q-- while $q >= 0 && substr($x, $q, 1) =~ /[A-Za-z0-9_]/;
+    my $head = substr($x, $q + 1, $e2 - $q - 1);
+    $dotted = 1 if $head ne 'self';
+  }
+  return ($base, $dotted);
+}
+# Un récepteur est un serveur de contrôle si son type déclaré l'est, ou si son type n'est pas
+# résolvable : dans ce dernier cas il est COMPTÉ, faute de preuve du contraire. Un contrôle dont
+# le défaut par défaut est « conforme » laisse passer ce qu'il ne sait pas lire — c'est le vice
+# exact qu'il/commit, et la revue l'a mesuré.
+sub is_server_receiver {
+  my ($base, $dotted) = @_;
+  return 1 if $dotted;                              # `a.b.start()` : non résolu, donc compté
+  my $t = $decl{$base};
+  return 0 if defined $t && $t !~ /^TranscriptControlServer\??$/;
+  return 1;
+}
 
 # 2. Le corps de `applicationDidFinishLaunching` : c'est le CHEMIN FINDER, celui que la gate
 #    d'exécution ouvre par LaunchServices. Sans ce corps, « démarré une fois » n'a pas de sens.
@@ -921,13 +993,21 @@ my %flag;
 my $launch_body = substr($x, $lo, $hi - $lo);
 while ($launch_body =~ /([A-Za-z_]\w*)\s*=\s*true\b/g) { $flag{$1} = 1 }
 
-# 4. Les sites `start()` du delegate, sur les récepteurs typés ci-dessus.
-my @sites;
-for my $p (@props) {
-  pos($x) = 0;
-  while ($x =~ /\b\Q$p\E\s*\??\s*\.\s*start\s*\(\s*\)/g) { push @sites, $-[0] }
+# 4. Les sites `start()` du delegate, trouvés par la MÉTHODE puis rattachés à leur récepteur.
+#    L'ancien code faisait l'inverse — il cherchait `<nomDePropriété>.start()` — donc un `start()`
+#    dont le récepteur est un ACCESSEUR (`serveur()?.start()`) n'était jamais collecté : il
+#    n'entrait ni dans `@other`, ni dans `hors_handover`, ni dans `unguarded`, ni dans `morts`, et
+#    le contrôle ne le voyait donc pas. Mesuré par la revue round 6 (S13, `swiftc -parse` rc=0) :
+#    `CONTRÔLE=28/28`, `VERT one-control-server-start` — avec le défaut du round 5 revenu par un
+#    chemin d'accès, dans un delegate AppKit appelé à chaque retour dans l'app.
+my (@sites, @hors_serveur);
+while ($x =~ /\.\s*start\s*\(\s*\)/g) {
+  my $p = $-[0];
+  my ($base, $dotted) = receiver_at($p);
+  if (is_server_receiver($base, $dotted)) { push @sites, $p }
+  else { push @hors_serveur, $base }
 }
-if (!@sites) { print STDERR "start_once: aucun start() sur le serveur du delegate\n"; exit 2 }
+if (!@sites) { print STDERR "start_once: aucun start() sur un récepteur serveur dans le delegate\n"; exit 2 }
 @sites = sort { $a <=> $b } @sites;
 
 # 5. Le corps de `configureControlServer` : le SEUL endroit où le critère 2 autorise un second
@@ -1018,6 +1098,7 @@ for my $s (@launch_sites) {
 print STDERR "start_once: sites=" . scalar(@sites) . " dans_applicationDidFinishLaunching=$launch"
   . " autres=" . scalar(@other) . " hors_handover=$hors_handover"
   . " non_gardes=$unguarded" . " morts=$morts"
+  . " récepteurs_non_serveur=" . (join(',', @hors_serveur) || '-')
   . " drapeaux=" . join(',', sort keys %flag) . "\n";
 # Un seul site de lancement EXÉCUTABLE, au moins un site de handover (sinon un handover arrivé
 # APRÈS le lancement ne démarre jamais le serveur), et AUCUN site de second démarrage ailleurs
