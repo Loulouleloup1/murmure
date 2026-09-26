@@ -2,17 +2,17 @@ import AppKit
 import MurmureCore
 import SwiftUI
 
-/// The window: a sidebar of six sections, and the pane each of them opens.
+/// The window: a sidebar of eight sections, and the pane each of them opens.
 ///
-/// This is the frame; the contents are the six pane views. What it was worth getting right here is
-/// what all six copy: where the colours come from, where the measurements come from, and what a
-/// section header is.
+/// This is the frame; the contents are the eight pane views. What it was worth getting right here
+/// is what all eight copy: where the colours come from, where the measurements come from, and what
+/// a section header is.
 ///
-/// **Five of the six pane models are handed in rather than built here**, and the reason is the same
-/// for all five: each needs something only `MurmureApp` has — the archive the controller opened,
-/// the `AppSettings` a dictation actually reads, or the controller itself, which the modes editor
-/// has to be able to tell that the folder changed. Vocabulary is the one exception and says why
-/// below.
+/// **Seven of the eight pane models are handed in rather than built here**, and the reason is the
+/// same for all seven: each needs something only `MurmureApp` has — the archive the controller
+/// opened, the `AppSettings` a dictation actually reads, or the controller itself, which the modes
+/// editor has to be able to tell that the folder changed. Vocabulary is the one exception and says
+/// why below.
 struct MainWindowView: View {
     @ObservedObject var controller: WindowController
     /// Home's own state, built once in `MurmureApp` for the same reason History is: it reads the
@@ -21,6 +21,11 @@ struct MainWindowView: View {
     /// History's own state, built once in `MurmureApp` because it owns a database connection and
     /// a search query that must survive the window being closed and reopened.
     @ObservedObject var history: HistoryPaneModel
+    /// The transcripts library. Built in `MurmureApp` for the same reason History is: it owns a
+    /// folder path the window must not re-resolve, and it must survive the window being closed and
+    /// reopened — a selection and a reading position that reset every time would make the section
+    /// unusable.
+    @ObservedObject var transcripts: TranscriptsPaneModel
     /// The modes editor. Built in `MurmureApp` because its `didChangeModes` has to reach
     /// `DictationController` and `AppState`, neither of which a `@StateObject` initialiser in a
     /// view can see: a property initialiser cannot read `self`, so an editor built here could only
@@ -201,14 +206,20 @@ struct MainWindowView: View {
     /// the test bundle, which covers `MurmureCore` and never the wiring.
     ///
     /// So this switch is written the way `WindowSection`'s own three are, for the reason its
-    /// doc comment gives about them: a seventh section must **fail to compile** here until someone
+    /// doc comment gives about them: an eighth section must **fail to compile** here until someone
     /// has decided what it shows. That is the only mechanism in this file that can catch a pane
     /// nobody connected, because there is no test that can.
+    ///
+    /// It did its job once already: lot 9's contract added `.transcripts` to `WindowSection` and
+    /// the application target stopped compiling here, in this file, until this pane existed. The
+    /// case below is that decision, taken with the other seven names in order — the switch has to
+    /// stay exhaustive, not alphabetical.
     @ViewBuilder
     private var pane: some View {
         switch controller.section {
         case .home: HomePaneView(model: home)
         case .history: HistoryPaneView(model: history)
+        case .transcripts: TranscriptsPaneView(model: transcripts)
         case .modes: ModesPaneView(model: modes)
         case .vocabulary: VocabularyPaneView(model: vocabulary)
         case .models: ModelsPaneView(model: models)

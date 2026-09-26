@@ -58,6 +58,17 @@ struct MurmureApp: App {
     /// would throw away Louis's search every time SwiftUI rebuilt the scene.
     @StateObject private var historyModel: HistoryPaneModel
 
+    /// The transcripts library's state: the tiles the folder yields, and the transcript open in
+    /// reading mode. A `StateObject` for the same reason History is — an `App` struct is
+    /// re-created, and a plain stored object would close the transcript Louis is reading every
+    /// time SwiftUI rebuilt the scene.
+    ///
+    /// Built here rather than in the view because it resolves the one folder the transcripts live
+    /// in (`TranscriptLibrary.defaultBase`, R3): the grid, the reveal button and — later — the
+    /// queue that writes there must all point at the same directory, and a second resolution in a
+    /// view is how two panes end up disagreeing about where a file is.
+    @StateObject private var transcriptsModel: TranscriptsPaneModel
+
     /// The modes editor's state. A `StateObject` for the reason the others are, and built here
     /// rather than in the view for one it does not share: its `didChangeModes` has to reach both
     /// `DictationController` and `AppState`, and a `@StateObject` initialiser inside
@@ -135,6 +146,21 @@ struct MurmureApp: App {
                 reRefine: { transcript, mode in
                     await controller.reRefine(transcript, with: mode)
                 }))
+        // The default library, which is `Storage.url(subfolder: "Transcripts")` -- the PURE path,
+        // like the Advanced pane's support folder below: opening the window must not create a
+        // folder in Application Support, and the reveal button reports an absent folder rather
+        // than making one. The transcripts lot's queue is what will write there (lot 8), and it
+        // creates the root on its first write.
+        //
+        // Nothing is handed in beyond the library: this pane reads the folder and nothing else --
+        // no store, no settings, no controller. That is what makes it the one section whose state
+        // could have been built in the view, and it is built here anyway so that the folder is
+        // resolved once for the whole app.
+        // The pane is built WITH the dictation's engine (lot 11-S): the app constructs exactly one
+        // `WhisperKitEngine`, in `DictationController`, and the video path reuses it instead of
+        // paying a second 1.6 GB load. `library` keeps its default, as before.
+        _transcriptsModel = StateObject(
+            wrappedValue: TranscriptsPaneModel(engine: controller.transcriptionEngine))
         // `Storage.url()` and not `directory()`: the PURE path, for the reason the Advanced pane
         // below is given the same one. `ModeStore.save` creates `modes/` before it writes into it,
         // and the controller above has already created it on every launch that can reach
@@ -222,6 +248,21 @@ struct MurmureApp: App {
         // not conform. Wrapping it as a discarded `let` is the standard way to smuggle a side effect
         // past a result builder -- the same trick as `let _ = Self._printChanges()`.
         let _ = (appDelegate.windowController = windowController)
+        // The second thing an AppKit surface needs from here, and handed over the same way: the
+        // pane that owns the queue is a `@StateObject`, so `body` is the only place it can be
+        // reached from. A file dropped on Murmure's icon goes through this.
+        let _ = (appDelegate.transcribe = { source in _ = transcriptsModel.transcribe(source) })
+        // The control server's handover (lot 11-S): the ONE queue and its submitter are the pane's
+        // (10-S), and the server itself belongs to the delegate, which is what starts it on the
+        // Finder path. Nothing here starts it — a handover that did would be a second entry point.
+        let _ = appDelegate.configureControlServer(
+            submitteur: { source in
+                let element = await transcriptsModel.submit(source)
+                return ControlJobHandle(
+                    libelle: element.source,
+                    attendu: { await Self.outcome(of: element, model: transcriptsModel) })
+            },
+            fournisseurStatut: { await transcriptsModel.queueStatus() })
         MenuBarExtra {
             // Which mode the dictation in progress is running under -- readable while it runs,
             // because that is what decides whether what he is saying goes to the LLM. The
@@ -295,6 +336,42 @@ struct MurmureApp: App {
             // fallback, for the reason given above it.
             Button(MenuText.copyLastTranscription) { controller.copyLast() }
             Divider()
+            // **« New Transcription »** (plan §2.7): the entry that takes a link. It is in the menu
+            // bar and not only in the pane because it has to work with no window open -- and no
+            // window open is exactly when a link gets pasted.
+            //
+            // It is the *whole* launch surface for a link: nothing declares `http`/`https` for this
+            // app (decision R1). A declaration would put Murmure in the "Open with" list of every
+            // web link on the machine, which is an effect nobody asked for, for a gesture the pane's
+            // drop target and this prompt already cover.
+            Button(MenuText.newTranscription) {
+                NewTranscriptionPrompt.present { transcriptsModel.transcribe($0) }
+            }
+            // What the queue is doing, while it does it (criterion 19): one line per element, in the
+            // order they were added, in its own state's word. The words come from the core
+            // (`TranscriptQueueText`, frozen by lot 10's contract) -- a sentence written in this
+            // view is a sentence `MenuTextTests`' language rule cannot see.
+            ForEach(transcriptsModel.menuLines, id: \.id) { element in
+                Button(TranscriptQueueText.label(for: element)) {}.disabled(true)
+            }
+            // The progress bar (criterion 18), and it covers the WHOLE work: each phase holds a
+            // share of it, decided by the pane's own phase table
+            // (`TranscriptsPaneModel.observe(_:)`), which increment 2's rework extends without the
+            // bar changing shape.
+            if let progress = transcriptsModel.progress {
+                ProgressView(value: progress).frame(width: 220)
+            } else if transcriptsModel.isWorking {
+                // The model is being prepared: a 1.6 GB download the first time, then 112 s of
+                // CoreML compiling this machine's model. No fraction of that is known, so the bar
+                // turns rather than advancing, and the sentence says which wait it is -- the
+                // `preparingModel` phase of the dictation panel exists for exactly this reason, and
+                // it is the same sentence here because it is the same wait.
+                ProgressView().frame(width: 220)
+                if let preparation = transcriptsModel.preparation {
+                    Button(StatusPanelText.label(for: .preparingModel(preparation))) {}.disabled(true)
+                }
+            }
+            Divider()
             // The window's only entry point, and it has to be: an accessory app is not in ⌘Tab,
             // so once the window is behind Xcode nothing but this glyph brings it back
             // (plan §2.4, consequence 1).
@@ -306,8 +383,19 @@ struct MurmureApp: App {
             // The label, not the menu content, is what captures `openWindow`: it is the only view
             // guaranteed to exist for the app's whole life, including while no window does --
             // which is exactly when a Dock click needs the action `WindowController.reopen()` uses.
-            Label("Murmure", systemImage: appState.menuBarSymbol)
-                .background(OpenWindowCapture(controller: windowController))
+            HStack(spacing: 4) {
+                Label("Murmure", systemImage: appState.menuBarSymbol)
+                // The badge (criterion 18, decision O1): TWO distinct states off the queue itself,
+                // never one. A dot while a job is waiting or running, a check once one has finished
+                // -- so "finished" no longer looks like "nothing ever ran" -- and nothing at rest,
+                // where Murmure's own glyph already carries the dictation's state. The shape is the
+                // whole distinction (`TranscriptBadgeState.symbol`, frozen by lot 10-O1's contract):
+                // no colour, no word. The notification is still what says a job ended *now*; the
+                // check is what still says it afterwards. The progress bar in the menu is what says
+                // how far.
+                TranscriptBadgeLabel(state: transcriptsModel.badge)
+            }
+            .background(OpenWindowCapture(controller: windowController))
         }
         .environmentObject(appState)
 
@@ -320,13 +408,34 @@ struct MurmureApp: App {
         // `Window` and not `WindowGroup`, which is what makes "never a second window" structural
         // rather than defended: a `Window` scene is single-instance by construction.
         //
-        // Named for the application rather than "Settings", because five of its six sections are
-        // settings and the sixth -- History -- is the reason it gets opened (D3).
+        // Named for the application rather than "Settings", because six of its eight sections are
+        // settings and the other two -- History and Transcripts -- are the reason it gets opened
+        // (D3, R8).
         Window("Murmure", id: WindowController.windowID) {
             MainWindowView(
-                controller: windowController, home: homeModel, history: historyModel, modes: modesModel,
+                controller: windowController, home: homeModel, history: historyModel,
+                transcripts: transcriptsModel, modes: modesModel,
                 models: modelsModel, general: generalModel, advanced: advancedModel)
                 .environmentObject(appState)
+                // The Transcripts tab's drop target (plan §2.7): this is where a local FILE and a
+                // WEB LINK are accepted by dropping them into the window -- a link never reaches
+                // the icon, because nothing here declares `http`/`https` for it (R1).
+                //
+                // It is attached to the window's content rather than inside the pane for a reason of
+                // its own: the drop has to be refused while another section is showing. A drop that
+                // queues a transcription while the person is looking at General would start
+                // something somewhere else than where the gesture was made, and the pane's own
+                // layout is not where that rule belongs -- which section is up is the window
+                // controller's state, and this is the one file that can read it beside the model.
+                .dropDestination(for: URL.self) { urls, _ in
+                    guard windowController.section == .transcripts, !urls.isEmpty else {
+                        return false
+                    }
+                    // A multi-file drop is one batch: all URLs reach the queue in the order they
+                    // were dropped, and the model owns the one resolution point.
+                    _ = transcriptsModel.transcribe(TranscriptDrop.sources(for: urls))
+                    return true
+                }
         }
         .defaultSize(
             width: WindowLayout.defaultSize.width, height: WindowLayout.defaultSize.height)
@@ -361,5 +470,65 @@ private struct OpenWindowCapture: View {
     var body: some View {
         Color.clear
             .onAppear { controller.register(openWindow: openWindow) }
+    }
+}
+
+/// The paste prompt behind the menu bar's « New Transcription » (plan §2.7).
+///
+/// **Why a modal `NSAlert` and not a SwiftUI sheet.** The menu bar item is the app's only launch
+/// surface that exists with NO window open -- and no window open is exactly when a link gets
+/// pasted. A sheet would need the window first, which is the thing this entry is avoiding.
+///
+/// **Why the alert has no second button.** Its two words are `MenuText.newTranscription` and
+/// AppKit's own default button, which is already in the system's language. A "Cancel" written here
+/// would be a word of Murmure's interface living outside `MenuText` -- and by the plan's own rule
+/// (§2.7, last bullet) interface words live in `MenuText`, where lot 10's frozen contract has
+/// exactly three, none of them that one. It is not needed either: an empty field is the way out,
+/// and a refusal re-presents the same field with the reason under it, so a mistyped link is fixed
+/// where it was typed instead of being reported somewhere else.
+private enum NewTranscriptionPrompt {
+    /// `transcribe` answers nil when the entry was accepted and queued; anything else is the
+    /// sentence that says why it was not.
+    static func present(transcribe: (String) -> String?) {
+        let champ = NSTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24))
+        var refus: String?
+        while true {
+            let alerte = NSAlert()
+            alerte.messageText = MenuText.newTranscription
+            if let refus {
+                alerte.informativeText = refus
+            }
+            alerte.accessoryView = champ
+            // The field takes the keyboard when the alert comes up: ⌘V is the gesture this entry
+            // is named after, and it would otherwise need a click first.
+            alerte.window.initialFirstResponder = champ
+            alerte.runModal()
+            let texte = champ.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            // An empty field asks for nothing. It is the way out of a prompt that has no "Cancel"
+            // button, and it is not a refusal to report -- nothing was typed.
+            guard !texte.isEmpty, let sentence = transcribe(texte) else { return }
+            refus = sentence
+        }
+    }
+}
+
+/// The mapping between the queue's outcome (10-S) and the socket's one (11-S): one table, here.
+///
+/// The queue ends on a **stem** it carried from the document the work wrote; the socket answers
+/// with the **document** itself, because `murmure transcribe` prints it. A stem the disk cannot
+/// read is a failure with a reason — never a success nobody can open.
+private extension MurmureApp {
+    static func outcome(
+        of element: TranscriptQueueEntry, model: TranscriptsPaneModel
+    ) async -> ControlJobOutcome {
+        switch await model.outcome(of: element) {
+        case .complete(let documentID):
+            guard let document = model.finishedDocument(id: documentID) else {
+                return .failed("« \(documentID) » finished without a readable transcript.")
+            }
+            return .complete(document)
+        case .failed(let raison):
+            return .failed(raison ?? "The transcription was cancelled.")
+        }
     }
 }

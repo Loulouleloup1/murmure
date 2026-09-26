@@ -4,18 +4,18 @@ import Foundation
 ///
 /// Design notes §2 calls it "a genuinely useful, cheap device for Murmure, whose settings surface
 /// will be smaller": **no divider rules, no headings, one extra gap, and an icon-colour split
-/// where coloured = the user's own material and neutral = the app's machinery.** Seven items, one
+/// where coloured = the user's own material and neutral = the app's machinery.** Eight items, one
 /// break. This enum is the split; `WindowPalette` is the colour it is drawn in.
 public enum WindowSectionGroup: String, CaseIterable, Sendable {
-    /// Home, History, Modes, Vocabulary. What Louis put there — his overview, his dictations, his
-    /// modes, his words.
+    /// Home, History, Transcripts, Modes, Vocabulary. What Louis put there — his overview, his
+    /// dictations, his videos' transcripts, his modes, his words.
     case material
     /// Models, General, Advanced. What the app needs to run — a downloaded model, a hotkey, a
     /// paste behaviour. None of it is his content, and none of it is coloured.
     case machinery
 }
 
-/// The seven sections of the application window's sidebar, in the order they are drawn.
+/// The eight sections of the application window's sidebar, in the order they are drawn.
 ///
 /// **Declaration order IS the sidebar order** (plan §2.2), which is why `allCases` is used
 /// directly by the view rather than a hand-kept list beside it: a section inserted in the wrong
@@ -39,9 +39,22 @@ public enum WindowSectionGroup: String, CaseIterable, Sendable {
 public enum WindowSection: String, CaseIterable, Sendable {
     /// First, and the section the window opens on when nothing usable is stored.
     case home
-    /// The reason the window exists (plan D3). The other five are opened when something changes;
+    /// The reason the window exists (plan D3). The other six are opened when something changes;
     /// this one is opened when a dictation has to be found again.
     case history
+    /// The transcripts library: one tile per transcript found on disk (plan §4 lot 9, criterion 16).
+    ///
+    /// **Placed here — immediately after `.history`, and this is R8's decision, not a repetition of
+    /// the declaration order.** The section is Louis's own material: it is the second half of the
+    /// same promise (`the archive of everything he has made`), and the sidebar's whole grouping
+    /// device is coloured material first, neutral machinery second. Putting it with the settings
+    /// sections would put a library of videos between "Models" and "General".
+    ///
+    /// **The raw value is a storage name** (`WindowRestoration` files the selection under it), so
+    /// `transcripts` is not renamed lightly: R8 froze the name, the title and the glyph together
+    /// precisely because a rename is the one change that forgets which section the window was left
+    /// on.
+    case transcripts
     case modes
     case vocabulary
     case models
@@ -51,8 +64,8 @@ public enum WindowSection: String, CaseIterable, Sendable {
     /// The section the window opens on when nothing usable is stored, and the section an
     /// unrecognised stored name resolves to.
     ///
-    /// Not `.general`, which is what a settings window would default to: six of the seven sections
-    /// are settings and Home is the overview.
+    /// Not `.general`, which is what a settings window would default to: seven of the eight
+    /// sections are settings and Home is the overview.
     public static let fallback: WindowSection = .home
 
     /// The word in the sidebar.
@@ -66,6 +79,7 @@ public enum WindowSection: String, CaseIterable, Sendable {
         switch self {
         case .home: "Home"
         case .history: "History"
+        case .transcripts: "Transcripts"
         case .modes: "Modes"
         case .vocabulary: "Vocabulary"
         case .models: "Models"
@@ -76,7 +90,7 @@ public enum WindowSection: String, CaseIterable, Sendable {
 
     /// The SF Symbol on the row's tile.
     ///
-    /// All seven are chosen from the set macOS 14 ships, and all seven differ: the glyph is what
+    /// All eight are chosen from the set macOS 14 ships, and all eight differ: the glyph is what
     /// the row is found by once the window is a habit, and two sections wearing one symbol would
     /// make the tile decoration rather than an address.
     ///
@@ -87,6 +101,10 @@ public enum WindowSection: String, CaseIterable, Sendable {
         switch self {
         case .home: "chart.bar.xaxis"
         case .history: "clock.arrow.circlepath"
+        // `text.bubble` : une bulle de texte, et **aucune des sept autres** ne la porte — le
+        // contrat nomme la collision autant que le glyphe, parce que deux sections qui partagent
+        // un symbole font de la tuile une décoration plutôt qu'une adresse (R8).
+        case .transcripts: "text.bubble"
         case .modes: "wand.and.stars"
         case .vocabulary: "character.book.closed"
         case .models: "cube.box"
@@ -100,6 +118,7 @@ public enum WindowSection: String, CaseIterable, Sendable {
         switch self {
         case .home, .history, .modes, .vocabulary: .material
         case .models, .general, .advanced: .machinery
+        case .transcripts: .material
         }
     }
 

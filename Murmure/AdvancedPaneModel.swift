@@ -3,6 +3,138 @@ import MurmureCore
 import SwiftUI
 import os
 
+/// Where the `murmure` command-line tool can be installed (plan §2.5): `/usr/local/bin/murmure`,
+/// **never automatically**.
+///
+/// The binary travels inside the bundle (`Murmure.app/Contents/Helpers/murmure`, copied there by
+/// `project.yml`, so it is signed and notarised with the application); what this type does is the
+/// optional step Louis asks for from this pane -- the MacWhisper pattern, « Settings → Advanced →
+/// Command-Line Tool → Install ».
+///
+/// Three decisions, and each of them is a refusal rather than a convenience:
+///
+/// 1. **the installed file is compared to the one in the bundle** before anything is removed: a
+///    foreign `/usr/local/bin/murmure` (another version, another tool entirely) is not deleted by
+///    Murmure, and is not overwritten either -- removing only what we put there is the whole rule;
+/// 2. **no privilege escalation.** If `/usr/local/bin` is not writable, the failure is said, with
+///    the exact command to run -- never a password prompt raised in the user's name by an app that
+///    was only asked for a command-line tool;
+/// 3. **nothing here runs on its own.** `install` and `uninstall` are called by a button and by
+///    nothing else: there is no launch-time installation, and no build phase that could do it
+///    either (`project.yml` copies into the bundle, never into `/usr/local`).
+struct CommandLineTool {
+    enum State: Equatable {
+        /// The bundle does not carry the binary: installing cannot even be offered.
+        case bundledMissing
+        /// Nothing at the path.
+        case notInstalled
+        /// Our binary is there, byte for byte.
+        case installed
+        /// Something else occupies the path -- not ours to delete.
+        case foreign
+    }
+
+    static let destination = URL(fileURLWithPath: "/usr/local/bin/murmure")
+
+    /// The binary that travels in the bundle, at the path `project.yml` copies it to -- resolved
+    /// **explicitly**, not through `Bundle.url(forAuxiliaryExecutable:)`. That call only looks in
+    /// `Contents/MacOS/`, the directory the application's own executable occupies: measured, it
+    /// answers `nil` for a tool placed in `Contents/Helpers/` (probe on `CodexBar.app` and
+    /// `Claude.app`, whose auxiliary tools sit in exactly that directory).
+    ///
+    /// The `nil` is the point: the pane offers *nothing* rather than a wrong path, and the path is
+    /// no longer one that a case-insensitive volume could confuse with the application itself.
+    static func bundled(in bundle: Bundle = .main) -> URL? {
+        let url = bundle.bundleURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Helpers", isDirectory: true)
+            .appendingPathComponent("murmure")
+        return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
+    }
+
+    static func state(in bundle: Bundle = .main) -> State {
+        guard let bundled = bundled(in: bundle) else { return .bundledMissing }
+        guard FileManager.default.fileExists(atPath: destination.path) else { return .notInstalled }
+        return sameFile(bundled, destination) ? .installed : .foreign
+    }
+
+    static func install(in bundle: Bundle = .main) throws {
+        guard let bundled = bundled(in: bundle) else { throw Failure.bundledMissing }
+        switch state(in: bundle) {
+        case .installed:
+            return
+        case .foreign:
+            throw Failure.foreign(destination.path)
+        case .bundledMissing, .notInstalled:
+            break
+        }
+        let dossier = destination.deletingLastPathComponent()
+        guard FileManager.default.isWritableFile(atPath: dossier.path) else {
+            throw Failure.notWritable(command: commandePourInstaller(bundled))
+        }
+        do {
+            try FileManager.default.createDirectory(
+                at: dossier, withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.copyItem(at: bundled, to: destination)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: destination.path)
+        } catch {
+            throw Failure.notInstalled("\(error.localizedDescription)")
+        }
+    }
+
+    static func uninstall(in bundle: Bundle = .main) throws {
+        guard FileManager.default.fileExists(atPath: destination.path) else { return }
+        guard state(in: bundle) == .installed else { throw Failure.foreign(destination.path) }
+        do {
+            try FileManager.default.removeItem(at: destination)
+        } catch {
+            throw Failure.notRemoved("\(error.localizedDescription)")
+        }
+    }
+
+    /// The command to paste when `/usr/local/bin` is not ours to write. Shown **verbatim** by the
+    /// pane: it names the bundled binary, so it is the same act this type would have performed.
+    static func commandePourInstaller(_ bundled: URL) -> String {
+        "sudo install -m 0755 \"\(bundled.path)\" \(destination.path)"
+    }
+
+    enum Failure: LocalizedError, Equatable {
+        case bundledMissing
+        case foreign(String)
+        case notWritable(command: String)
+        case notInstalled(String)
+        case notRemoved(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .bundledMissing:
+                "The command-line tool is not in this copy of Murmure, so it cannot be installed."
+            case .foreign(let chemin):
+                "\(chemin) belongs to something else: Murmure will not replace it. Move it aside "
+                    + "first if you want Murmure's tool at that path."
+            case .notWritable(let commande):
+                "\(CommandLineTool.destination.deletingLastPathComponent().path) is not writable "
+                    + "by this account. Run this in Terminal instead: \(commande)"
+            case .notInstalled(let raison):
+                "The command-line tool could not be installed: \(raison)."
+            case .notRemoved(let raison):
+                "The command-line tool could not be removed: \(raison)."
+            }
+        }
+    }
+
+    /// Byte-for-byte equality. A version number or a size would be cheaper and would also be a
+    /// guess: this comparison decides whether Murmure is allowed to **delete** the file.
+    private static func sameFile(_ gauche: URL, _ droite: URL) -> Bool {
+        guard let a = try? Data(contentsOf: gauche, options: .mappedIfSafe),
+            let b = try? Data(contentsOf: droite, options: .mappedIfSafe)
+        else { return false }
+        return a == b
+    }
+}
+
 /// What the Advanced pane is looking at: the two insertion settings, the three folders, and the
 /// two erasures.
 ///
@@ -37,6 +169,11 @@ final class AdvancedPaneModel: ObservableObject {
     /// -- two sweeps over one folder would have each deleting files the other had counted.
     @Published private(set) var isClearing = false
 
+    /// Where the `murmure` tool stands in `/usr/local/bin` (plan §2.5), read whenever the pane
+    /// appears: the file can be removed or replaced from Terminal between two openings, and a
+    /// button that claims to install something already installed is a button that lies.
+    @Published private(set) var commandLineTool: CommandLineTool.State = .bundledMissing
+
     /// The action the open dialog is about. Separate from `confirmation` because the dialog is a
     /// value the view draws and this is what the confirm button carries out.
     private var pendingAction: HistoryClearing?
@@ -67,6 +204,7 @@ final class AdvancedPaneModel: ObservableObject {
     func refresh() {
         problem = nil
         outcome = nil
+        commandLineTool = CommandLineTool.state()
         guard let store else { return dictationsWithText = 0 }
         do {
             dictationsWithText = try store.countWithText()
@@ -148,6 +286,57 @@ final class AdvancedPaneModel: ObservableObject {
         // Assigned rather than cleared-then-set: `FinderReveal` returns nil when it revealed
         // something, so one write both clears the last complaint and records this one.
         problem = FinderReveal.show(target, inSupportFolder: supportFolder)
+    }
+
+    // MARK: - The command-line tool
+
+    /// Whether the button is offered. Nothing to offer when the bundle does not carry the binary --
+    /// a `.build/` run, or a copy of the app someone assembled by hand.
+    var canInstallCommandLineTool: Bool {
+        commandLineTool != .bundledMissing
+    }
+
+    /// The button's title, which is also the pane's whole account of what pressing it does.
+    var commandLineToolActionTitle: String {
+        commandLineTool == .installed
+            ? "Remove the command-line tool" : "Install the command-line tool"
+    }
+
+    /// What the row says under the button: where the tool is, and what the app will and will not do
+    /// with what is already there.
+    var commandLineToolNote: String {
+        switch commandLineTool {
+        case .bundledMissing:
+            "This copy of Murmure does not carry the command-line tool."
+        case .notInstalled:
+            "Not installed. Installing puts Murmure's own tool at "
+                + "\(CommandLineTool.destination.path), so `murmure` works in Terminal."
+        case .installed:
+            "Installed at \(CommandLineTool.destination.path)."
+        case .foreign:
+            "\(CommandLineTool.destination.path) belongs to something else. Murmure will not "
+                + "replace or remove it."
+        }
+    }
+
+    /// The button. Same shape as the two erasures: one action, one report, and a failure is said
+    /// rather than swallowed (ruling L7).
+    func pressCommandLineTool() {
+        problem = nil
+        outcome = nil
+        do {
+            if commandLineTool == .installed {
+                try CommandLineTool.uninstall()
+                outcome = "The command-line tool was removed from "
+                    + "\(CommandLineTool.destination.path)."
+            } else {
+                try CommandLineTool.install()
+                outcome = "The command-line tool is at \(CommandLineTool.destination.path)."
+            }
+        } catch {
+            problem = error.localizedDescription
+        }
+        commandLineTool = CommandLineTool.state()
     }
 
     // MARK: - The two erasures

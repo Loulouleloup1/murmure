@@ -6,9 +6,10 @@ import SwiftUI
 ///
 /// **No colour is written in this file** (Q-NB6), like every other pane.
 ///
-/// The three groups are in that order deliberately: the settings are what Louis came for, the
-/// folders are harmless, and the two erasures are last because a destructive button is not
-/// something to scroll past on the way to a toggle.
+/// The groups are in that order deliberately: the settings are what Louis came for, the folders are
+/// harmless, and the two erasures are last because a destructive button is not something to scroll
+/// past on the way to a toggle. The licence notice closes the pane: ffmpeg.org's compliance
+/// obligation asks that it be reachable, not that it be in the way of anything.
 struct AdvancedPaneView: View {
     @ObservedObject var model: AdvancedPaneModel
 
@@ -20,7 +21,11 @@ struct AdvancedPaneView: View {
                 Divider().overlay(Color(role: .hairline))
                 revealRows
                 Divider().overlay(Color(role: .hairline))
+                commandLineToolRow
+                Divider().overlay(Color(role: .hairline))
                 clearingRows
+                Divider().overlay(Color(role: .hairline))
+                aboutRow
                 if let outcome = model.outcome {
                     note(outcome, isProblem: false)
                 }
@@ -168,6 +173,45 @@ struct AdvancedPaneView: View {
         .frame(maxWidth: 640, alignment: .leading)
     }
 
+    // MARK: - The command-line tool
+
+    /// The `murmure` tool (plan §2.5): in the bundle already, in `/usr/local/bin` only if Louis
+    /// says so.
+    ///
+    /// It sits after the folders because it is the other half of the same idea -- these files are
+    /// meant to be used outside the window -- and before the erasures because it destroys nothing
+    /// (and the button that says "Remove" removes only the copy Murmure itself put there, which the
+    /// note says in the same breath as the path).
+    private var commandLineToolRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Command-line tool")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(Color(role: .primaryText))
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Button(model.commandLineToolActionTitle) { model.pressCommandLineTool() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color(role: .primaryText))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(
+                            cornerRadius: WindowLayout.chipCornerRadius, style: .continuous
+                        )
+                        .fill(Color(role: .cardBackground))
+                    )
+                    .disabled(!model.canInstallCommandLineTool)
+                    .opacity(model.canInstallCommandLineTool ? 1 : 0.4)
+                Spacer(minLength: 0)
+            }
+            Text(model.commandLineToolNote)
+                .font(.system(size: 11, design: .rounded))
+                .foregroundStyle(Color(role: .secondaryText))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: 520, alignment: .leading)
+    }
+
     // MARK: - The two erasures
 
     /// One row per `HistoryClearing` case, walked rather than written twice — so the pane cannot
@@ -218,6 +262,25 @@ struct AdvancedPaneView: View {
                 .foregroundStyle(Color(role: .secondaryText))
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    // MARK: - About
+
+    /// The one line the licence asks for. Murmure embeds an `ffmpeg` binary built from a pinned
+    /// source (plan §2.6, lot 5) and calls it as a subprocess — the LGPL's condition on
+    /// redistribution is that this notice travels with the binary, and ffmpeg.org names it
+    /// explicitly, so the sentence is written once, verbatim, and never paraphrased.
+    private var aboutRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("About")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(Color(role: .primaryText))
+            Text("This software uses libraries from the FFmpeg project under the LGPLv2.1")
+                .font(.system(size: 11, design: .rounded))
+                .foregroundStyle(Color(role: .secondaryText))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: 520, alignment: .leading)
     }
 
     private func note(_ message: String, isProblem: Bool) -> some View {

@@ -1,0 +1,20 @@
+{
+  "id": "1234567890",
+  "_type": "video",
+  "extractor": "twitter",
+  "extractor_key": "Twitter",
+  "webpage_url": "https://x.com/quelquun/status/1234567890",
+  "title": "Quelqu'un sur X : démonstration de 84 secondes",
+  "duration": 84.0,
+  "requested_subtitles": null,
+  "playlist": null,
+  "formats": [
+    {
+      "format_id": "hls-audio-128000-Audio",
+      "ext": "mp4",
+      "acodec": "mp4a.40.2",
+      "vcodec": "none",
+      "abr": 128.0
+    }
+  ]
+}

@@ -5,6 +5,75 @@ import MurmureCore
 import os
 import SwiftUI
 
+/// Le signal « une dictée est en cours » — le seul pont entre la dictée et la machine de priorité
+/// (plan §2.2 et §4 lot 12).
+///
+/// **Pourquoi il existe.** `TranscriptPriority` est un état **pur** : il ne peut pas savoir qu'une
+/// dictée a été déclenchée. C'est ce que ce signal transporte, et rien de plus — c'est ce que le
+/// plan appelle « un `isDictationPending` injecté, pour que l'adaptateur WhisperKit n'ait aucune
+/// décision à prendre ».
+///
+/// **Pourquoi un exemplaire par processus plutôt qu'un paramètre remonté partout.** L'app n'a
+/// qu'une dictée à la fois (`AudioRecorder.start()` refuse un second enregistrement), et le
+/// transcripteur vidéo est construit par `TranscriptsPaneModel.videoRunner()` — un fichier du
+/// lot 10, que cette carte ne possède pas (plan §7.1 règle 9 : on ne réécrit pas le fichier d'une
+/// autre carte). Le partage est donc le point de couture ; il reste **injectable** :
+/// `TranscriptJobRunner` accepte n'importe quel exemplaire, ce qui rend le mécanisme éprouvable
+/// sans l'app, et ce qui permettra au lot 8 de mesurer la politique pour de vrai.
+final class DictationSignal: @unchecked Sendable {
+    /// Le signal de l'application. Voir le commentaire du type pour ce que le partage achète.
+    static let shared = DictationSignal()
+
+    private let dictating = OSAllocatedUnfairLock(initialState: false)
+
+    /// Vrai tant qu'une dictée **tient le chemin de la parole** : micro ouvert, modèle de
+    /// transcription en cours, raffinement, insertion. C'est la question que la boucle vidéo pose
+    /// à chaque frontière (`TranscriptJobRunner.frontier(ofUnit:)`).
+    var isDictating: Bool { dictating.withLock { $0 } }
+
+    /// Publie l'état de la dictée. Idempotent : republier le même état ne réveille personne.
+    func set(_ inProgress: Bool) {
+        dictating.withLock { $0 = inProgress }
+    }
+
+    /// Attend la **fin** de la dictée en cours — et rend la main tout de suite s'il n'y en a pas.
+    ///
+    /// **Un sondage, et pourquoi.** L'appelant est la boucle vidéo d'un `Task` : un sondage de
+    /// 100 ms est **annulable** (`Task.sleep` lève à l'annulation), une continuation non — une file
+    /// d'attente dont la tâche est annulée resterait suspendue au milieu d'une transcription que
+    /// Louis vient d'annuler, et le travail vidéo ne se terminerait jamais. 100 ms contre des
+    /// unités de plusieurs minutes : c'est le bruit du mécanisme, pas son coût.
+    func waitUntilIdle() async {
+        while isDictating {
+            do {
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                // Annulation : on rend la main, l'appelant décide (le travail vidéo s'arrête par
+                // son propre frein, pas par une attente qui ne finit pas).
+                return
+            }
+        }
+    }
+}
+
+/// Les états de la session, et ce qu'ils disent à la priorité (lot 12).
+///
+/// **Le classement est le contrat, pas un détail.** Les quatre phases qui suivent le
+/// déclenchement tiennent le chemin de la parole ; tout le reste ne le tient pas — `idle`, et les
+/// états terminaux que la machine émet avant de retomber à `idle` (la session le documente :
+/// `.completed`, `.copiedToClipboard` et `.cancelled` « disent ce qui vient d'arriver, le temps
+/// que l'interface les garde à l'écran est son affaire »). Un état terminal classé « en cours »
+/// ferait croire à la boucle vidéo qu'une dictée tient la machine alors que le texte est déjà
+/// collé.
+private extension DictationSession.State {
+    var holdsTheSpeechPath: Bool {
+        switch self {
+        case .recording, .transcribing, .refining, .inserting: true
+        case .idle, .cancelled, .completed, .copiedToClipboard, .failed: false
+        }
+    }
+}
+
 /// Owns the one dictation session, the one hotkey registration, and the binding between the
 /// session's state and what the menu bar shows.
 ///
@@ -79,6 +148,13 @@ final class DictationController {
     /// corpus, 50 % are under 29.7 s. `DecodeProgress.steps` is what says which case a given
     /// dictation turned out to be.
     let transcriptionProgress = DecodeProgressBox()
+
+    /// L'unique `WhisperKitEngine` de transcription de l'application (lot 11-S).
+    ///
+    /// Exposé en lecture seule : la vidéo le consomme, elle n'en construit pas un second. Une
+    /// seule construction dans tout `Murmure/` — celle du `init` ci-dessous, que le contrat
+    /// `control-startup-contract.sh` compte sur le corpus entier et pas sur un nom de fichier.
+    let transcriptionEngine: WhisperKitEngine
     private let log = Logger(subsystem: "com.louiscourcier.Murmure", category: "dictation")
 
     /// The General and Advanced panes' answers, and the reason this is a parameter rather than an
@@ -286,6 +362,9 @@ final class DictationController {
             notch.apply(placement)
             statusPanel.apply(placement)
         }
+        // L'unique instance de l'application : la vidéo la consomme (lot 11-S), elle n'en crée pas
+        // une seconde. Une seule construction, ici, dans le code.
+        transcriptionEngine = engine
 
         // Before the session, because the state-change closure below is what drives it -- and
         // driving it from THERE is the whole design: every exit from a recording is a state
@@ -311,6 +390,15 @@ final class DictationController {
             vocabulary: VocabularyProvider(fileURL: vocabularyFileURL),
             contextCapture: AppKitContextCapture()
         ) { state in
+            // ── Le signal de priorité (lot 12) ────────────────────────────────────────────────
+            //
+            // Posé ici, en tête du **seul point de passage de tous les états**, et surtout
+            // **avant** le saut vers le main actor : ce que la boucle vidéo doit savoir, c'est
+            // qu'une dictée tient le chemin de la parole, pas qu'une vue s'est rafraîchie. Le
+            // poser dans la `Task` plus bas le ferait arriver après la peinture de la pastille —
+            // et, plus grave pour ce chantier, après la frontière d'unité où la vidéo pose sa
+            // question.
+            DictationSignal.shared.set(state.holdsTheSpeechPath)
             // **Stamped HERE, and the position of this line is the whole of the guarantee.** It
             // runs synchronously inside `DictationSession`'s actor, in the order the states are
             // emitted; the `Task` below hops each one onto the main actor separately, and separate
