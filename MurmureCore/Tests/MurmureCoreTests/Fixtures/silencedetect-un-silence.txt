@@ -1,0 +1,16 @@
+[aist#0:0/pcm_s16le @ 0x992800180] Guessed Channel Layout: mono
+Input #0, wav, from 'tone-b.wav':
+  Duration: 00:00:04.00, bitrate: 256 kb/s
+  Stream #0:0: Audio: pcm_s16le ([1][0][0][0] / 0x0001), 16000 Hz, mono, s16, 256 kb/s
+Stream mapping:
+  Stream #0:0 -> #0:0 (pcm_s16le (native) -> pcm_s16le (native))
+Output #0, null, to 'pipe:':
+  Metadata:
+    encoder         : Lavf62.3.100
+  Stream #0:0: Audio: pcm_s16le, 16000 Hz, mono, s16, 256 kb/s
+    Metadata:
+      encoder         : Lavc62.11.100 pcm_s16le
+[silencedetect @ 0x993044420] silence_start: 1
+[silencedetect @ 0x993044420] silence_end: 2.000062 | silence_duration: 1.000063
+[out#0/null @ 0x99304c180] video:0KiB audio:125KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+size=N/A time=00:00:04.00 bitrate=N/A speed=3.44e+03x elapsed=0:00:00.00    
