@@ -1,0 +1,54 @@
+{
+  "id": "dQw4w9WgXcQ",
+  "_type": "video",
+  "extractor": "youtube",
+  "extractor_key": "Youtube",
+  "webpage_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "title": "Démonstration : les trois piliers du montage vidéo",
+  "duration": 2293.0,
+  "subtitles": {
+    "en": [
+      {
+        "ext": "vtt",
+        "url": "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        "name": "English"
+      }
+    ],
+    "fr": [
+      {
+        "ext": "vtt",
+        "url": "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=fr",
+        "name": "Français"
+      }
+    ]
+  },
+  "automatic_captions": {
+    "de": [
+      {
+        "ext": "vtt",
+        "url": "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=de&kind=asr",
+        "name": "Deutsch (auto-generated)"
+      }
+    ],
+    "fr": [
+      {
+        "ext": "vtt",
+        "url": "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=fr&kind=asr",
+        "name": "Français (auto-generated)"
+      }
+    ]
+  },
+  "requested_subtitles": null,
+  "playlist": null,
+  "format": "251 - audio only (medium)",
+  "formats": [
+    {
+      "format_id": "251",
+      "ext": "webm",
+      "acodec": "opus",
+      "vcodec": "none",
+      "abr": 130.0,
+      "url": "https://rr1---sn-4g5e6nz7.googlevideo.com/videoplayback?itag=251"
+    }
+  ]
+}
