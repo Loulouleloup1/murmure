@@ -95,7 +95,7 @@ Open items are listed in spec §8 (Deno pinning, automatic retry after a yt-dlp 
 - **Rules live in `MurmureCore`** (SwiftPM, XCTest); `Murmure/` is wiring and views and has no
   test bundle. Every store takes its directory as a parameter, so tests use temp directories and
   never write into `~/Library/Application Support/Murmure/`.
-- Verify with `cd MurmureCore && swift test`, then
+- Verify with the `verify` skill (`.claude/skills/verify/SKILL.md`: `cd MurmureCore && swift test`, proof logged under `~/StudioRun/preuves/murmure/`), then
   `xcodegen generate && xcodebuild -project Murmure.xcodeproj -scheme Murmure -configuration Debug -derivedDataPath .build/xcode build CODE_SIGNING_ALLOWED=NO`.
 - Install with `scripts/install.sh` (signs with the keychain identity, **quits the running
   Murmure and does not relaunch it**: `open "$HOME/Applications/Murmure.app"` afterwards).
