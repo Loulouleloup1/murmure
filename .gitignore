@@ -54,7 +54,9 @@ benchmark/run_v3*.log
 # admissibility table, so they belong in the repo.
 
 # Agent worktrees -- transient, created by the harness, never part of the project.
-.claude/
+.claude/*
+# ...except the project skills (verify), which agents load from here.
+!.claude/skills/
 
 # Two tools fight over this file, so neither state is committable. Measured in a fresh clone:
 # `xcodebuild` writes FOUR pins into it (dynamicnotchkit, whisperkit, swift-argument-parser and
